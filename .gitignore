@@ -1,0 +1,6 @@
+build/
+dist/
+**/*.dmg
+Wand.xcodeproj/xcuserdata/
+Wand.xcodeproj/project.xcworkspace/
+Wand/Assets.xcassets/AppIcon.appiconset/*.png
