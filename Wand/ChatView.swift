@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
@@ -8,6 +10,7 @@ struct ChatView: View {
     @StateObject private var store: ChatStore
     @State private var draft = ""
     @State private var showQuickCommit = false
+    @State private var followsLatest = true
     @FocusState private var inputFocused: Bool
 
     init(sessionId: String, api: WandAPI) {
@@ -81,11 +84,25 @@ struct ChatView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 6)
             }
-            .onAppear { pinToBottom(proxy) }
-            .onChange(of: store.messages.count) { _ in
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo("chat-bottom", anchor: .bottom)
+            // 仅用户通过滚轮、触控板或滚动条开始实时滚动时暂停跟随；
+            // ScrollViewReader 的程序化 scrollTo 不会触发该通知。
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSScrollView.willStartLiveScrollNotification
+            )) { _ in
+                followsLatest = false
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if !followsLatest {
+                    jumpToLatestButton(proxy)
                 }
+            }
+            .onAppear { pinToBottom(proxy) }
+            // 流式回复会原地替换最后一条消息，messages.count 不变。
+            .onReceive(store.$messages.dropFirst()) { _ in
+                scrollToLatestIfFollowing(proxy)
+            }
+            .onChange(of: store.isResponding) { _ in
+                scrollToLatestIfFollowing(proxy)
             }
             .onChange(of: store.loading) { loading in
                 if !loading { pinToBottom(proxy) }
@@ -93,12 +110,46 @@ struct ChatView: View {
         }
     }
 
+    private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
+        Button {
+            followsLatest = true
+            pinToBottom(proxy, animated: true)
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(Theme.brand))
+                .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.2), radius: 7, y: 3)
+        }
+        .buttonStyle(.plain)
+        .help("回到最新消息并继续跟随")
+        .padding(.trailing, 16)
+        .padding(.bottom, 12)
+    }
+
+    private func scrollToLatestIfFollowing(_ proxy: ScrollViewProxy) {
+        guard followsLatest else { return }
+        DispatchQueue.main.async {
+            guard followsLatest else { return }
+            proxy.scrollTo("chat-bottom", anchor: .bottom)
+        }
+    }
+
     /// 打开会话时把列表钉到底部。LazyVStack 首帧尚未完成布局，单次 scrollTo
     /// 常停在半中间——立即滚一次，再按递增延迟补几次，直到布局稳定。
-    private func pinToBottom(_ proxy: ScrollViewProxy) {
-        proxy.scrollTo("chat-bottom", anchor: .bottom)
+    private func pinToBottom(_ proxy: ScrollViewProxy, animated: Bool = false) {
+        if animated {
+            withAnimation(.easeOut(duration: 0.22)) {
+                proxy.scrollTo("chat-bottom", anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo("chat-bottom", anchor: .bottom)
+        }
         for delay in [0.05, 0.15, 0.35, 0.7] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard followsLatest else { return }
                 proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
         }
