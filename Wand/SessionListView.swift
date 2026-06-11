@@ -93,7 +93,7 @@ struct SessionListView: View {
                         SessionRow(session: session)
                     }
                     .listRowBackground(Theme.background)
-                    .listRowSeparatorTint(Theme.border)
+                    .compatListRowSeparatorTint(Theme.border)
                 }
                 .onDelete(perform: deleteSessions)
             }
@@ -121,6 +121,21 @@ struct SessionListView: View {
             for target in targets {
                 try? await api.deleteSession(id: target.id)
             }
+        }
+    }
+}
+
+// MARK: - 兼容封装
+
+private extension View {
+    /// `listRowSeparatorTint` 是 macOS 13+ API，部署目标是 12.0，
+    /// 老系统上降级为默认分隔线颜色（纯视觉差异）。
+    @ViewBuilder
+    func compatListRowSeparatorTint(_ color: Color) -> some View {
+        if #available(macOS 13.0, *) {
+            listRowSeparatorTint(color)
+        } else {
+            self
         }
     }
 }
