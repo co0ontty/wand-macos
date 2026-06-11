@@ -39,6 +39,14 @@ enum Theme {
     }
 }
 
+extension View {
+    func dismissKeyboardOnTap() -> some View {
+        onTapGesture {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+    }
+}
+
 /// 实心珊瑚色主按钮，禁用态自动变淡。
 struct WandPrimaryButtonStyle: ButtonStyle {
     @MainActor

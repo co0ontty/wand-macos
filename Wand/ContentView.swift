@@ -10,7 +10,7 @@ struct ContentView: View {
             Theme.background
                 .ignoresSafeArea()
             if let serverURL = store.serverURL {
-                WebContainerView(serverURL: serverURL, token: store.token)
+                NativeRootView(serverURL: serverURL, token: store.token)
                     .id(serverURL.absoluteString)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
