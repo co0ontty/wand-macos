@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Network
 
