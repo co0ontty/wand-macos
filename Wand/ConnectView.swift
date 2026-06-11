@@ -13,6 +13,10 @@ struct ConnectView: View {
     @State private var isConnecting = false
     @FocusState private var inputFocused: Bool
 
+    /// 「本地网络」权限引导：nil = 不展示；false = 提示性引导（无法确定是否被拒）；
+    /// true = 已探测到被系统拒绝。仅 macOS 15+ 且目标地址像局域网时出现。
+    @State private var localNetworkDenied: Bool? = nil
+
     private var trimmedInput: String {
         input.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -81,6 +85,10 @@ struct ConnectView: View {
                 errorBanner(error)
             }
 
+            if let denied = localNetworkDenied {
+                localNetworkHint(denied: denied)
+            }
+
             connectButton
 
             if !store.recentInputs.isEmpty {
@@ -146,6 +154,41 @@ struct ConnectView: View {
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Theme.danger.opacity(0.1))
+        )
+    }
+
+    /// macOS 15+「本地网络」权限引导卡片。denied = 已确认被系统拒绝。
+    private func localNetworkHint(denied: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.brand)
+                Text(denied ? "「本地网络」权限已被拒绝" : "可能是「本地网络」权限问题")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+            }
+            Text(denied
+                 ? "macOS 不允许 Wand 访问局域网。请在 系统设置 → 隐私与安全性 → 本地网络 中打开 Wand 的开关后重试。"
+                 : "macOS 15 起访问局域网需要授权。若设置列表里没有 Wand：请确认 Wand.app 在「应用程序」文件夹中，然后重新打开 App，并在弹窗中选择「允许」。重启 Mac 后权限偶尔会失效（系统已知问题），把开关关掉再打开即可恢复。")
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("打开「本地网络」设置") {
+                LocalNetworkPermission.openSettings()
+            }
+            .buttonStyle(.link)
+            .font(.system(size: 12))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Theme.brand.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Theme.brand.opacity(0.35), lineWidth: 1)
         )
     }
 
@@ -237,6 +280,7 @@ struct ConnectView: View {
         guard !raw.isEmpty, !isConnecting else { return }
         isConnecting = true
         error = nil
+        localNetworkDenied = nil
         inputFocused = false
 
         WandAuth.resolve(rawInput: raw) { result in
@@ -249,8 +293,22 @@ struct ConnectView: View {
                     onDismiss?()
                 case .failure(let err):
                     error = err.userMessage
+                    maybeShowLocalNetworkHint(for: err, rawInput: raw)
                 }
             }
+        }
+    }
+
+    /// 网络层连接失败 + 目标像局域网地址 → 探测「本地网络」权限并展示引导。
+    /// 认证类失败（401/429 等）说明网络通了，不掺和。
+    private func maybeShowLocalNetworkHint(for err: WandAuth.Failure, rawInput: String) {
+        guard LocalNetworkPermission.isEnforced else { return }
+        guard case .network = err else { return }
+        let host: String? = WandAuth.decodeConnectCode(rawInput)?.url.host
+            ?? WandAuth.candidateURLs(from: rawInput).first?.host
+        guard LocalNetworkPermission.isLikelyLanHost(host) else { return }
+        LocalNetworkPermission.probeDenied { denied in
+            localNetworkDenied = denied
         }
     }
 

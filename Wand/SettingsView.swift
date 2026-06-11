@@ -84,8 +84,18 @@ struct SettingsView: View {
                 Label("打开网页版（完整设置）", systemImage: "safari")
                     .font(.system(size: 15))
             }
+            if LocalNetworkPermission.isEnforced {
+                Button {
+                    LocalNetworkPermission.openSettings()
+                } label: {
+                    Label("本地网络权限（系统设置）", systemImage: "lock.shield")
+                        .font(.system(size: 15))
+                }
+            }
         } footer: {
-            Text("更新通道、模型配置等服务端设置在网页版里调整。")
+            Text(LocalNetworkPermission.isEnforced
+                 ? "更新通道、模型配置等服务端设置在网页版里调整。连不上局域网服务器时，检查「本地网络」里 Wand 是否被允许；重启 Mac 后权限偶尔失效，把开关关掉再打开即可。"
+                 : "更新通道、模型配置等服务端设置在网页版里调整。")
         }
     }
 

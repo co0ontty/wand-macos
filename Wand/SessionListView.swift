@@ -67,6 +67,15 @@ struct SessionListView: View {
                     .multilineTextAlignment(.center)
                 Button("重试") { Task { await load() } }
                     .buttonStyle(WandSecondaryButtonStyle())
+                // macOS 15 已知问题：重启 Mac 后「本地网络」授权偶尔失效（开关
+                // 显示打开但实际被拒），表现就是这里一直加载失败。给个入口。
+                if LocalNetworkPermission.isEnforced {
+                    Button("连不上？检查「本地网络」权限") {
+                        LocalNetworkPermission.openSettings()
+                    }
+                    .buttonStyle(.link)
+                    .font(.footnote)
+                }
             }
             .padding(32)
         } else if visibleSessions.isEmpty {

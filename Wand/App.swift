@@ -4,6 +4,14 @@ import SwiftUI
 struct WandApp: App {
     @StateObject private var store = ServerStore.shared
 
+    init() {
+        // macOS 15+：主动把「本地网络」授权弹窗钓出来。系统设置的本地网络列表
+        // 没有手动添加入口，必须由应用先发起一次本地网络访问；不触发的话，
+        // URLSession 直连局域网 IP 会被静默拒绝（连接超时），用户既看不到弹窗、
+        // 也没法在设置里找到 Wand 来授权。详见 LocalNetworkPermission.swift。
+        LocalNetworkPermission.triggerPromptIfNeeded()
+    }
+
     var body: some Scene {
         // 用 minWidth + idealWidth + maxWidth=.infinity 让窗口可自由拖大/缩小。
         // 只写 .frame(minWidth:minHeight:) 时 macOS 13+ 的 .windowResizability(.contentSize)

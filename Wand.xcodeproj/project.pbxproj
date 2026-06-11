@@ -28,6 +28,7 @@
 		A200000000000000000000A8 /* NativeRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B8 /* NativeRootView.swift */; };
 		A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B9 /* GitQuickCommitView.swift */; };
 		A200000000000000000000AA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BA /* SettingsView.swift */; };
+		A200000000000000000000AB /* LocalNetworkPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BB /* LocalNetworkPermission.swift */; };
 		A100000000000000000000C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -53,6 +54,7 @@
 		A200000000000000000000B8 /* NativeRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRootView.swift; sourceTree = "<group>"; };
 		A200000000000000000000B9 /* GitQuickCommitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitQuickCommitView.swift; sourceTree = "<group>"; };
 		A200000000000000000000BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A200000000000000000000BB /* LocalNetworkPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkPermission.swift; sourceTree = "<group>"; };
 		A100000000000000000000D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A100000000000000000000E1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A100000000000000000000E2 /* Wand.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Wand.entitlements; sourceTree = "<group>"; };
@@ -102,6 +104,7 @@
 				A200000000000000000000B8 /* NativeRootView.swift */,
 				A200000000000000000000B9 /* GitQuickCommitView.swift */,
 				A200000000000000000000BA /* SettingsView.swift */,
+				A200000000000000000000BB /* LocalNetworkPermission.swift */,
 				A100000000000000000000D1 /* Assets.xcassets */,
 				A100000000000000000000E1 /* Info.plist */,
 				A100000000000000000000E2 /* Wand.entitlements */,
@@ -208,6 +211,7 @@
 				A200000000000000000000A8 /* NativeRootView.swift in Sources */,
 				A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */,
 				A200000000000000000000AA /* SettingsView.swift in Sources */,
+				A200000000000000000000AB /* LocalNetworkPermission.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
