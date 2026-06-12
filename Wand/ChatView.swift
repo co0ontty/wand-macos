@@ -61,7 +61,7 @@ struct ChatView: View {
             ToolbarItem(placement: .principal) {
                 navigationStatus
             }
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 12) {
                     gitChangesButton
                     if store.isStructured {
@@ -793,26 +793,10 @@ struct ChatView: View {
     }
 }
 
-/// iOS 16+ 才有 scrollDismissesKeyboard；iOS 15 用拖拽手势近似。
-/// 用 .immediately 而非 .interactively：手动键盘避让（KeyboardObserver）依赖
-/// 键盘 frame 通知，而交互式拖拽过程中 UIKit 不发通知，输入栏会悬空脱节；
-/// 立即收起则输入栏随 willHide 同步落下。
+/// macOS 没有软键盘：no-op（iOS 版在这里做 scrollDismissesKeyboard / 拖拽收起键盘）。
 private struct DismissKeyboardOnDrag: ViewModifier {
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 16.0, *) {
-            content.scrollDismissesKeyboard(.immediately)
-        } else {
-            content.simultaneousGesture(
-                DragGesture().onChanged { value in
-                    if value.translation.height > 24 {
-                        UIApplication.shared.sendAction(
-                            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
-                        )
-                    }
-                }
-            )
-        }
+        content
     }
 }
 

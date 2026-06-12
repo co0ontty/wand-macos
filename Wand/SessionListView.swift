@@ -80,7 +80,7 @@ struct SessionListView: View {
                     .frame(width: 190)
                 }
             }
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     if isSelecting {
                         endSelection()
@@ -235,7 +235,7 @@ struct SessionListView: View {
                     .simultaneousGesture(selectionGesture(startingWith: session.id))
                     .listRowInsets(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14))
                     .listRowBackground(Theme.background)
-                    .listRowSeparator(.hidden)
+                    .wandHideListRowSeparator()
                 }
                 .onDelete(perform: deleteSessions)
             }
@@ -304,7 +304,7 @@ struct SessionListView: View {
                     .disabled(historyActionInProgress)
                     .listRowInsets(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14))
                     .listRowBackground(Theme.background)
-                    .listRowSeparator(.hidden)
+                    .wandHideListRowSeparator()
                 }
                 .onDelete(perform: deleteHistory)
             }

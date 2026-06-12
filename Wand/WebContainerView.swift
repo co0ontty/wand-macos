@@ -10,6 +10,8 @@ final class WebViewModel: ObservableObject {
     }
 
     @Published var phase: Phase = .loading
+    /// WebBridge 收到 backToNative 消息时调用，由容器视图注入（关闭嵌套网页会话）。
+    var requestClose: (() -> Void)?
     /// WebBridge attach 时回填，供"重试"调用 reload()。
     weak var webView: WKWebView?
 
@@ -24,6 +26,10 @@ final class WebViewModel: ObservableObject {
 struct WebContainerView: View {
     let serverURL: URL
     let token: String?
+    /// 指定后直接深链到对应会话（`?session=<id>`），PTY 会话从原生列表进入网页版用。
+    var sessionId: String? = nil
+    /// 「返回原生界面」回调；非 nil 时注入 `__wandBackToNative`，网页侧边栏显示「返回App」。
+    var onRequestClose: (() -> Void)? = nil
 
     @EnvironmentObject private var store: ServerStore
     @StateObject private var model = WebViewModel()
@@ -39,9 +45,16 @@ struct WebContainerView: View {
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
-            WebViewRepresentable(serverURL: serverURL, token: token, model: model)
+            WebViewRepresentable(
+                serverURL: serverURL,
+                token: token,
+                sessionId: sessionId,
+                injectsBackToNative: onRequestClose != nil,
+                model: model
+            )
             overlay
         }
+        .onAppear { model.requestClose = onRequestClose }
     }
 
     @ViewBuilder private var overlay: some View {
@@ -142,6 +155,10 @@ private struct ErrorOverlay: View {
 struct WebViewRepresentable: NSViewRepresentable {
     let serverURL: URL
     let token: String?
+    var sessionId: String? = nil
+    /// 是否注入「返回原生界面」入口：注入后新版网页会在侧边栏渲染「返回App」按钮，
+    /// 点击 → backToNative 消息 → model.requestClose。网页版主入口不注入（无处可返回）。
+    var injectsBackToNative: Bool = false
     let model: WebViewModel
 
     func makeCoordinator() -> WebBridge {
@@ -152,6 +169,18 @@ struct WebViewRepresentable: NSViewRepresentable {
         let cfg = WKWebViewConfiguration()
         let userController = WKUserContentController()
         userController.add(context.coordinator, name: "wandNative")
+        if injectsBackToNative {
+            userController.addUserScript(WKUserScript(
+                source: """
+                window.__wandMacNative = true;
+                window.__wandBackToNative = function() {
+                  try { window.webkit.messageHandlers.wandNative.postMessage({ type: "backToNative" }); } catch (e) {}
+                };
+                """,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+        }
         cfg.userContentController = userController
         cfg.websiteDataStore = .default()
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -174,6 +203,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         // 兼容用的 wand_session），这里全部注入，浏览器请求时按 scheme 选合适的发送。
         // 没有 token：当成裸 URL（ConnectView 已探测过可达性），直接加载。
         let cookieStore = cfg.websiteDataStore.httpCookieStore
+        let targetURL = sessionURL()
         if let token, !token.isEmpty {
             NSLog("[Wand] token-login before load: %@", serverURL.absoluteString)
             WandAuth.loginWithToken(serverURL: serverURL, appToken: token) { result in
@@ -186,8 +216,8 @@ struct WebViewRepresentable: NSViewRepresentable {
                             cookieStore.setCookie(cookie) { group.leave() }
                         }
                         group.notify(queue: .main) {
-                            NSLog("[Wand] %d cookie(s) injected, loading %@", cookies.count, serverURL.absoluteString)
-                            webView.load(URLRequest(url: serverURL))
+                            NSLog("[Wand] %d cookie(s) injected, loading %@", cookies.count, targetURL.absoluteString)
+                            webView.load(URLRequest(url: targetURL))
                         }
                     }
                 case .failure(let err):
@@ -200,11 +230,24 @@ struct WebViewRepresentable: NSViewRepresentable {
                 }
             }
         } else {
-            NSLog("[Wand] no token; loading %@ directly", serverURL.absoluteString)
-            webView.load(URLRequest(url: serverURL))
+            NSLog("[Wand] no token; loading %@ directly", targetURL.absoluteString)
+            webView.load(URLRequest(url: targetURL))
         }
         return webView
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {}
+
+    /// 带 sessionId 时在主页 URL 上追加 `?session=<id>`，前端据此直接打开对应会话（同 iOS）。
+    private func sessionURL() -> URL {
+        guard let sessionId, !sessionId.isEmpty,
+              var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false) else {
+            return serverURL
+        }
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == "session" }
+        items.append(URLQueryItem(name: "session", value: sessionId))
+        components.queryItems = items
+        return components.url ?? serverURL
+    }
 }

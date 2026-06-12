@@ -39,6 +39,10 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
             let fileName = (dict["fileName"] as? String) ?? "wand-update.dmg"
             let source = (dict["source"] as? String) ?? "local"
             installer.downloadAndMount(urlString: url, fileName: fileName, source: source, presentingWindow: webView?.window)
+        case "backToNative":
+            DispatchQueue.main.async { [weak self] in
+                self?.model.requestClose?()
+            }
         default:
             break
         }
