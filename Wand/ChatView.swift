@@ -1,16 +1,31 @@
-import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
+/// 输入栏放在 safeAreaInset(edge: .bottom)；键盘避让不走系统自动机制
+/// （NavigationView push 页面 + 多行 TextField 组合下系统避让会漏抬、键盘盖住输入栏），
+/// 而是 .ignoresSafeArea(.keyboard) 关掉系统行为，由 KeyboardObserver
+/// 监听键盘 frame 手动抬升，行为确定。
 struct ChatView: View {
     private let sessionId: String
     private let api: WandAPI
 
     @StateObject private var store: ChatStore
+    @StateObject private var keyboard = KeyboardObserver()
+    @StateObject private var speech = SpeechRecognizerService()
     @State private var draft = ""
     @State private var showQuickCommit = false
     @State private var followsLatest = true
+    @State private var voicePressed = false
+    @State private var voiceCanceling = false
+    /// 语音输入模式：轻点话筒进入，整个输入框变成「按住说话」面板。
+    @State private var voiceMode = false
+    @State private var showFileImporter = false
+    @State private var uploadingAttachments = false
+    @State private var gitStatus: GitStatusResult?
+    /// 轻点 vs 按住的计时器：按满阈值才开始录音，阈值内松手按轻点处理。
+    @State private var voiceHoldWork: DispatchWorkItem?
     @FocusState private var inputFocused: Bool
 
     init(sessionId: String, api: WandAPI) {
@@ -31,37 +46,50 @@ struct ChatView: View {
                         .multilineTextAlignment(.center)
                 }
                 .padding(32)
+            } else if store.isStructured && store.messages.isEmpty && !store.isResponding {
+                sessionLaunchPanel
             } else {
                 messageList
             }
         }
+        // 点消息区任意空白处收起键盘；输入栏在 safeAreaInset 里不受影响，
+        // 点发送 / 权限按钮不会误收。
         .dismissKeyboardOnTap()
-        .navigationTitle(store.snapshot?.displayTitle ?? "会话")
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 14) {
-                    Button { showQuickCommit = true } label: {
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(Theme.brand)
+            ToolbarItem(placement: .principal) {
+                navigationStatus
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 12) {
+                    gitChangesButton
+                    if store.isStructured {
+                        sessionSettingsMenu
                     }
-                    if store.sessionEnded {
-                        Button { store.resume() } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(Theme.brand)
-                        }
-                        .help("恢复会话")
-                    }
-                    statusBadge
                 }
             }
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
+        // 关掉系统键盘避让，统一交给 KeyboardObserver 手动抬升（见 bottomBar），
+        // 避免「系统抬一次 + 手动抬一次」叠加或两边都不抬的不确定行为。
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showQuickCommit) {
             GitQuickCommitView(sessionId: sessionId, api: api)
         }
-        .onAppear { store.start() }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true,
+            onCompletion: handlePickedAttachments
+        )
+        .onAppear {
+            store.start()
+            refreshGitStatus()
+        }
+        .onChange(of: showQuickCommit) { showing in
+            if !showing { refreshGitStatus() }
+        }
         .onDisappear { store.shutdown() }
         .overlay(alignment: .top) { toastView }
     }
@@ -72,56 +100,82 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(Array(store.messages.enumerated()), id: \.offset) { index, turn in
-                        TurnView(
-                            turn: turn,
-                            isLastTurn: index == store.messages.count - 1,
-                            isResponding: store.isResponding,
-                            askSelections: store.askUserSelections,
-                            onAskToggle: { toolUseId, qIdx, optIdx, multi in
-                                store.toggleAskOption(
-                                    toolUseId: toolUseId, questionIndex: qIdx,
-                                    optionIndex: optIdx, multiSelect: multi
-                                )
-                            },
-                            onAskSubmit: { toolUseId, answerText in
-                                store.submitAskUser(toolUseId: toolUseId, answerText: answerText)
+                        ForEach(Array(groupedMessageItems.enumerated()), id: \.offset) { _, item in
+                            messageItemView(item)
+                        }
+                        if store.isResponding {
+                            respondingIndicator
+                        }
+                        Color.clear.frame(height: 1).id("chat-bottom")
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+                    .padding(.bottom, 6)
+                }
+                .modifier(DismissKeyboardOnDrag())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            // 仅用户明确向下拖动、准备查看更早消息时暂停跟随。
+                            // 旧逻辑任何轻微拖动都会永久关掉跟随，收键盘或触摸
+                            // 列表后，新回复就只能靠右下角按钮才能看到。
+                            if value.translation.height > 18 {
+                                followsLatest = false
                             }
-                        )
+                        }
+                )
+                .overlay(alignment: .bottomTrailing) {
+                    if !followsLatest {
+                        jumpToLatestButton(proxy)
                     }
-                    if store.isResponding {
-                        respondingIndicator
-                    }
-                    Color.clear.frame(height: 1).id("chat-bottom")
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 6)
-            }
-            // 仅用户通过滚轮、触控板或滚动条开始实时滚动时暂停跟随；
-            // ScrollViewReader 的程序化 scrollTo 不会触发该通知。
-            .onReceive(NotificationCenter.default.publisher(
-                for: NSScrollView.willStartLiveScrollNotification
-            )) { _ in
-                followsLatest = false
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if !followsLatest {
-                    jumpToLatestButton(proxy)
+                .onAppear { pinToBottom(proxy) }
+                .onReceive(store.$messages.dropFirst()) { _ in
+                    scrollToLatestIfFollowing(proxy)
                 }
-            }
-            .onAppear { pinToBottom(proxy) }
-            // 流式回复会原地替换最后一条消息，messages.count 不变。
-            .onReceive(store.$messages.dropFirst()) { _ in
-                scrollToLatestIfFollowing(proxy)
-            }
-            .onChange(of: store.isResponding) { _ in
-                scrollToLatestIfFollowing(proxy)
-            }
-            .onChange(of: store.loading) { loading in
-                if !loading { pinToBottom(proxy) }
+                .onChange(of: store.isResponding) { _ in
+                    scrollToLatestIfFollowing(proxy)
+                }
+                .onChange(of: store.loading) { loading in
+                    if !loading { pinToBottom(proxy) }
+                }
+                .onChange(of: keyboard.lift) { lift in
+                    if lift > 0 && followsLatest { pinToBottom(proxy) }
             }
         }
+    }
+
+    @ViewBuilder private func messageItemView(_ item: MessageDisplayItem) -> some View {
+        switch item {
+        case .turn(let index, let turn):
+            TurnView(
+                turn: turn,
+                isLastTurn: index == store.messages.count - 1,
+                isResponding: store.isResponding,
+                askSelections: store.askUserSelections,
+                onAskToggle: { toolUseId, qIdx, optIdx, multi in
+                    store.toggleAskOption(
+                        toolUseId: toolUseId, questionIndex: qIdx,
+                        optionIndex: optIdx, multiSelect: multi
+                    )
+                },
+                onAskSubmit: { toolUseId, answerText in
+                    followsLatest = true
+                    store.submitAskUser(toolUseId: toolUseId, answerText: answerText)
+                }
+            )
+        case .explorationGroup(let tools, let lastTurnIndex):
+            ExplorationGroupCard(
+                tools: tools,
+                running: store.isResponding
+                    && lastTurnIndex == store.messages.count - 1
+                    && tools.contains { $0.result == nil }
+            )
+        }
+    }
+
+    private var groupedMessageItems: [MessageDisplayItem] {
+        groupExplorationTurns(store.messages)
     }
 
     private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
@@ -130,24 +184,28 @@ struct ChatView: View {
             pinToBottom(proxy, animated: true)
         } label: {
             Image(systemName: "arrow.down")
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.white)
-                .frame(width: 38, height: 38)
+                .frame(width: 42, height: 42)
                 .background(Circle().fill(Theme.brand))
                 .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
-                .shadow(color: Color.black.opacity(0.2), radius: 7, y: 3)
+                .shadow(color: Color.black.opacity(0.22), radius: 8, y: 3)
         }
-        .buttonStyle(.plain)
-        .help("回到最新消息并继续跟随")
+        .accessibilityLabel("回到最新消息并继续跟随")
         .padding(.trailing, 16)
         .padding(.bottom, 12)
+        .transition(.scale(scale: 0.85).combined(with: .opacity))
     }
 
     private func scrollToLatestIfFollowing(_ proxy: ScrollViewProxy) {
         guard followsLatest else { return }
-        DispatchQueue.main.async {
-            guard followsLatest else { return }
-            proxy.scrollTo("chat-bottom", anchor: .bottom)
+        // 流式更新会原地增高最后一条消息，首个 scrollTo 可能早于
+        // LazyVStack 完成新高度布局；补一次短延迟即可稳定贴住底部。
+        for delay in [0.0, 0.08] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard followsLatest else { return }
+                proxy.scrollTo("chat-bottom", anchor: .bottom)
+            }
         }
     }
 
@@ -182,29 +240,82 @@ struct ChatView: View {
 
     // MARK: - 顶部状态
 
-    private var statusBadge: some View {
-        HStack(spacing: 5) {
-            Circle().fill(statusColor).frame(width: 8, height: 8)
-            Text(statusText)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Theme.textSecondary)
+    private var sessionLaunchPanel: some View {
+        VStack(spacing: 18) {
+            WandBrandMark(size: 52)
+            Text(store.snapshot?.providerLabel ?? "结构化会话")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(Theme.textPrimary)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 24)
+        .frame(maxWidth: 340)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Theme.surface)
+                .shadow(color: Color.black.opacity(0.07), radius: 18, y: 7)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+        .padding(.horizontal, 24)
+    }
+
+    private func modelButton(id: String?, label: String) -> some View {
+        Button {
+            store.setModel(id)
+        } label: {
+            if store.selectedModel == id {
+                Label(label, systemImage: "checkmark")
+            } else {
+                Text(label)
+            }
         }
     }
 
-    private var statusColor: Color {
-        if !store.connected { return .gray }
-        if store.permissionBlocked { return .orange }
-        if store.isResponding { return .green }
-        if store.sessionEnded { return .gray }
-        return Theme.brand
+    private static let thinkingLevels = [
+        (id: "off", label: "off"),
+        (id: "standard", label: "think"),
+        (id: "deep", label: "think hard"),
+        (id: "max", label: "ultrathink"),
+    ]
+
+    private static func thinkingLabel(_ id: String) -> String {
+        thinkingLevels.first { $0.id == id }?.label ?? "off"
     }
 
-    private var statusText: String {
-        if !store.connected { return "重连中" }
-        if store.permissionBlocked { return "待授权" }
-        if store.isResponding { return "回复中" }
-        if store.sessionEnded { return "已结束" }
-        return "就绪"
+    private var navigationStatus: some View {
+        VStack(spacing: 0) {
+            Text(latestUserMessage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 190)
+            Text(store.snapshot?.cwd ?? "未设置工作目录")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(Theme.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 190)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var latestUserMessage: String {
+        for turn in store.messages.reversed() where turn.role == "user" {
+            let text = turn.content.compactMap { block -> String? in
+                guard case .text(let value, _) = block else { return nil }
+                return value
+            }
+            .joined(separator: " ")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            if !text.isEmpty { return text }
+        }
+        return store.snapshot?.displayTitle ?? "对话详情"
     }
 
     // MARK: - 底部栏（权限卡 + 队列 + 输入框）
@@ -219,6 +330,12 @@ struct ChatView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
+            if voicePressed || speech.isRecording {
+                voiceBubble
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+                    .transition(.opacity)
+            }
             if !visibleTodos.isEmpty {
                 TodoProgressBar(todos: visibleTodos)
                     .padding(.horizontal, 12)
@@ -248,6 +365,9 @@ struct ChatView: View {
             }
             inputBar
         }
+        // 手动键盘避让：使用键盘与窗口的完整重叠高度。safeAreaInset 已经处理
+        // 底部安全区，观察器不能再次扣除，否则输入栏会少抬一截。
+        .padding(.bottom, keyboard.lift)
         .background(
             Theme.background
                 .opacity(0.97)
@@ -258,18 +378,8 @@ struct ChatView: View {
 
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            growingTextField
-                .focused($inputFocused)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Theme.surface)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Theme.border, lineWidth: 1)
-                )
+            composerActionsMenu
+            composerField
 
             if store.isResponding {
                 Button(action: { store.stopResponding() }) {
@@ -296,10 +406,162 @@ struct ChatView: View {
         .padding(.bottom, 8)
     }
 
-    private var growingTextField: some View {
-        TextField("发消息…", text: $draft)
-            .font(.system(size: 14))
-            .onSubmit(sendDraft)
+    private var composerField: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if voiceMode {
+                voiceHoldField
+            } else {
+                growingTextField
+                    .focused($inputFocused)
+                    .padding(.leading, 14)
+                    .padding(.trailing, 48)
+                    .padding(.vertical, 9)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(Theme.surface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 1)
+                    )
+            }
+            micButton
+                .padding(.trailing, 4)
+                .padding(.bottom, 3)
+        }
+    }
+
+    private var sessionSettingsMenu: some View {
+        Menu {
+            Menu {
+                modelButton(id: nil, label: "默认")
+                ForEach(store.availableModels.filter { $0.id != "default" }) { model in
+                    modelButton(id: model.id, label: model.label)
+                }
+            } label: {
+                Label("模型 · \(store.selectedModel ?? "默认")", systemImage: "cpu")
+            }
+
+            Menu {
+                ForEach(Self.thinkingLevels, id: \.id) { level in
+                    Button {
+                        store.setThinkingEffort(level.id)
+                    } label: {
+                        if store.thinkingEffort == level.id {
+                            Label(level.label, systemImage: "checkmark")
+                        } else {
+                            Text(level.label)
+                        }
+                    }
+                }
+            } label: {
+                Label("思考深度 · \(Self.thinkingLabel(store.thinkingEffort))", systemImage: "brain")
+            }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(Theme.brand)
+        }
+        .accessibilityLabel("会话设置")
+    }
+
+    private var gitChangesButton: some View {
+        Button {
+            showQuickCommit = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.branch")
+                Text("~\(gitChangeCounts.modified)")
+                Text("-\(gitChangeCounts.deleted)")
+                    .foregroundColor(Theme.danger)
+                Text("+\(gitChangeCounts.added)")
+                    .foregroundColor(.green)
+            }
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundColor(Theme.textSecondary)
+        }
+        .accessibilityLabel(
+            "Git 修改 \(gitChangeCounts.modified)，删除 \(gitChangeCounts.deleted)，新增 \(gitChangeCounts.added)"
+        )
+    }
+
+    private var gitChangeCounts: (modified: Int, deleted: Int, added: Int) {
+        var counts = (modified: 0, deleted: 0, added: 0)
+        for file in gitStatus?.files ?? [] {
+            let status = file.status.uppercased()
+            if status.contains("?") || status.contains("A") {
+                counts.added += 1
+            } else if status.contains("D") {
+                counts.deleted += 1
+            } else {
+                counts.modified += 1
+            }
+        }
+        return counts
+    }
+
+    private func refreshGitStatus() {
+        Task {
+            gitStatus = try? await api.gitStatus(sessionId: sessionId)
+        }
+    }
+
+    private var composerActionsMenu: some View {
+        Menu {
+            Button {
+                showFileImporter = true
+            } label: {
+                Label("上传附件", systemImage: "paperclip")
+            }
+            .disabled(uploadingAttachments)
+        } label: {
+            if uploadingAttachments {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Theme.textSecondary)
+                    .frame(width: 38, height: 38)
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(Theme.surface))
+                    .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+            }
+        }
+        .accessibilityLabel("更多操作")
+    }
+
+    private func handlePickedAttachments(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, !urls.isEmpty else {
+            if case .failure(let error) = result { store.toast = error.localizedDescription }
+            return
+        }
+        uploadingAttachments = true
+        Task {
+            defer { uploadingAttachments = false }
+            do {
+                let files = try await api.uploadAttachments(id: sessionId, urls: urls)
+                let paths = files.map(\.savedPath).joined(separator: "\n")
+                let prefix = "[附件已上传，请查看以下文件:\n\(paths)\n]\n\n"
+                draft = prefix + draft
+                store.toast = "已上传 \(files.count) 个附件"
+            } catch {
+                store.toast = error.localizedDescription
+            }
+        }
+    }
+
+    /// iOS 16+ 用多行自增高输入框；iOS 15 退化为单行。
+    @ViewBuilder private var growingTextField: some View {
+        if #available(iOS 16.0, *) {
+            TextField("发消息…", text: $draft, axis: .vertical)
+                .lineLimit(1...5)
+                .font(.system(size: 16))
+        } else {
+            TextField("发消息…", text: $draft)
+                .font(.system(size: 16))
+        }
     }
 
     private var canSend: Bool {
@@ -310,7 +572,204 @@ struct ChatView: View {
         guard canSend else { return }
         let text = draft
         draft = ""
+        followsLatest = true
         store.send(text: text)
+    }
+
+    // MARK: - 按住说话（端侧语音识别）
+
+    /// 麦克风按钮：
+    /// - 轻点 → 切换语音输入模式（整个输入框变成「按住说话」面板，图标变键盘）；
+    /// - 长按 → 立即按住说话（原交互）：按住录音、上滑取消、松手把识别文本追加进输入框。
+    private var micButton: some View {
+        Image(systemName: micButtonSymbol)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundColor(voicePressed ? .white : Theme.brand)
+            .frame(width: 32, height: 32)
+            .background(
+                Circle().fill(
+                    voicePressed
+                        ? (voiceCanceling ? Theme.danger : Theme.brand)
+                        : Theme.brand.opacity(0.12)
+                )
+            )
+            .scaleEffect(voicePressed ? 1.1 : 1)
+            .animation(.easeInOut(duration: 0.15), value: voicePressed)
+            .animation(.easeInOut(duration: 0.15), value: voiceCanceling)
+            .gesture(voiceTapOrHoldGesture(onTap: {
+                voiceMode.toggle()
+                if voiceMode { inputFocused = false }
+            }))
+            .accessibilityLabel(voiceMode ? "切回键盘输入" : "轻点切语音模式，长按说话")
+    }
+
+    private var micButtonSymbol: String {
+        if speech.isRecording { return "waveform" }
+        return voiceMode && !voicePressed ? "keyboard" : "mic"
+    }
+
+    /// 语音模式下替换文本框的「按住说话」面板：
+    /// 按住录音（同话筒长按），轻点切回键盘输入；非录音时显示当前草稿，所见即所得。
+    private var voiceHoldField: some View {
+        HStack {
+            if voicePressed || draft.isEmpty {
+                Spacer(minLength: 0)
+            }
+            Group {
+                if voicePressed {
+                    Text(voiceCanceling ? "松开手指，取消输入" : "松开结束 · 上滑取消")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(voiceCanceling ? Theme.danger : Theme.brand)
+                } else if draft.isEmpty {
+                    Text("按住说话")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                } else {
+                    Text(draft)
+                        .font(.system(size: 16))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 48)
+        .padding(.vertical, 9)
+        .frame(minHeight: 38)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(
+                    voicePressed
+                        ? (voiceCanceling ? Theme.danger.opacity(0.16) : Theme.brand.opacity(0.14))
+                        : Theme.surface
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+        .animation(.easeInOut(duration: 0.15), value: voicePressed)
+        .animation(.easeInOut(duration: 0.15), value: voiceCanceling)
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .gesture(voiceTapOrHoldGesture(onTap: {
+            // 轻点面板：切回键盘并自动聚焦，直接接着打字。
+            voiceMode = false
+            DispatchQueue.main.async { inputFocused = true }
+        }))
+        .accessibilityLabel("按住说话，轻点切回键盘输入")
+    }
+
+    /// 上滑超过该距离进入「松开取消」态（对齐 Web 端 VOICE_CANCEL_THRESHOLD）。
+    private static let voiceCancelThreshold: CGFloat = 60
+
+    /// 轻点 vs 按住的分界：按住超过该时长进入录音，否则按轻点处理。
+    private static let voiceHoldThreshold: TimeInterval = 0.3
+
+    /// 轻点 / 按住二分手势：按满阈值 → 开始录音（移动驱动上滑取消、松手提交）；
+    /// 阈值内松手 → onTap()。
+    private func voiceTapOrHoldGesture(onTap: @escaping () -> Void) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if voiceHoldWork == nil && !voicePressed {
+                    // 手指刚按下：起计时，按满阈值才真正开始录音。
+                    let work = DispatchWorkItem {
+                        voiceHoldWork = nil
+                        startVoiceRecording()
+                    }
+                    voiceHoldWork = work
+                    DispatchQueue.main.asyncAfter(
+                        deadline: .now() + Self.voiceHoldThreshold, execute: work
+                    )
+                }
+                if voicePressed {
+                    voiceCanceling = value.translation.height < -Self.voiceCancelThreshold
+                }
+            }
+            .onEnded { _ in
+                if let work = voiceHoldWork {
+                    // 阈值内松手 → 轻点。
+                    work.cancel()
+                    voiceHoldWork = nil
+                    onTap()
+                    return
+                }
+                let cancelled = voiceCanceling
+                voicePressed = false
+                voiceCanceling = false
+                speech.stop(cancelled: cancelled) { text in
+                    appendTranscriptToDraft(text)
+                }
+            }
+    }
+
+    /// 按满阈值进入录音态（原「按下立即录音」交互的主体）。
+    private func startVoiceRecording() {
+        guard !voicePressed else { return }
+        voicePressed = true
+        voiceCanceling = false
+        speech.start { message in
+            store.toast = message
+            voicePressed = false
+            voiceCanceling = false
+        }
+    }
+
+    /// 识别文本追加进草稿（不覆盖已有内容，对齐 Web 端 commitVoiceTranscript）。
+    private func appendTranscriptToDraft(_ text: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        var existing = draft
+        while let last = existing.unicodeScalars.last,
+              CharacterSet.whitespacesAndNewlines.contains(last) {
+            existing.unicodeScalars.removeLast()
+        }
+        draft = existing.isEmpty ? clean : existing + " " + clean
+    }
+
+    /// 输入栏上方的实时转写气泡。
+    private var voiceBubble: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: voiceCanceling ? "xmark.circle.fill" : "waveform.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(voiceCanceling ? Theme.danger : Theme.brand)
+                Text(voiceCanceling
+                     ? "松开手指，取消输入"
+                     : (speech.transcript.isEmpty ? "正在聆听…" : speech.transcript))
+                    .font(.system(size: 14))
+                    .foregroundColor(
+                        voiceCanceling
+                            ? Theme.danger
+                            : (speech.transcript.isEmpty ? Theme.textSecondary : Theme.textPrimary)
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            if !voiceCanceling {
+                HStack(spacing: 6) {
+                    Text(speech.usingOnDevice ? "端侧识别" : "在线识别")
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Theme.brand.opacity(0.12)))
+                        .foregroundColor(Theme.brand)
+                    Text("松开填入输入框 · 上滑取消")
+                        .foregroundColor(Theme.textSecondary)
+                }
+                .font(.system(size: 11, weight: .medium))
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.surface)
+                .shadow(color: Color.black.opacity(0.1), radius: 6, y: 2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(voiceCanceling ? Theme.danger.opacity(0.55) : Theme.border, lineWidth: 1)
+        )
     }
 
     // MARK: - Toast
@@ -334,6 +793,29 @@ struct ChatView: View {
     }
 }
 
+/// iOS 16+ 才有 scrollDismissesKeyboard；iOS 15 用拖拽手势近似。
+/// 用 .immediately 而非 .interactively：手动键盘避让（KeyboardObserver）依赖
+/// 键盘 frame 通知，而交互式拖拽过程中 UIKit 不发通知，输入栏会悬空脱节；
+/// 立即收起则输入栏随 willHide 同步落下。
+private struct DismissKeyboardOnDrag: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.scrollDismissesKeyboard(.immediately)
+        } else {
+            content.simultaneousGesture(
+                DragGesture().onChanged { value in
+                    if value.translation.height > 24 {
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+                        )
+                    }
+                }
+            )
+        }
+    }
+}
+
 // MARK: - 单条消息
 
 /// 工具调用与结果在渲染层配成一张卡片（对齐 Web 端 buildToolResultMap / Android pairToolBlocks）。
@@ -344,6 +826,68 @@ private enum DisplayItem {
         input: [String: JSONValue], subagent: SubagentMeta?,
         result: ToolResultInfo?
     )
+    case explorationGroup([ExplorationToolItem])
+}
+
+private enum MessageDisplayItem {
+    case turn(index: Int, ConversationTurn)
+    case explorationGroup(tools: [ExplorationToolItem], lastTurnIndex: Int)
+}
+
+private struct ExplorationToolItem {
+    let id: String
+    let name: String
+    let description: String?
+    let input: [String: JSONValue]
+    let subagent: SubagentMeta?
+    let result: ToolResultInfo?
+}
+
+/// 将相邻、且内容完全由只读探索工具组成的 assistant turn 跨消息合并。
+/// 用户消息、正式文本、编辑/命令等操作都会立即终止分组。
+private func groupExplorationTurns(_ turns: [ConversationTurn]) -> [MessageDisplayItem] {
+    var items: [MessageDisplayItem] = []
+    var pendingTools: [ExplorationToolItem] = []
+    var pendingLastIndex = -1
+
+    func flushPending() {
+        guard !pendingTools.isEmpty else { return }
+        items.append(.explorationGroup(tools: pendingTools, lastTurnIndex: pendingLastIndex))
+        pendingTools.removeAll(keepingCapacity: true)
+        pendingLastIndex = -1
+    }
+
+    for (index, turn) in turns.enumerated() {
+        if let tools = explorationToolsOnly(in: turn) {
+            pendingTools.append(contentsOf: tools)
+            pendingLastIndex = index
+        } else {
+            flushPending()
+            items.append(.turn(index: index, turn))
+        }
+    }
+    flushPending()
+    return items
+}
+
+private func explorationToolsOnly(in turn: ConversationTurn) -> [ExplorationToolItem]? {
+    guard turn.role == "assistant" else { return nil }
+    var tools: [ExplorationToolItem] = []
+    for item in pairToolBlocks(turn.content) {
+        switch item {
+        case .explorationGroup(let group):
+            tools.append(contentsOf: group)
+        case .tool(let id, let name, let description, let input, let subagent, let result)
+            where isExplorationTool(name):
+            tools.append(ExplorationToolItem(
+                id: id, name: name, description: description,
+                input: input, subagent: subagent, result: result
+            ))
+        default:
+            return nil
+        }
+    }
+    return tools.isEmpty ? nil : tools
 }
 
 /// 配对后挂在工具卡上的结果。
@@ -356,12 +900,12 @@ struct ToolResultInfo {
 /// 优先按 tool_use_id 精确配对（并行工具调用时顺序会交错）；
 /// id 缺失时退回「紧随其后的第一个结果」邻接兜底；没配上的 ToolResult 原样透传。
 private func pairToolBlocks(_ content: [ContentBlock]) -> [DisplayItem] {
-    var items: [DisplayItem] = []
+    var paired: [DisplayItem] = []
     var consumed = Set<Int>()
     for (i, block) in content.enumerated() {
         if consumed.contains(i) { continue }
         guard case .toolUse(let id, let name, let description, let input, let subagent) = block else {
-            items.append(.plain(block))
+            paired.append(.plain(block))
             continue
         }
         var resultIndex = -1
@@ -389,12 +933,58 @@ private func pairToolBlocks(_ content: [ContentBlock]) -> [DisplayItem] {
             consumed.insert(resultIndex)
             result = ToolResultInfo(text: text, isError: isError, truncated: truncated)
         }
-        items.append(.tool(
+        paired.append(.tool(
             id: id, name: name, description: description,
             input: input, subagent: subagent, result: result
         ))
     }
+    return collapseConsecutiveExplorationTools(paired)
+}
+
+/// 连续读取、搜索、网页获取通常只是模型探索上下文，不需要逐张占满对话流。
+/// 至少连续两次才合并，单次操作仍保留完整工具卡。
+private func collapseConsecutiveExplorationTools(_ paired: [DisplayItem]) -> [DisplayItem] {
+    var items: [DisplayItem] = []
+    var exploration: [ExplorationToolItem] = []
+
+    func flushExploration() {
+        if exploration.count >= 2 {
+            items.append(.explorationGroup(exploration))
+        } else if let tool = exploration.first {
+            items.append(.tool(
+                id: tool.id, name: tool.name, description: tool.description,
+                input: tool.input, subagent: tool.subagent, result: tool.result
+            ))
+        }
+        exploration.removeAll(keepingCapacity: true)
+    }
+
+    for item in paired {
+        if case .tool(let id, let name, let description, let input, let subagent, let result) = item,
+           isExplorationTool(name) {
+            exploration.append(ExplorationToolItem(
+                id: id, name: name, description: description,
+                input: input, subagent: subagent, result: result
+            ))
+        } else {
+            flushExploration()
+            items.append(item)
+        }
+    }
+    flushExploration()
     return items
+}
+
+private func isExplorationTool(_ name: String) -> Bool {
+    let lower = name.lowercased()
+    return lower.hasPrefix("read")
+        || lower.hasPrefix("grep")
+        || lower.hasPrefix("glob")
+        || lower.hasPrefix("search")
+        || lower.hasPrefix("find")
+        || lower.contains("websearch")
+        || lower.contains("webfetch")
+        || lower == "todoread"
 }
 
 private struct TurnView: View {
@@ -458,6 +1048,11 @@ private struct TurnView: View {
                     input: input, result: result
                 )
             }
+        case .explorationGroup(let tools):
+            ExplorationGroupCard(
+                tools: tools,
+                running: isLastTurn && isResponding && tools.contains { $0.result == nil }
+            )
         }
     }
 
@@ -592,6 +1187,7 @@ private struct MarkdownText: View {
         case listItem(marker: String, text: String, indent: Int, checked: Bool?)
         case quote(String)
         case code(String, String?)
+        case table(headers: [String], rows: [[String]])
         case divider
     }
 
@@ -641,9 +1237,55 @@ private struct MarkdownText: View {
             }
             .background(RoundedRectangle(cornerRadius: 8).fill(Theme.surface))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+        case .table(let headers, let rows):
+            markdownTable(headers: headers, rows: rows)
         case .divider:
             Divider().overlay(Theme.border).padding(.vertical, 3)
         }
+    }
+
+    private func markdownTable(headers: [String], rows: [[String]]) -> some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 0) {
+                tableRow(headers, header: true)
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    tableRow(normalizedRow(row, count: headers.count), header: false)
+                        .background(index.isMultiple(of: 2) ? Theme.surface : Theme.background.opacity(0.45))
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    private func tableRow(_ cells: [String], header: Bool) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
+                Text(attributed(cell))
+                    .font(.system(size: header ? 13 : 12, weight: header ? .semibold : .regular))
+                    .foregroundColor(header ? Theme.textPrimary : Theme.textSecondary)
+                    .tint(Theme.brand)
+                    .textSelection(.enabled)
+                    .frame(minWidth: 110, maxWidth: 190, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .background(header ? Theme.brand.opacity(0.09) : Color.clear)
+                    .overlay(alignment: .trailing) {
+                        if index < cells.count - 1 {
+                            Divider().overlay(Theme.border)
+                        }
+                    }
+            }
+        }
+        .overlay(alignment: .bottom) { Divider().overlay(Theme.border) }
+    }
+
+    private func normalizedRow(_ row: [String], count: Int) -> [String] {
+        if row.count >= count { return Array(row.prefix(count)) }
+        return row + Array(repeating: "", count: count - row.count)
     }
 
     private func inlineText(
@@ -688,10 +1330,14 @@ private struct MarkdownText: View {
             language = nil
         }
 
-        for rawLine in text.components(separatedBy: .newlines) {
+        let lines = text.components(separatedBy: .newlines)
+        var lineIndex = 0
+        while lineIndex < lines.count {
+            let rawLine = lines[lineIndex]
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             if let fence {
                 if trimmed.hasPrefix(fence) { flushCode() } else { code.append(rawLine) }
+                lineIndex += 1
                 continue
             }
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
@@ -699,38 +1345,76 @@ private struct MarkdownText: View {
                 fence = String(trimmed.prefix(3))
                 let suffix = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 language = suffix.isEmpty ? nil : suffix
+                lineIndex += 1
                 continue
             }
             if trimmed.isEmpty {
                 flushParagraph()
+                lineIndex += 1
+                continue
+            }
+            if lineIndex + 1 < lines.count,
+               let headers = tableCells(rawLine),
+               isTableSeparator(lines[lineIndex + 1], columnCount: headers.count) {
+                flushParagraph()
+                var rows: [[String]] = []
+                lineIndex += 2
+                while lineIndex < lines.count, let row = tableCells(lines[lineIndex]), !row.isEmpty {
+                    rows.append(row)
+                    lineIndex += 1
+                }
+                result.append(.table(headers: headers, rows: rows))
                 continue
             }
             let level = trimmed.prefix { $0 == "#" }.count
             if (1...6).contains(level), trimmed.dropFirst(level).hasPrefix(" ") {
                 flushParagraph()
                 result.append(.heading(level, String(trimmed.dropFirst(level + 1))))
+                lineIndex += 1
                 continue
             }
             let rule = trimmed.replacingOccurrences(of: " ", with: "")
             if ["---", "***", "___"].contains(rule) {
                 flushParagraph()
                 result.append(.divider)
+                lineIndex += 1
                 continue
             }
             if trimmed.hasPrefix(">") {
                 flushParagraph()
                 result.append(.quote(String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)))
+                lineIndex += 1
                 continue
             }
             if let item = listItem(rawLine) {
                 flushParagraph()
                 result.append(item)
+                lineIndex += 1
                 continue
             }
             paragraph.append(rawLine)
+            lineIndex += 1
         }
         if fence != nil { flushCode() } else { flushParagraph() }
         return result
+    }
+
+    private func tableCells(_ line: String) -> [String]? {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("|") else { return nil }
+        if trimmed.hasPrefix("|") { trimmed.removeFirst() }
+        if trimmed.hasSuffix("|") { trimmed.removeLast() }
+        let cells = trimmed.split(separator: "|", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        return cells.count >= 2 ? cells : nil
+    }
+
+    private func isTableSeparator(_ line: String, columnCount: Int) -> Bool {
+        guard let cells = tableCells(line), cells.count == columnCount else { return false }
+        return cells.allSatisfy { cell in
+            let marker = cell.replacingOccurrences(of: ":", with: "")
+            return marker.count >= 3 && marker.allSatisfy { $0 == "-" }
+        }
     }
 
     private func listItem(_ rawLine: String) -> Block? {
@@ -793,6 +1477,164 @@ private func toolLabel(_ name: String) -> String {
     return name
 }
 
+/// 连续只读探索操作的紧凑进度卡。默认折叠，避免探索阶段淹没对话。
+private struct ExplorationGroupCard: View {
+    let tools: [ExplorationToolItem]
+    let running: Bool
+
+    @State private var expanded = false
+
+    private var completedCount: Int { tools.filter { $0.result != nil }.count }
+    private var failedCount: Int { tools.filter { $0.result?.isError == true }.count }
+    private var progress: Double {
+        guard !tools.isEmpty else { return 0 }
+        return Double(completedCount) / Double(tools.count)
+    }
+    private var tint: Color {
+        if failedCount > 0 { return Theme.danger }
+        if running { return Theme.brand }
+        return chatSuccess
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 11) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(tint.opacity(0.11))
+                        if running {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(tint)
+                        } else {
+                            Image(systemName: "magnifyingglass.circle")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(tint)
+                        }
+                    }
+                    .frame(width: 34, height: 34)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("探索上下文")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(Theme.textPrimary)
+                            Spacer(minLength: 8)
+                            Text("\(completedCount)/\(tools.count)")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundColor(tint)
+                        }
+                        Text(activitySummary)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(1)
+                        ProgressView(value: progress)
+                            .tint(tint)
+                    }
+
+                    if failedCount > 0 {
+                        Text("失败 \(failedCount)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Theme.danger)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Theme.danger.opacity(0.10)))
+                    }
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                Divider()
+                    .overlay(Theme.border.opacity(0.7))
+                    .padding(.horizontal, 12)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(tools.enumerated()), id: \.offset) { _, tool in
+                        HStack(spacing: 8) {
+                            Image(systemName: toolStatusIcon(tool))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(toolStatusColor(tool))
+                                .frame(width: 14)
+                            Text(toolLabel(tool.name))
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(Theme.textPrimary)
+                                .frame(width: 54, alignment: .leading)
+                            Text(toolSummary(tool))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(Theme.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(tint.opacity(failedCount > 0 ? 0.42 : 0.16), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.035), radius: 7, y: 2)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var activitySummary: String {
+        var counts: [String: Int] = [:]
+        for tool in tools {
+            counts[activityLabel(tool.name), default: 0] += 1
+        }
+        return ["读取", "搜索", "网页", "待办"]
+            .compactMap { label in counts[label].map { "\(label) \($0)" } }
+            .joined(separator: " · ")
+    }
+
+    private func activityLabel(_ name: String) -> String {
+        let lower = name.lowercased()
+        if lower.contains("web") { return "网页" }
+        if lower == "todoread" { return "待办" }
+        if lower.hasPrefix("read") { return "读取" }
+        return "搜索"
+    }
+
+    private func toolSummary(_ tool: ExplorationToolItem) -> String {
+        for key in ["file_path", "path", "pattern", "query", "url", "file", "filename"] {
+            if let value = tool.input[key] {
+                let text = value.summaryText
+                if !text.isEmpty { return text }
+            }
+        }
+        return tool.description
+            ?? tool.input.first.map { "\($0.key): \($0.value.summaryText)" }
+            ?? "无参数"
+    }
+
+    private func toolStatusIcon(_ tool: ExplorationToolItem) -> String {
+        if tool.result?.isError == true { return "xmark.circle.fill" }
+        if tool.result != nil { return "checkmark.circle.fill" }
+        return "circle.dotted"
+    }
+
+    private func toolStatusColor(_ tool: ExplorationToolItem) -> Color {
+        if tool.result?.isError == true { return Theme.danger }
+        if tool.result != nil { return chatSuccess }
+        return Theme.brand
+    }
+}
+
 /// 工具调用卡片：图标 + 中文工具名 + 参数摘要 + 可折叠结果区。
 /// 三态对齐 Web：运行中（转圈）/ 成功（左侧绿竖线）/ 失败（红弱底 + 红边框）。
 private struct ToolUseCard: View {
@@ -807,32 +1649,42 @@ private struct ToolUseCard: View {
     private var isError: Bool { result?.isError == true }
     private var isSuccess: Bool { result != nil && !isError }
     private var hasBody: Bool { !(result?.text.isEmpty ?? true) }
+    private var statusColor: Color {
+        if isError { return Theme.danger }
+        if running { return Theme.brand }
+        if isSuccess { return chatSuccess }
+        return Theme.textSecondary
+    }
+    private var statusText: String {
+        if isError { return "失败" }
+        if running { return "处理中" }
+        if isSuccess { return "完成" }
+        return "待执行"
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if isSuccess {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.green.opacity(0.75))
-                    .frame(width: 2)
-            }
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                if expanded, let result, hasBody {
-                    ToolResultBody(result: result)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 10)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if expanded, let result, hasBody {
+                Divider()
+                    .overlay(Theme.border.opacity(0.7))
+                    .padding(.horizontal, 12)
+                ToolResultBody(result: result)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 12)
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isError ? Theme.danger.opacity(0.08) : Theme.surface)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isError ? Theme.danger.opacity(0.45) : Theme.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(statusColor.opacity(isError ? 0.42 : 0.16), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .shadow(color: Color.black.opacity(0.035), radius: 7, y: 2)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var header: some View {
@@ -840,42 +1692,57 @@ private struct ToolUseCard: View {
             guard hasBody else { return }
             withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 11) {
                 if running {
-                    ProgressView().controlSize(.small).tint(Theme.brand).frame(width: 22)
-                } else {
-                    Image(systemName: iconName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(isError ? Theme.danger : Theme.brand)
-                        .frame(width: 22)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(toolLabel(name))
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(isError ? Theme.danger : Theme.textPrimary)
-                        if isError {
-                            Text("出错")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(Theme.danger)
-                        }
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(statusColor.opacity(0.12))
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(statusColor)
                     }
+                    .frame(width: 34, height: 34)
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(statusColor.opacity(isSuccess ? 0.10 : 0.12))
+                        Image(systemName: iconName)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(statusColor)
+                    }
+                    .frame(width: 34, height: 34)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(toolLabel(name))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(isError ? Theme.danger : Theme.textPrimary)
                     if !summary.isEmpty {
                         Text(summary)
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(Theme.textSecondary)
-                            .lineLimit(2)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
                 Spacer(minLength: 0)
+                Text(statusText)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(statusColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(statusColor.opacity(0.10)))
                 if hasBody {
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Theme.textSecondary)
+                    ZStack {
+                        Circle().fill(Theme.background)
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                    .frame(width: 24, height: 24)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

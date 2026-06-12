@@ -314,6 +314,7 @@ struct SessionSnapshot: Decodable, Identifiable {
     let summary: String?
     let currentTaskTitle: String?
     let selectedModel: String?
+    let thinkingEffort: String?
     let claudeSessionId: String?
     let messages: [ConversationTurn]?
     let queuedMessages: [String]?
@@ -344,6 +345,22 @@ struct SessionSnapshot: Decodable, Identifiable {
     var hasPendingPermission: Bool {
         pendingEscalation != nil || (permissionBlocked ?? false)
     }
+}
+
+// MARK: - 历史会话
+
+/// 从 Claude/Codex 本地历史文件扫描出的会话。两个 provider 的接口形状一致。
+struct HistorySession: Decodable, Identifiable {
+    let claudeSessionId: String
+    let cwd: String
+    let firstUserMessage: String
+    let timestamp: String?
+    let mtimeMs: Double?
+    let hasConversation: Bool?
+    let managedByWand: Bool?
+    let provider: String?
+
+    var id: String { claudeSessionId }
 }
 
 // MARK: - WebSocket 消息
@@ -378,6 +395,7 @@ struct WsData: Decodable {
     let summary: String?
     let currentTaskTitle: String?
     let selectedModel: String?
+    let thinkingEffort: String?
     let claudeSessionId: String?
     let messages: [ConversationTurn]?
     let queuedMessages: [String]?
@@ -407,6 +425,29 @@ struct DirectoryItem: Decodable, Identifiable {
 
     var id: String { path }
     var isDirectory: Bool { type == "dir" }
+}
+
+struct ModelInfo: Decodable, Identifiable {
+    let id: String
+    let label: String
+    let alias: Bool?
+}
+
+struct ModelsResponse: Decodable {
+    let models: [ModelInfo]
+    let codexModels: [ModelInfo]
+    let defaultModel: String?
+}
+
+struct UploadedFile: Decodable {
+    let originalName: String
+    let savedPath: String
+    let size: Int
+    let mimeType: String
+}
+
+struct UploadResponse: Decodable {
+    let files: [UploadedFile]
 }
 
 struct DirectoryListing: Decodable {
