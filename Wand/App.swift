@@ -21,8 +21,10 @@ struct WandApp: App {
             ContentView()
                 .environmentObject(store)
                 .frame(
-                    minWidth: 800, idealWidth: 1280, maxWidth: .infinity,
-                    minHeight: 600, idealHeight: 820, maxHeight: .infinity
+                    // 横屏布局:ideal 1440 × 880,最小 900 × 600;
+                    // maxWidth / maxHeight 显式设 .infinity 让窗口可自由拖大/缩。
+                    minWidth: 900, idealWidth: 1440, maxWidth: .infinity,
+                    minHeight: 600, idealHeight: 880, maxHeight: .infinity
                 )
         }
         .commands {
