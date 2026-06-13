@@ -552,9 +552,9 @@ struct ChatView: View {
         }
     }
 
-    /// iOS 16+ 用多行自增高输入框；iOS 15 退化为单行。
+    /// iOS 16+ / macOS 13+ 用多行自增高输入框；旧系统退化为单行。
     @ViewBuilder private var growingTextField: some View {
-        if #available(iOS 16.0, *) {
+        if #available(iOS 16.0, macOS 13.0, *) {
             TextField("发消息…", text: $draft, axis: .vertical)
                 .lineLimit(1...5)
                 .font(.system(size: 16))
