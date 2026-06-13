@@ -1,6 +1,8 @@
 build/
 dist/
 **/*.dmg
+.debug-derived-data/
+.release-derived-data/
 Wand.xcodeproj/xcuserdata/
 Wand.xcodeproj/project.xcworkspace/
 Wand/Assets.xcassets/AppIcon.appiconset/*.png
