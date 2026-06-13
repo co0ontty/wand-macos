@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 原生文件浏览器:把 web 端的 `.file-panel`(.file-tree)搬到 SwiftUI。
-/// 数据从 `/api/directory` 拉;支持展开/折叠、点击进入子目录、显示当前路径面包屑。
+/// 数据从 `/api/directory` 拉;支持任意深度展开/折叠、`..` 导航上一级、显示当前路径面包屑。
 /// Git 状态展示交给 FilePanelView 的 git tab 处理(直接调现有的 `getSessionGitStatus`)。
 
 struct FileTreeView: View {
@@ -24,14 +24,25 @@ struct FileTreeView: View {
             Divider().opacity(0.3)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if let parent = parentPath {
-                        row(.parentRow(parent: parent))
-                    }
-                    ForEach(items) { item in
-                        row(.init(item))
-                    }
-                    if items.isEmpty && !loading {
-                        emptyState
+                    if let loadError {
+                        errorState(loadError)
+                    } else {
+                        if let parent = parentPath {
+                            parentRow(parent)
+                        }
+                        ForEach(items) { item in
+                            FileTreeRow(
+                                item: FileTreeRow.RowItem(item),
+                                depth: 0,
+                                expandedDirs: $expandedDirs,
+                                childCache: $childCache,
+                                childLoading: $childLoading,
+                                onToggle: toggle
+                            )
+                        }
+                        if items.isEmpty && !loading {
+                            emptyState
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -80,6 +91,28 @@ struct FileTreeView: View {
         return parent == currentPath ? nil : parent
     }
 
+    /// `..` 行:点击导航到上一级目录(换根重载),区别于普通目录的就地展开。
+    private func parentRow(_ parent: String) -> some View {
+        HStack(spacing: 6) {
+            Spacer().frame(width: 10)
+            Image(systemName: "arrow.up.left")
+                .font(.system(size: 12))
+                .foregroundColor(Theme.wandAccent)
+                .frame(width: 16)
+            Text("..")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(Theme.textSecondary)
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            currentPath = parent
+            Task { await reload() }
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: 6) {
             Image(systemName: "tray")
@@ -93,14 +126,85 @@ struct FileTreeView: View {
         .padding(.vertical, 24)
     }
 
-    // MARK: - 行渲染
+    private func errorState(_ message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 20))
+                .foregroundColor(Theme.warning)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+            Button("重试") { Task { await reload() } }
+                .buttonStyle(WandSecondaryButtonStyle())
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 24)
+    }
 
-    @ViewBuilder
-    private func row(_ item: RowItem) -> some View {
+    // MARK: - 展开/折叠
+
+    private func toggle(_ item: FileTreeRow.RowItem) {
+        guard item.isDirectory else { return }
+        if expandedDirs.contains(item.path) {
+            expandedDirs.remove(item.path)
+        } else {
+            expandedDirs.insert(item.path)
+            if childCache[item.path] == nil {
+                Task { await loadChildren(of: item.path) }
+            }
+        }
+    }
+
+    // MARK: - 数据加载
+
+    private func reload() async {
+        loading = true
+        loadError = nil
+        // 换根时清掉旧的展开态与子目录缓存,避免跨目录的陈旧节点。
+        expandedDirs.removeAll()
+        childCache.removeAll()
+        childLoading.removeAll()
+        do {
+            let listing = try await api.listDirectory(currentPath)
+            items = listing.items
+        } catch {
+            loadError = error.localizedDescription
+            items = []
+        }
+        loading = false
+    }
+
+    private func loadChildren(of path: String) async {
+        childLoading.insert(path)
+        defer { childLoading.remove(path) }
+        do {
+            let listing = try await api.listDirectory(path)
+            childCache[path] = listing.items
+        } catch {
+            childCache[path] = []
+        }
+    }
+}
+
+// MARK: - 递归行(支持任意深度嵌套)
+
+/// 单个文件/目录行,目录展开后递归渲染子节点。
+/// 展开态/子目录缓存/加载态都由 FileTreeView 持有,这里通过 @Binding 共享读写,
+/// 用命名 struct 自引用实现递归(避免 @ViewBuilder 计算属性自引用的 opaque type 报错)。
+struct FileTreeRow: View {
+    let item: RowItem
+    let depth: Int
+    @Binding var expandedDirs: Set<String>
+    @Binding var childCache: [String: [DirectoryItem]]
+    @Binding var childLoading: Set<String>
+    let onToggle: (RowItem) -> Void
+
+    var body: some View {
         let isDir = item.isDirectory
         let isExpanded = expandedDirs.contains(item.path)
         let isLoadingChildren = childLoading.contains(item.path)
-        let children = childCache[item.path]
 
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -126,75 +230,22 @@ struct FileTreeView: View {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.leading, CGFloat(depth) * 14 + 12)
+            .padding(.trailing, 12)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
-            .onTapGesture {
-                if isDir {
-                    if isExpanded {
-                        expandedDirs.remove(item.path)
-                    } else {
-                        expandedDirs.insert(item.path)
-                        if childCache[item.path] == nil {
-                            Task { await loadChildren(of: item.path) }
-                        }
-                    }
-                }
-            }
+            .onTapGesture { onToggle(item) }
 
-            if isDir, isExpanded, let children {
-                // 递归展开子目录:用 ForEach + Group 拆成两层避免 opaque type 自引用。
-                Group {
-                    ForEach(children) { child in
-                        rowContent(RowItem(child))
-                    }
-                }
-            }
-        }
-    }
-
-    /// 单一行的渲染,不带递归子节点;递归在 row(_:) 里通过 ForEach + Group 显式拼装。
-    @ViewBuilder
-    private func rowContent(_ item: RowItem) -> some View {
-        let isDir = item.isDirectory
-        let isExpanded = expandedDirs.contains(item.path)
-        let isLoadingChildren = childLoading.contains(item.path)
-
-        HStack(spacing: 6) {
-            if isDir {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Theme.textMuted)
-                    .frame(width: 10)
-            } else {
-                Spacer().frame(width: 10)
-            }
-            Image(systemName: iconFor(item))
-                .font(.system(size: 12))
-                .foregroundColor(isDir ? Theme.wandAccent : Theme.textSecondary)
-                .frame(width: 16)
-            Text(item.name)
-                .font(.system(size: 12, design: isDir ? .default : .monospaced))
-                .foregroundColor(Theme.textPrimary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 4)
-            if isDir, isLoadingChildren {
-                ProgressView().controlSize(.small).scaleEffect(0.6)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if isDir {
-                if isExpanded {
-                    expandedDirs.remove(item.path)
-                } else {
-                    expandedDirs.insert(item.path)
-                    if childCache[item.path] == nil {
-                        Task { await loadChildren(of: item.path) }
-                    }
+            if isDir, isExpanded, let children = childCache[item.path] {
+                ForEach(children) { child in
+                    FileTreeRow(
+                        item: RowItem(child),
+                        depth: depth + 1,
+                        expandedDirs: $expandedDirs,
+                        childCache: $childCache,
+                        childLoading: $childLoading,
+                        onToggle: onToggle
+                    )
                 }
             }
         }
@@ -217,33 +268,7 @@ struct FileTreeView: View {
         }
     }
 
-    // MARK: - 数据加载
-
-    private func reload() async {
-        loading = true
-        loadError = nil
-        do {
-            let listing = try await api.listDirectory(currentPath)
-            items = listing.items
-        } catch {
-            loadError = error.localizedDescription
-            items = []
-        }
-        loading = false
-    }
-
-    private func loadChildren(of path: String) async {
-        childLoading.insert(path)
-        defer { childLoading.remove(path) }
-        do {
-            let listing = try await api.listDirectory(path)
-            childCache[path] = listing.items
-        } catch {
-            childCache[path] = []
-        }
-    }
-
-    // MARK: - RowItem(把 DirectoryItem + parent 假行统一成一种)
+    // MARK: - RowItem(从 DirectoryItem 转换的轻量行模型)
 
     struct RowItem: Identifiable {
         let path: String
@@ -251,21 +276,10 @@ struct FileTreeView: View {
         let isDirectory: Bool
         var id: String { path }
 
-        init(path: String, name: String, isDirectory: Bool) {
-            self.path = path
-            self.name = name
-            self.isDirectory = isDirectory
-        }
-
         init(_ item: DirectoryItem) {
             self.path = item.path
             self.name = item.name
             self.isDirectory = item.isDirectory
-        }
-
-        /// parent 假行专用(用 .. 作名字,标 isDirectory 让它走目录点击逻辑)。
-        static func parentRow(parent: String) -> RowItem {
-            RowItem(path: parent, name: "..", isDirectory: true)
         }
     }
 }

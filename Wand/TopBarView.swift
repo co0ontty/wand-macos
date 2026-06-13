@@ -17,6 +17,9 @@ struct TopBarView: View {
     let onSettings: () -> Void
     let onOpenWeb: () -> Void
     let onSwitchServer: () -> Void
+    /// 右侧文件面板的开关状态与切换回调(折叠后唯一的重新打开入口)。
+    var filePanelOpen: Bool = true
+    var onToggleFilePanel: (() -> Void)? = nil
 
     enum ConnectionState {
         case connecting
@@ -34,6 +37,9 @@ struct TopBarView: View {
                 placeholderBadge
             }
             Spacer(minLength: 8)
+            if let onToggleFilePanel {
+                filePanelToggle(onToggleFilePanel)
+            }
             menuButton
         }
         .padding(.horizontal, 16)
@@ -137,6 +143,18 @@ struct TopBarView: View {
                 .fill(Theme.danger)
                 .frame(width: 7, height: 7)
         }
+    }
+
+    private func filePanelToggle(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: filePanelOpen ? "sidebar.right" : "sidebar.squares.right")
+                .font(.system(size: 16))
+                .foregroundColor(filePanelOpen ? Theme.wandAccent : Theme.textSecondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(filePanelOpen ? "折叠文件面板" : "展开文件面板")
     }
 
     private var menuButton: some View {

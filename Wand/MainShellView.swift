@@ -56,6 +56,12 @@ struct MainShellView: View {
                     onOpenWeb: { showWebFallback = true },
                     onSwitchServer: {
                         NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
+                    },
+                    filePanelOpen: filePanelOpen,
+                    onToggleFilePanel: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            filePanelOpen.toggle()
+                        }
                     }
                 )
                 content
@@ -165,7 +171,8 @@ struct MainShellView: View {
             MainColumn(
                 api: api,
                 sessionId: sessionId,
-                provider: selectedSessionProvider
+                provider: selectedSessionProvider,
+                session: selectedSession
             )
         } else {
             EmptyMainColumn(api: api)
@@ -244,12 +251,16 @@ struct MainShellView: View {
 
     private var selectedSessionTitle: String? {
         guard selectedSessionId != nil else { return nil }
+        // 优先展示真实标题(摘要 > 当前任务 > cwd 末段),回退到会话 id 前缀。
+        if let title = selectedSession?.displayTitle, !title.isEmpty {
+            return title
+        }
         return "会话 \(selectedSessionId?.prefix(6) ?? "")"
     }
 
     private var selectedSessionSubtitle: String? {
-        guard selectedSessionId != nil else { return nil }
-        return nil
+        guard let cwd = selectedSession?.cwd, !cwd.isEmpty else { return nil }
+        return cwd
     }
 }
 
@@ -770,6 +781,7 @@ struct MainColumn: View {
     let api: WandAPI
     let sessionId: String
     let provider: String
+    let session: SessionSnapshot?
 
     var body: some View {
         // 阶段 4 临时方案:直接嵌入现有 ChatView(消息 + 输入栏整体)。
@@ -779,7 +791,8 @@ struct MainColumn: View {
         VStack(spacing: 0) {
             SessionHeaderView(
                 sessionId: sessionId,
-                api: api
+                provider: provider,
+                title: session?.displayTitle
             )
             Divider().opacity(0.3)
             ChatView(sessionId: sessionId, api: api)
@@ -789,28 +802,41 @@ struct MainColumn: View {
 
 struct SessionHeaderView: View {
     let sessionId: String
-    let api: WandAPI
+    let provider: String
+    let title: String?
+
+    private var isCodex: Bool { provider == "codex" }
+    private var providerLabel: String { isCodex ? "Codex" : "Claude" }
+    private var providerColor: Color { isCodex ? Theme.codex : Theme.wandAccent }
+    private var providerMuted: NSColor { isCodex ? Theme.infoMuted : Theme.wandAccentMuted }
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "terminal")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Theme.wandAccent)
-            Text("Claude")
+                .foregroundColor(providerColor)
+            Text(providerLabel)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(Color(nsColor: Theme.wandAccentMuted))
+                        .fill(Color(nsColor: providerMuted))
                 )
-            Text("·")
-                .foregroundColor(Theme.textMuted)
+            if let title, !title.isEmpty {
+                Text("·")
+                    .foregroundColor(Theme.textMuted)
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer()
             Text(sessionId.prefix(8).description + "…")
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(Theme.textSecondary)
-            Spacer()
+                .foregroundColor(Theme.textMuted)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
