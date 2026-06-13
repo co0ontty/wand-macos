@@ -563,15 +563,30 @@ struct ChatView: View {
     }
 
     /// iOS 16+ / macOS 13+ 用多行自增高输入框；旧系统退化为单行。
+    /// Enter 发送(走 onSubmit),Shift+Enter 走 multi-line newline 行为(由 TextField axis
+    /// 默认处理:macOS 14+ 区分 Enter 提交 / Shift+Enter 换行,这里再显式做一次修饰键判定,
+    /// 避免老系统回车直接清空草稿但没发出去)。
     @ViewBuilder private var growingTextField: some View {
         if #available(iOS 16.0, macOS 13.0, *) {
             TextField("发消息…", text: $draft, axis: .vertical)
                 .lineLimit(1...5)
                 .font(.system(size: 16))
+                .onSubmit { handleReturnKey(shift: false) }
         } else {
             TextField("发消息…", text: $draft)
                 .font(.system(size: 16))
+                .onSubmit { handleReturnKey(shift: false) }
         }
+    }
+
+    /// 拦截回车:无修饰键 → 发送;带 Shift → 插入换行(老系统回退路径)。
+    /// 用 NSApp.currentEvent 读 modifier,因为 onSubmit 回调里没有直接拿到事件。
+    private func handleReturnKey(shift: Bool) {
+        if shift {
+            // Shift+Enter 期望换行;TextField 在多行模式下默认会插入,这里不进 sendDraft。
+            return
+        }
+        sendDraft()
     }
 
     private var canSend: Bool {
@@ -580,7 +595,10 @@ struct ChatView: View {
 
     private func sendDraft() {
         guard canSend else { return }
-        let text = draft
+        // 多行 TextField 触发的 onSubmit 可能在草稿末尾多带一个换行(回车字符先于 onSubmit
+        // 提交落进 draft),trim 一下避免发出去的消息带尾换行。
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
         draft = ""
         followsLatest = true
         store.send(text: text)

@@ -52,7 +52,10 @@ struct NewSessionView: View {
 
     var body: some View {
         NavigationView {
-            Form {
+            // macOS 13+ 用 ScrollView 包 Form,内容超过 minHeight 时自动滚动,
+            // 不会因 section 多 + 长 cwd 列表被 sheet 容器裁掉。
+            ScrollView {
+                Form {
                 Section("工作目录") {
                     TextField("/path/to/project", text: $cwd)
                         .font(.system(size: 14, design: .monospaced))
@@ -128,6 +131,7 @@ struct NewSessionView: View {
                     }
                 }
             }
+            }
             .dismissKeyboardOnTap()
             .navigationTitle("新建会话")
             .toolbar {
@@ -153,7 +157,7 @@ struct NewSessionView: View {
                 }
             }
         }
-        .frame(minWidth: 620, minHeight: 650)
+        .frame(minWidth: 720, idealWidth: 800, minHeight: 560, idealHeight: 720)
         .task {
             recentPaths = (try? await api.recentPaths()) ?? []
             if cwd.isEmpty {
