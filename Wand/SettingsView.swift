@@ -17,22 +17,80 @@ struct SettingsView: View {
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
     var body: some View {
-        NavigationView {
-            Form {
-                serverSection
-                moreSection
-                aboutSection
+        VStack(spacing: 0) {
+            HStack {
+                Text("设置")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Button("完成") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Theme.brand)
             }
-            .navigationTitle("设置")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(Theme.brand)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .wandGlass(.chrome)
+            Divider().opacity(0.35)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    settingsCard("服务器") {
+                        infoRow("地址", serverURL.absoluteString, mono: true)
+                        infoRow("认证方式", (token?.isEmpty == false) ? "连接码" : "无密码")
+                        if let serverVersion {
+                            infoRow("服务端版本", "v\(serverVersion)", mono: true)
+                        }
+                        Divider()
+                        Button {
+                            dismiss()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
+                            }
+                        } label: {
+                            Label("切换服务器", systemImage: "server.rack")
+                                .font(.system(size: 15))
+                        }
+                        Button(role: .destructive) {
+                            confirmDisconnect = true
+                        } label: {
+                            Label("断开连接", systemImage: "xmark.circle")
+                                .font(.system(size: 15))
+                                .foregroundColor(Theme.danger)
+                        }
+                    }
+                    settingsCard("更多") {
+                        Button {
+                            dismiss()
+                            onOpenWeb()
+                        } label: {
+                            Label("打开网页版（完整设置）", systemImage: "safari")
+                                .font(.system(size: 15))
+                        }
+                        if LocalNetworkPermission.isEnforced {
+                            Button {
+                                LocalNetworkPermission.openSettings()
+                            } label: {
+                                Label("本地网络权限（系统设置）", systemImage: "lock.shield")
+                                    .font(.system(size: 15))
+                            }
+                        }
+                        Text(LocalNetworkPermission.isEnforced
+                             ? "更新通道、模型配置等服务端设置在网页版里调整。连不上局域网服务器时，检查「本地网络」权限。"
+                             : "更新通道、模型配置等服务端设置在网页版里调整。")
+                            .font(.footnote)
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                    settingsCard("关于") {
+                        infoRow("App 版本", appVersion, mono: true)
+                        Link(destination: URL(string: "https://github.com/co0ontty/wand")!) {
+                            Label("GitHub 仓库", systemImage: "link")
+                                .font(.system(size: 15))
+                        }
+                    }
                 }
+                .padding(20)
             }
         }
-        .frame(minWidth: 520, minHeight: 420)
+        .frame(minWidth: 640, minHeight: 520)
         .task {
             serverVersion = (try? await api.serverConfig())?.currentVersion
         }
@@ -47,69 +105,29 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - 区块
-
-    private var serverSection: some View {
-        Section("服务器") {
-            infoRow("地址", serverURL.absoluteString, mono: true)
-            infoRow("认证方式", (token?.isEmpty == false) ? "连接码" : "无密码")
-            if let serverVersion {
-                infoRow("服务端版本", "v\(serverVersion)", mono: true)
-            }
-            Button {
-                dismiss()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
-                }
-            } label: {
-                Label("切换服务器", systemImage: "server.rack")
-                    .font(.system(size: 15))
-            }
-            Button(role: .destructive) {
-                confirmDisconnect = true
-            } label: {
-                Label("断开连接", systemImage: "xmark.circle")
-                    .font(.system(size: 15))
-                    .foregroundColor(Theme.danger)
-            }
-        }
-    }
-
-    private var moreSection: some View {
-        Section {
-            Button {
-                dismiss()
-                onOpenWeb()
-            } label: {
-                Label("打开网页版（完整设置）", systemImage: "safari")
-                    .font(.system(size: 15))
-            }
-            if LocalNetworkPermission.isEnforced {
-                Button {
-                    LocalNetworkPermission.openSettings()
-                } label: {
-                    Label("本地网络权限（系统设置）", systemImage: "lock.shield")
-                        .font(.system(size: 15))
-                }
-            }
-        } footer: {
-            Text(LocalNetworkPermission.isEnforced
-                 ? "更新通道、模型配置等服务端设置在网页版里调整。连不上局域网服务器时，检查「本地网络」里 Wand 是否被允许；重启 Mac 后权限偶尔失效，把开关关掉再打开即可。"
-                 : "更新通道、模型配置等服务端设置在网页版里调整。")
-        }
-    }
-
-    private var aboutSection: some View {
-        Section("关于") {
-            infoRow("App 版本", appVersion, mono: true)
-            Link(destination: URL(string: "https://github.com/co0ontty/wand")!) {
-                Label("GitHub 仓库", systemImage: "link")
-                    .font(.system(size: 15))
-            }
-        }
-    }
-
     // MARK: - 小组件
+
+    private func settingsCard<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textSecondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .fill(Theme.surfaceElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 1)
+                )
+        )
+    }
 
     private var appVersion: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"

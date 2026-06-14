@@ -32,7 +32,7 @@ struct ConnectView: View {
                 }
                 Spacer(minLength: 0)
                 card
-                    .frame(maxWidth: 440)
+                    .frame(maxWidth: isPresentedAsSheet ? 520 : 900)
                     .padding(.horizontal, 28)
                     .padding(.vertical, 24)
                 Spacer(minLength: 0)
@@ -64,21 +64,79 @@ struct ConnectView: View {
         .padding(.vertical, 14)
     }
 
+    @ViewBuilder
     private var card: some View {
-        VStack(spacing: 22) {
-            VStack(spacing: 14) {
-                WandBrandMark(size: 64)
-                VStack(spacing: 6) {
-                    Text("连接到 Wand")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(Theme.textPrimary)
-                    Text("粘贴设置页的连接码，或直接输入服务器地址")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.textSecondary)
-                        .multilineTextAlignment(.center)
-                }
-            }
+        if isPresentedAsSheet {
+            compactCard
+        } else {
+            desktopCard
+        }
+    }
 
+    private var desktopCard: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                WandBrandMark(size: 72)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("连接到 Wand")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundColor(Theme.textPrimary)
+                    Text("连接你的开发主机，在桌面端并排管理会话、聊天、文件与 Git 状态。")
+                        .font(.system(size: 14))
+                        .foregroundColor(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 24)
+                Label("连接码会安全绑定服务器地址与认证信息", systemImage: "lock.shield")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 280, alignment: .leading)
+            .padding(32)
+            .background(Theme.wandAccent.opacity(0.07))
+
+            Rectangle()
+                .fill(Theme.border)
+                .frame(width: 1)
+
+            formContent
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(32)
+        }
+        .frame(minHeight: 430)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .wandGlass(.panel)
+        .shadow(color: Theme.ShadowToken.lg.color, radius: Theme.ShadowToken.lg.radius, y: Theme.ShadowToken.lg.yOffset)
+    }
+
+    private var compactCard: some View {
+        VStack(spacing: 22) {
+            intro
+            formContent
+        }
+        .padding(28)
+        .wandGlass(.panel)
+        .shadow(color: Theme.ShadowToken.md.color, radius: Theme.ShadowToken.md.radius, y: Theme.ShadowToken.md.yOffset)
+    }
+
+    private var intro: some View {
+        VStack(spacing: 14) {
+            WandBrandMark(size: 64)
+            VStack(spacing: 6) {
+                Text("连接到 Wand")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("粘贴设置页的连接码，或直接输入服务器地址")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    private var formContent: some View {
+        VStack(spacing: 18) {
             inputField
 
             if let error {

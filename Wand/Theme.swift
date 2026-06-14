@@ -2,8 +2,8 @@ import SwiftUI
 import AppKit
 
 /// 品牌色与复用样式,对齐 web 端的 :root token(暖米色背景 + 暖珊瑚 accent)。
-/// 颜色随系统明暗自适应;液态玻璃抽象(`WandMaterial`)在 macOS 26+ 走 NSVisualEffectView,
-/// macOS 12-15 退化为半透明 surface + 暖色描边 + 暖色阴影。
+/// 颜色随系统明暗自适应；液态玻璃抽象在 macOS 26+ 走 SwiftUI 原生 Liquid Glass，
+/// 老系统退化为半透明 surface + 暖色描边。
 ///
 /// 暖米色背景取 web 端 --bg-primary #F6F1E8,品牌主色取 web 端 --accent #C5653D。
 /// 旧 `Theme.brand`(#D97757, iOS / macOS 沿用)保留做兼容 — 引用方暂未迁移过来之前不破坏。
@@ -191,27 +191,31 @@ enum Theme {
 
     // MARK: - 液态玻璃抽象
 
-    /// 液态玻璃胶囊:顶栏 / 侧栏头 / 输入栏 / 会话头卡片背景。
-    /// macOS 26+ 走 NSVisualEffectView 的 .hudWindow;老系统退化为半透明 surface。
+    /// 液态玻璃胶囊:顶栏 / 面板 / 会话头卡片背景。
+    /// macOS 26+ 直接使用 SwiftUI Liquid Glass;老系统退化为半透明 surface。
     /// 视图层用 `View.wandGlass(...)` 直接挂即可。
     enum Glass {
         case chrome           // 顶栏 / 工具条(高不透明,放在最顶)
         case panel            // 侧栏 / 输入栏(中等不透明)
         case capsule          // 消息头 / 状态条(更紧凑)
 
-        var material: NSVisualEffectView.Material {
-            switch self {
-            case .chrome: return .headerView
-            case .panel: return .sidebar
-            case .capsule: return .hudWindow
-            }
-        }
-
         var cornerRadius: CGFloat {
             switch self {
             case .chrome: return 0     // 顶栏贴窗口
             case .panel: return Radius.lg
             case .capsule: return Radius.full
+            }
+        }
+
+        @available(macOS 26.0, *)
+        var nativeEffect: SwiftUI.Glass {
+            switch self {
+            case .chrome:
+                return .regular.tint(Theme.wandAccent.opacity(0.035))
+            case .panel:
+                return .regular.tint(Theme.wandAccent.opacity(0.06))
+            case .capsule:
+                return .clear.tint(Theme.wandAccent.opacity(0.08)).interactive()
             }
         }
     }
@@ -241,15 +245,14 @@ enum Theme {
 // MARK: - 液态玻璃修饰符
 
 extension View {
-    /// 挂液态玻璃材质:macOS 26+ 走 NSVisualEffectView,老系统走半透明 surface + 描边 + 阴影。
+    /// 挂原生 Liquid Glass；旧系统仅保留基本半透明背景。
     @ViewBuilder
     func wandGlass(_ kind: Theme.Glass) -> some View {
         if #available(macOS 26.0, *) {
-            self.background(VisualEffectBackground(material: kind.material))
-                .overlay(
-                    RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
-                        .stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5)
-                )
+            self.glassEffect(
+                kind.nativeEffect,
+                in: RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
+            )
         } else {
             self.background(
                 RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
@@ -261,25 +264,15 @@ extension View {
             )
         }
     }
-}
 
-/// macOS 26+ 的 NSVisualEffectView 桥。SwiftUI 的 .background(.regularMaterial) 在 26+ 上
-/// 视觉上等价,但我们手动桥一层是为了精确控制 material/cornerRadius/blendingMode,
-/// 让 chrome/panel/capsule 三档有明确的视觉差。
-private struct VisualEffectBackground: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = material
-        v.blendingMode = .behindWindow
-        v.state = .active
-        v.isEmphasized = false
-        return v
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
+    /// macOS 26 使用系统玻璃按钮；旧系统保留无边框按钮。
+    @ViewBuilder
+    func wandGlassButton() -> some View {
+        if #available(macOS 26.0, *) {
+            self.buttonStyle(.glass)
+        } else {
+            self.buttonStyle(.plain)
+        }
     }
 }
 

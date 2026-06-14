@@ -102,18 +102,19 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(Array(groupedMessageItems.enumerated()), id: \.offset) { _, item in
-                            messageItemView(item)
-                        }
-                        if store.isResponding {
-                            respondingIndicator
-                        }
-                        Color.clear.frame(height: 1).id("chat-bottom")
+                    ForEach(Array(groupedMessageItems.enumerated()), id: \.offset) { _, item in
+                        messageItemView(item)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
-                    .padding(.bottom, 6)
+                    if store.isResponding {
+                        respondingIndicator
+                    }
+                    Color.clear.frame(height: 1).id("chat-bottom")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 6)
+            }
                 .modifier(DismissKeyboardOnDrag())
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)

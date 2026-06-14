@@ -51,12 +51,12 @@ struct NewSessionView: View {
     }
 
     var body: some View {
-        NavigationView {
-            // macOS 13+ 用 ScrollView 包 Form,内容超过 minHeight 时自动滚动,
-            // 不会因 section 多 + 长 cwd 列表被 sheet 容器裁掉。
+        VStack(spacing: 0) {
+            sheetHeader
+            Divider().opacity(0.35)
             ScrollView {
-                Form {
-                Section("工作目录") {
+                VStack(alignment: .leading, spacing: 18) {
+                    sectionCard("工作目录") {
                     TextField("/path/to/project", text: $cwd)
                         .font(.system(size: 14, design: .monospaced))
                     Button {
@@ -93,69 +93,54 @@ struct NewSessionView: View {
                             }
                         }
                     }
-                }
+                    }
 
-                Section("助手") {
-                    Picker("助手", selection: $provider) {
+                    sectionCard("助手") {
+                        Picker("助手", selection: $provider) {
                         ForEach(Provider.allCases) { option in
                             Text(option.label).tag(option)
                         }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
-                }
 
-                Section("会话类型") {
-                    Picker("类型", selection: $sessionType) {
-                        ForEach(SessionType.allCases) { type in
-                            Text(type.label).tag(type)
+                    sectionCard("运行方式") {
+                        Picker("会话类型", selection: $sessionType) {
+                            ForEach(SessionType.allCases) { type in
+                                Text(type.label).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Picker("权限模式", selection: $mode) {
+                            ForEach(ModeOption.allCases) { option in
+                                Text(option.label).tag(option)
+                            }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    Picker("权限模式", selection: $mode) {
-                        ForEach(ModeOption.allCases) { option in
-                            Text(option.label).tag(option)
-                        }
+
+                    sectionCard("首条消息（可选）") {
+                        TextField("想让它做什么…", text: $firstMessage)
+                            .font(.system(size: 15))
                     }
-                }
 
-                Section("首条消息（可选）") {
-                    TextField("想让它做什么…", text: $firstMessage)
-                        .font(.system(size: 15))
-                }
-
-                if let errorMessage {
-                    Section {
+                    if let errorMessage {
                         Text(errorMessage)
                             .font(.footnote)
                             .foregroundColor(Theme.danger)
                     }
                 }
-            }
+                .padding(20)
             }
             .dismissKeyboardOnTap()
-            .navigationTitle("新建会话")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                        .foregroundColor(Theme.textSecondary)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if creating {
-                        ProgressView()
-                    } else {
-                        Button("创建") { create() }
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(canCreate ? Theme.brand : Theme.textSecondary)
-                            .disabled(!canCreate)
-                    }
-                }
-            }
             .sheet(isPresented: $showBrowser) {
                 DirectoryBrowserView(api: api, startPath: cwd) { picked in
                     cwd = picked
                     showBrowser = false
                 }
             }
+            Divider().opacity(0.35)
+            sheetFooter
         }
         .frame(minWidth: 720, idealWidth: 800, minHeight: 560, idealHeight: 720)
         .task {
@@ -168,6 +153,68 @@ struct NewSessionView: View {
                 }
             }
         }
+    }
+
+    private func sectionCard<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textSecondary)
+            VStack(alignment: .leading, spacing: 10) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .fill(Theme.surfaceElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 1)
+                )
+        )
+    }
+
+    private var sheetHeader: some View {
+        HStack(spacing: 12) {
+            WandBrandMark(size: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("新建会话")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("选择助手、目录和运行方式")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .wandGlass(.chrome)
+    }
+
+    private var sheetFooter: some View {
+        HStack {
+            Spacer()
+            Button("取消") { dismiss() }
+                .buttonStyle(WandSecondaryButtonStyle())
+            if creating {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 72)
+            } else {
+                Button("创建") { create() }
+                    .buttonStyle(WandPrimaryButtonStyle())
+                    .disabled(!canCreate)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Theme.surface)
     }
 
     private var canCreate: Bool {
@@ -224,40 +271,43 @@ struct DirectoryBrowserView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        NavigationView {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                VStack(spacing: 0) {
-                    pathHeader
-                    Divider()
-                    if loading {
-                        Spacer()
-                        ProgressView().tint(Theme.brand)
-                        Spacer()
-                    } else if let errorMessage {
-                        Spacer()
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundColor(Theme.danger)
-                            .padding()
-                        Spacer()
-                    } else {
-                        directoryList
-                    }
-                }
+        VStack(spacing: 0) {
+            HStack {
+                Text("选择目录")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Button("取消") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Theme.textSecondary)
             }
-            .navigationTitle("选择目录")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                        .foregroundColor(Theme.textSecondary)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("选择此目录") { onPick(currentPath) }
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(Theme.brand)
-                }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .wandGlass(.chrome)
+            pathHeader
+            Divider()
+            if loading {
+                Spacer()
+                ProgressView().tint(Theme.brand)
+                Spacer()
+            } else if let errorMessage {
+                Spacer()
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundColor(Theme.danger)
+                    .padding()
+                Spacer()
+            } else {
+                directoryList
             }
+            Divider()
+            HStack {
+                Spacer()
+                Button("选择此目录") { onPick(currentPath) }
+                    .buttonStyle(WandPrimaryButtonStyle())
+            }
+            .padding(14)
+            .background(Theme.surface)
         }
         .frame(minWidth: 620, minHeight: 520)
         .task {

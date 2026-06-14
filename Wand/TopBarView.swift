@@ -5,8 +5,7 @@ import AppKit
 /// 左:品牌 + 服务器地址;中:连接状态点 + 当前会话标题(可选);
 /// 右:菜单按钮(设置 / 网页版 / 切换服务器 / 关于)。
 ///
-/// 视觉对齐 web 端 `.main-header-row` + 液态玻璃胶囊;macOS 26+ 走 NSVisualEffectView,
-/// 老系统退化为半透明 surface。
+/// 视觉对齐 web 端 `.main-header-row`，macOS 26+ 使用原生 Liquid Glass。
 struct TopBarView: View {
     let serverURL: URL
     let connectionState: ConnectionState
@@ -80,18 +79,23 @@ struct TopBarView: View {
 
     private var placeholderBadge: some View {
         HStack(spacing: 6) {
-            Image(systemName: "rectangle.dashed")
-                .font(.system(size: 12, weight: .medium))
+            connectionDot
             Text("未选择会话")
                 .font(.system(size: 12))
         }
         .foregroundColor(Theme.textSecondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Theme.surface.opacity(0.6))
-        )
+        .wandGlass(.capsule)
+        .help(connectionHelp)
+    }
+
+    private var connectionHelp: String {
+        switch connectionState {
+        case .connecting: return "正在连接服务器"
+        case .connected: return "服务器已连接"
+        case .disconnected(let message): return "服务器连接失败：\(message)"
+        }
     }
 
     private func sessionBadge(title: String, subtitle: String?) -> some View {
@@ -112,14 +116,7 @@ struct TopBarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Theme.surface)
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5)
-        )
+        .wandGlass(.capsule)
     }
 
     @ViewBuilder private var connectionDot: some View {
@@ -153,7 +150,7 @@ struct TopBarView: View {
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .wandGlassButton()
         .help(filePanelOpen ? "折叠文件面板" : "展开文件面板")
     }
 
@@ -183,6 +180,7 @@ struct TopBarView: View {
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
+        .wandGlassButton()
         .fixedSize()
     }
 }

@@ -95,6 +95,11 @@ struct MainShellView: View {
                     }
                 }
             }
+            .onAppear {
+                if geo.size.width < 1100 {
+                    filePanelOpen = false
+                }
+            }
         }
         .sheet(isPresented: $showWebFallback) {
             WebFallbackContainer(serverURL: serverURL, token: token) {
@@ -123,6 +128,11 @@ struct MainShellView: View {
                 connectionState = .connected
             } catch {
                 connectionState = .disconnected(error.localizedDescription)
+            }
+        }
+        .onChange(of: selectedSessionId) { id in
+            if id == nil {
+                selectedSession = nil
             }
         }
     }
@@ -275,7 +285,7 @@ struct SidebarColumn: View {
         // 现阶段直接调 SessionListView,通过 NavigationLink 把 quickOpenSession 传出来
         SidebarColumnInner(
             api: api,
-            selectedSessionId: selectedSessionId,
+            selectedSessionId: $selectedSessionId,
             onSessionSelected: onSessionSelected
         )
     }
@@ -287,7 +297,7 @@ struct SidebarColumn: View {
 private struct SidebarColumnInner: View {
     let api: WandAPI
     /// 当前选中的会话 id(由 MainShellView 传入),用于 SessionTile 高亮。
-    let selectedSessionId: String?
+    @Binding var selectedSessionId: String?
     let onSessionSelected: (SessionSnapshot) -> Void
 
     @State private var sessions: [SessionSnapshot] = []
@@ -300,6 +310,7 @@ private struct SidebarColumnInner: View {
     @State private var pendingDelete: PendingDelete?
     @State private var showClearHistoryConfirmation = false
     @State private var showNewSession = false
+    @State private var historyActionInProgress = false
     @ObservedObject private var quickActions = QuickActionCoordinator.shared
 
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
@@ -399,6 +410,16 @@ private struct SidebarColumnInner: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                 Spacer()
+                Button(role: .destructive) {
+                    deleteSelectedSessions()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(selectedSessionIds.isEmpty ? Theme.textMuted : Theme.danger)
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedSessionIds.isEmpty)
+                .help("删除所选会话")
                 Button {
                     isSelecting = false
                     selectedSessionIds.removeAll()
@@ -545,6 +566,8 @@ private struct SidebarColumnInner: View {
                     ForEach(items) { h in
                         HistoryTile(history: h)
                             .contentShape(Rectangle())
+                            .onTapGesture { resume(h) }
+                            .disabled(historyActionInProgress)
                             .contextMenu {
                                 Button(role: .destructive) {
                                     pendingDelete = .history(h)
@@ -582,6 +605,12 @@ private struct SidebarColumnInner: View {
         do {
             let s = try await api.listSessions()
             sessions = s
+            if let selectedSessionId,
+               let refreshed = s.first(where: { $0.id == selectedSessionId }) {
+                onSessionSelected(refreshed)
+            } else if selectedSessionId != nil {
+                self.selectedSessionId = nil
+            }
             // HistorySession 来源:Claude + Codex 各自的历史文件扫描,并发拉取合并。
             async let claudeHistory = api.listClaudeHistory()
             async let codexHistory = api.listCodexHistory()
@@ -602,6 +631,22 @@ private struct SidebarColumnInner: View {
         }
     }
 
+    private func deleteSelectedSessions() {
+        let ids = selectedSessionIds
+        guard !ids.isEmpty else { return }
+        sessions.removeAll { ids.contains($0.id) }
+        if let selectedSessionId, ids.contains(selectedSessionId) {
+            self.selectedSessionId = nil
+        }
+        selectedSessionIds.removeAll()
+        isSelecting = false
+        Task {
+            for id in ids {
+                try? await api.deleteSession(id: id)
+            }
+        }
+    }
+
     private func performDelete() {
         guard let pendingDelete else { return }
         Task {
@@ -609,10 +654,31 @@ private struct SidebarColumnInner: View {
             case .session(let s):
                 try? await api.deleteSession(id: s.id)
                 sessions.removeAll { $0.id == s.id }
+                if selectedSessionId == s.id {
+                    selectedSessionId = nil
+                }
             case .history(let h):
                 try? await api.deleteHistory(h)
                 historySessions.removeAll { $0.id == h.id }
             }
+        }
+    }
+
+    private func resume(_ history: HistorySession) {
+        guard !historyActionInProgress else { return }
+        historyActionInProgress = true
+        Task {
+            do {
+                let resumed = try await api.resumeHistory(history)
+                historySessions.removeAll { $0.id == history.id }
+                sessions.insert(resumed, at: 0)
+                scope = .active
+                onSessionSelected(resumed)
+                loadError = nil
+            } catch {
+                loadError = error.localizedDescription
+            }
+            historyActionInProgress = false
         }
     }
 
@@ -840,7 +906,7 @@ struct SessionHeaderView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(Theme.surface)
+        .wandGlass(.chrome)
     }
 }
 
