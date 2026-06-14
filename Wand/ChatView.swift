@@ -324,7 +324,10 @@ struct ChatView: View {
     // MARK: - 底部栏（权限卡 + 队列 + 输入框）
 
     /// 输入栏上方悬浮的待办进度条数据：当前 turn 的 todos，全部完成后隐藏（对齐 Web）。
+    /// 同时在会话不再 running（turn 已结束 / idle / exited）时隐藏——模型常忘了发最后
+    /// 一条全 completed 的更新，否则进度条会卡在「5/6」干瞪眼（对齐 Web sessionActive）。
     private var visibleTodos: [TodoItem] {
+        guard store.status == "running" else { return [] }
         let todos = TodoItem.currentTodos(in: store.messages)
         guard !todos.isEmpty else { return [] }
         let completed = todos.filter { $0.status == "completed" }.count
@@ -2399,12 +2402,20 @@ struct TodoProgressBar: View {
     private var completed: Int { todos.filter { $0.status == "completed" }.count }
     /// 1-indexed「正在干第 N 个」：completed+1 封顶（对齐 Web currentStep）。
     private var currentStep: Int { min(completed + 1, todos.count) }
+    /// 右侧当前步骤描述：优先取首个 in_progress 的 activeForm / content；
+    /// 没有进行中项时（模型已标完上一步、还没标下一步 in_progress，此时 N/M 靠
+    /// completed+1 仍显示「正在干第 N 个」），回退到首个 pending 任务的描述；
+    /// 都没有再兜底「准备中…」——保证右侧空白区始终有内容（对齐 Web fallback）。
     private var activeTask: String {
         if let active = todos.first(where: { $0.status == "in_progress" }) {
-            let label = active.activeForm ?? active.content
+            let label = (active.activeForm?.isEmpty == false) ? active.activeForm! : active.content
             if !label.isEmpty { return label }
         }
-        return ""
+        if let pending = todos.first(where: { $0.status == "pending" }) {
+            let label = (pending.activeForm?.isEmpty == false) ? pending.activeForm! : pending.content
+            if !label.isEmpty { return label }
+        }
+        return "准备中…"
     }
 
     var body: some View {
@@ -2417,13 +2428,13 @@ struct TodoProgressBar: View {
                     Text("\(currentStep)/\(todos.count)")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundColor(Theme.brand)
-                    if !activeTask.isEmpty {
-                        Text(activeTask)
-                            .font(.system(size: 12))
-                            .foregroundColor(Theme.textSecondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
+                    Text(activeTask)
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(-1)
+                    Spacer(minLength: 8)
                     Image(systemName: expanded ? "chevron.down" : "chevron.up")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(Theme.textSecondary)
