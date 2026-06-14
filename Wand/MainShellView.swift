@@ -11,14 +11,20 @@ struct MainShellView: View {
 
     @State private var filePanelOpen: Bool = true
     @State private var rightPanelTab: RightPanelTab = .files
-    /// 当前选中的会话 id(从 SessionListView 回调进来)。
+    /// 当前选中的会话 id。
     @State private var selectedSessionId: String?
     @State private var selectedSessionProvider: String = "claude"
     @State private var selectedSession: SessionSnapshot?
     /// 连接状态(给顶栏的 connection dot 用)。
-    @State private var connectionState: TopBarView.ConnectionState = .connecting
+    @State private var connectionState: ConnectionState = .connecting
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
+
+    enum ConnectionState {
+        case connecting
+        case connected
+        case disconnected(String)
+    }
 
     enum RightPanelTab: String, CaseIterable, Identifiable {
         case files
@@ -355,35 +361,12 @@ struct MainShellView: View {
         return "会话 \(selectedSessionId?.prefix(6) ?? "")"
     }
 
-    private var selectedSessionSubtitle: String? {
-        guard let cwd = selectedSession?.cwd, !cwd.isEmpty else { return nil }
-        return cwd
-    }
 }
 
-// MARK: - 侧栏容器(暂时套用现有 SessionListView,阶段 3 替换为 web 风格)
+// MARK: - 侧栏容器
 
 struct SidebarColumn: View {
     let api: WandAPI
-    @Binding var selectedSessionId: String?
-    let onSessionSelected: (SessionSnapshot) -> Void
-
-    var body: some View {
-        // 现阶段直接调 SessionListView,通过 NavigationLink 把 quickOpenSession 传出来
-        SidebarColumnInner(
-            api: api,
-            selectedSessionId: $selectedSessionId,
-            onSessionSelected: onSessionSelected
-        )
-    }
-}
-
-/// 内层:沿用现有 SessionListView,但渲染为不带 NavigationView 标题栏的版本。
-/// 把顶部 toolbar 隐藏(SessionListView 内部已经用 .principal 渲染 scope Picker),
-/// 列表区改为「点击 → 回调 onSessionSelected」而不是 NavigationLink 推入。
-private struct SidebarColumnInner: View {
-    let api: WandAPI
-    /// 当前选中的会话 id(由 MainShellView 传入),用于 SessionTile 高亮。
     @Binding var selectedSessionId: String?
     let onSessionSelected: (SessionSnapshot) -> Void
 
@@ -398,8 +381,6 @@ private struct SidebarColumnInner: View {
     @State private var showClearHistoryConfirmation = false
     @State private var showNewSession = false
     @State private var historyActionInProgress = false
-    @ObservedObject private var quickActions = QuickActionCoordinator.shared
-
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     enum Scope: String { case active, history }
@@ -433,26 +414,6 @@ private struct SidebarColumnInner: View {
         .task { await load() }
         .onReceive(refreshTimer) { _ in
             Task { await load(silent: true) }
-        }
-        .onReceive(quickActions.$pending) { _ in
-            // 侧栏只消费 newSession / openSession;openWeb 由主壳处理
-            guard let action = quickActions.consume(where: { a in
-                switch a { case .newSession, .openSession: return true; case .openWeb: return false }
-            }) else { return }
-            switch action {
-            case .newSession: showNewSession = true
-            case .openSession(let id):
-                if let s = sessions.first(where: { $0.id == id }) {
-                    onSessionSelected(s)
-                } else {
-                    Task {
-                        if let s = try? await api.getSession(id: id) {
-                            onSessionSelected(s)
-                        }
-                    }
-                }
-            case .openWeb: break
-            }
         }
         .onChange(of: scope) { _ in
             isSelecting = false
@@ -1021,8 +982,5 @@ extension Theme {
     enum LayoutMetrics {
         static let sidebarWidth: CGFloat = 300
         static let filePanelWidth: CGFloat = 320
-        static let topBarHeight: CGFloat = 44
-        static let minWindowWidth: CGFloat = 900
-        static let minWindowHeight: CGFloat = 600
     }
 }

@@ -36,10 +36,6 @@ enum Theme {
     static let wandAccent = Color(red: 0.773, green: 0.396, blue: 0.239)        // #C5653D
     /// 加深版:active / pressed 状态。
     static let wandAccentStrong = Color(red: 0.686, green: 0.325, blue: 0.188)  // #AF5330
-    /// hover 版。
-    static let wandAccentHover = Color(red: 0.831, green: 0.459, blue: 0.314)    // #D47550
-    /// 软色,小色块 / 背景用。
-    static let wandAccentSoft = Color(red: 0.910, green: 0.773, blue: 0.682)     // #E8C5AE
     /// 0.12 透明,卡片背景用。
     static let wandAccentMuted = rgbA(0.773, 0.396, 0.239, 0.12)
     /// 0.25 透明,glow 阴影用。
@@ -76,17 +72,10 @@ enum Theme {
         dark: rgb(0.184, 0.165, 0.137)
     )
 
-    /// 终端底色(对齐 web --bg-terminal)。
-    static let surfaceTerminal = rgb(0.122, 0.106, 0.090)  // #1F1B17
-
-    /// 遮罩层(对齐 web --bg-overlay)。
-    static let overlay = rgbA(0.165, 0.110, 0.071, 0.40)   // rgba(42, 28, 18, 0.4)
-
     // MARK: - 边框(对齐 web --border-*)
 
     static let borderSubtle = rgbA(0.588, 0.463, 0.333, 0.12)  // rgba(150,118,85,0.12)
     static let borderDefault = rgbA(0.490, 0.357, 0.224, 0.25)  // rgba(125,91,57,0.25)
-    static let borderStrong = rgbA(0.490, 0.357, 0.224, 0.40)   // rgba(125,91,57,0.40)
     static let border = Color(nsColor: dynamicNS(light: borderDefault, dark: borderDefault))
     static let borderFocus = rgbA(0.773, 0.396, 0.239, 0.50)    // rgba(197,101,61,0.5)
 
@@ -108,25 +97,12 @@ enum Theme {
         light: rgb(0.549, 0.451, 0.373),   // #8C735F
         dark: rgb(0.514, 0.451, 0.388)
     )
-    static let textInverse = Color.white
-    static let textLink = Color(nsColor: rgb(0.773, 0.396, 0.239))  // #C5653D
-
     // MARK: - 语义色(对齐 web --success/--warning/--danger/--info)
 
     static let success = Color(red: 0.310, green: 0.478, blue: 0.345)       // #4F7A58
-    static let successHover = Color(red: 0.353, green: 0.561, blue: 0.400)  // #5A8F66
-    static let successMuted = rgbA(0.310, 0.478, 0.345, 0.14)
-    static let successGlow = rgbA(0.310, 0.478, 0.345, 0.30)
-
     static let warning = Color(red: 0.663, green: 0.416, blue: 0.184)       // #A96A2F
-    static let warningHover = Color(red: 0.753, green: 0.478, blue: 0.208)  // #C07A35
-    static let warningMuted = rgbA(0.663, 0.416, 0.184, 0.14)
-    static let warningGlow = rgbA(0.663, 0.416, 0.184, 0.25)
 
     static let danger = Color(red: 0.698, green: 0.310, blue: 0.271)        // #B24F45
-    static let dangerHover = Color(red: 0.788, green: 0.376, blue: 0.333)   // #C96055
-    static let dangerMuted = rgbA(0.698, 0.310, 0.271, 0.14)
-    static let dangerGlow = rgbA(0.698, 0.310, 0.271, 0.25)
 
     static let info = Color(red: 0.290, green: 0.435, blue: 0.647)          // #4A6FA5
     static let infoMuted = rgbA(0.290, 0.435, 0.647, 0.14)
@@ -134,60 +110,38 @@ enum Theme {
     // MARK: - 圆角(对齐 web --radius-*)
 
     enum Radius {
-        static let xs: CGFloat = 6
-        static let sm: CGFloat = 10
         static let md: CGFloat = 14
         static let lg: CGFloat = 20
-        static let xl: CGFloat = 28
-        static let full: CGFloat = 9999
-    }
-
-    // MARK: - 字号(对齐 web --font-size-*)
-
-    enum FontSize {
-        static let xs: CGFloat = 11
-        static let sm: CGFloat = 13
-        static let base: CGFloat = 15
-        static let lg: CGFloat = 17
-        static let xl: CGFloat = 20
     }
 
     // MARK: - 阴影(对齐 web --shadow-*,暖色调)
     // 暖色调阴影统一用 rgba(89, 58, 32, *) 透明度梯度。
-    // 浮起卡片用 ShadowToken(level: .md),浮起最高的弹窗用 .lg / .xl。
+    // 浮起卡片用 .md，浮起最高的弹窗用 .lg。
 
     enum ShadowToken {
-        case xs, sm, md, lg, xl
+        case md, lg
 
         var color: Color {
             switch self {
-            case .xs: return Color(nsColor: rgbA(0.349, 0.227, 0.125, 0.04))
-            case .sm: return Color(nsColor: rgbA(0.349, 0.227, 0.125, 0.06))
             case .md: return Color(nsColor: rgbA(0.349, 0.227, 0.125, 0.08))
             case .lg: return Color(nsColor: rgbA(0.349, 0.227, 0.125, 0.12))
-            case .xl: return Color(nsColor: rgbA(0.349, 0.227, 0.125, 0.16))
             }
         }
 
         var radius: CGFloat {
             switch self {
-            case .xs: return 3; case .sm: return 8
-            case .md: return 16; case .lg: return 32; case .xl: return 48
+            case .md: return 16
+            case .lg: return 32
             }
         }
 
         var yOffset: CGFloat {
             switch self {
-            case .xs: return 1; case .sm: return 2
-            case .md: return 4; case .lg: return 8; case .xl: return 12
+            case .md: return 4
+            case .lg: return 8
             }
         }
     }
-
-    // MARK: - 字体(对齐 web --font-sans / --font-mono)
-
-    static let fontSans = NSFont.systemFont(ofSize: FontSize.base)
-    static let fontMono = NSFont.monospacedSystemFont(ofSize: FontSize.base, weight: .regular)
 
     // MARK: - 液态玻璃抽象
 
@@ -197,13 +151,11 @@ enum Theme {
     enum Glass {
         case chrome           // 顶栏 / 工具条(高不透明,放在最顶)
         case panel            // 侧栏 / 输入栏(中等不透明)
-        case capsule          // 消息头 / 状态条(更紧凑)
 
         var cornerRadius: CGFloat {
             switch self {
             case .chrome: return 0     // 顶栏贴窗口
             case .panel: return Radius.lg
-            case .capsule: return Radius.full
             }
         }
 
@@ -214,8 +166,6 @@ enum Theme {
                 return .regular.tint(Theme.wandAccent.opacity(0.035))
             case .panel:
                 return .regular.tint(Theme.wandAccent.opacity(0.06))
-            case .capsule:
-                return .clear.tint(Theme.wandAccent.opacity(0.08)).interactive()
             }
         }
     }
@@ -265,15 +215,6 @@ extension View {
         }
     }
 
-    /// macOS 26 使用系统玻璃按钮；旧系统保留无边框按钮。
-    @ViewBuilder
-    func wandGlassButton() -> some View {
-        if #available(macOS 26.0, *) {
-            self.buttonStyle(.glass)
-        } else {
-            self.buttonStyle(.plain)
-        }
-    }
 }
 
 // MARK: - 兼容旧 API
@@ -342,24 +283,6 @@ private struct WindowDragModifier: ViewModifier {
             }
         }
         return NSApp.keyWindow ?? NSApp.mainWindow
-    }
-}
-
-/// 拿一个透明 NSView 覆盖在 header 上,绑定 mouseDown 触发 NSWindow.performDrag。
-/// 配合 hideNativeTitleBar() 使用,让隐藏标题栏后用户仍能拖窗口。
-/// SwiftUI 的 .gesture(DragGesture()) 不能改 NSWindow.frame,所以走 AppKit。
-struct WindowDragOverlay: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = WindowDragNSView()
-        return view
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-private final class WindowDragNSView: NSView {
-    override func mouseDown(with event: NSEvent) {
-        // 默认 mouseDown 已经会调 performDrag,这里显式调一次保险。
-        window?.performDrag(with: event)
     }
 }
 

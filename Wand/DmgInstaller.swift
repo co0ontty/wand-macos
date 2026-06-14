@@ -5,7 +5,6 @@ import Foundation
 /// 与 Android 的 Intent.ACTION_VIEW APK 同思路：把"安装"这一步交回系统/用户决策。
 final class DmgInstaller: NSObject, URLSessionDownloadDelegate {
 
-    let store: ServerStore
     var serverURL: URL?
 
     private var session: URLSession!
@@ -13,12 +12,10 @@ final class DmgInstaller: NSObject, URLSessionDownloadDelegate {
     private var progressBar: NSProgressIndicator?
     private var progressText: NSTextField?
     private var currentTargetFile: URL?
-    private var currentLatestVersion: String?
     private weak var hostWindow: NSWindow?
     private var lastUiUpdate: TimeInterval = 0
 
-    init(server: ServerStore) {
-        self.store = server
+    override init() {
         super.init()
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForResource = 600
@@ -27,8 +24,7 @@ final class DmgInstaller: NSObject, URLSessionDownloadDelegate {
         self.session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
     }
 
-    func downloadAndMount(urlString: String, fileName: String, source: String,
-                          presentingWindow: NSWindow?, latestVersion: String? = nil) {
+    func downloadAndMount(urlString: String, fileName: String, presentingWindow: NSWindow?) {
         guard !urlString.isEmpty else {
             presentError(message: "下载地址为空", on: presentingWindow)
             return
@@ -53,7 +49,6 @@ final class DmgInstaller: NSObject, URLSessionDownloadDelegate {
         let supportDir = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Wand", isDirectory: true)) ?? FileManager.default.temporaryDirectory
         try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
         currentTargetFile = supportDir.appendingPathComponent(safeFileName)
-        currentLatestVersion = latestVersion
         hostWindow = presentingWindow
 
         DispatchQueue.main.async { self.presentProgress(on: presentingWindow, fileName: safeFileName) }
@@ -111,7 +106,6 @@ final class DmgInstaller: NSObject, URLSessionDownloadDelegate {
             }
             return
         }
-        if let v = currentLatestVersion { store.downloadedDmgVersion = v }
         DispatchQueue.main.async {
             self.dismissProgress()
             self.mountAndReveal(dmgPath: dest.path)

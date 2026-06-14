@@ -254,15 +254,6 @@ struct NewSessionView: View {
             )
     }
 
-    private func fieldCard<Content: View>(
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(cardBackground(selected: false))
-    }
-
     /// Provider / 会话类型 / 模式卡：选中态走 brand 软底 + brand 描边。
     private func optionCard(
         title: String,

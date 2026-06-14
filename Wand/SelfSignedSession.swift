@@ -2,7 +2,7 @@ import Foundation
 
 /// 共享的 URLSession，对自签名 HTTPS 证书（wand 默认 cert.ts 产出的）放行。
 /// 等价 Android 端 MainActivity.trustSelfSigned()。
-final class SelfSignedSession: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
+final class SelfSignedSession: NSObject, URLSessionDelegate {
     static let shared = SelfSignedSession()
 
     /// session.configuration.httpCookieStorage 的便捷别名 —— 给 WandAuth 在
@@ -31,31 +31,5 @@ final class SelfSignedSession: NSObject, URLSessionDelegate, URLSessionDownloadD
             return
         }
         completionHandler(.useCredential, URLCredential(trust: trust))
-    }
-
-    // MARK: - Download delegate hooks (filled by DmgInstaller)
-
-    var onProgress: ((Int64, Int64) -> Void)?
-    var onFinish: ((URL) -> Void)?
-    var onFail: ((Error) -> Void)?
-
-    func urlSession(_ session: URLSession,
-                    downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64,
-                    totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        onProgress?(totalBytesWritten, totalBytesExpectedToWrite)
-    }
-
-    func urlSession(_ session: URLSession,
-                    downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {
-        onFinish?(location)
-    }
-
-    func urlSession(_ session: URLSession,
-                    task: URLSessionTask,
-                    didCompleteWithError error: Error?) {
-        if let error { onFail?(error) }
     }
 }

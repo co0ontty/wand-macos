@@ -13,7 +13,6 @@
 		A100000000000000000000A4 /* WebContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B4 /* WebContainerView.swift */; };
 		A100000000000000000000A5 /* WebBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B5 /* WebBridge.swift */; };
 		A100000000000000000000A6 /* ServerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B6 /* ServerStore.swift */; };
-		A100000000000000000000A7 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B7 /* UpdateChecker.swift */; };
 		A100000000000000000000A8 /* DmgInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B8 /* DmgInstaller.swift */; };
 		A100000000000000000000A9 /* SelfSignedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B9 /* SelfSignedSession.swift */; };
 		A100000000000000000000AA /* WandAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BA /* WandAuth.swift */; };
@@ -23,9 +22,7 @@
 		A200000000000000000000A3 /* WandSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B3 /* WandSocket.swift */; };
 		A200000000000000000000A4 /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B4 /* ChatStore.swift */; };
 		A200000000000000000000A5 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B5 /* ChatView.swift */; };
-		A200000000000000000000A6 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B6 /* SessionListView.swift */; };
 		A200000000000000000000A7 /* NewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B7 /* NewSessionView.swift */; };
-		A200000000000000000000A8 /* TopBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B8 /* TopBarView.swift */; };
 		A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B9 /* GitQuickCommitView.swift */; };
 		A200000000000000000000AA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BA /* SettingsView.swift */; };
 		A200000000000000000000AB /* LocalNetworkPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BB /* LocalNetworkPermission.swift */; };
@@ -44,7 +41,6 @@
 		A100000000000000000000B4 /* WebContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebContainerView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B5 /* WebBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebBridge.swift; sourceTree = "<group>"; };
 		A100000000000000000000B6 /* ServerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerStore.swift; sourceTree = "<group>"; };
-		A100000000000000000000B7 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
 		A100000000000000000000B8 /* DmgInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmgInstaller.swift; sourceTree = "<group>"; };
 		A100000000000000000000B9 /* SelfSignedSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfSignedSession.swift; sourceTree = "<group>"; };
 		A100000000000000000000BA /* WandAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WandAuth.swift; sourceTree = "<group>"; };
@@ -54,9 +50,7 @@
 		A200000000000000000000B3 /* WandSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WandSocket.swift; sourceTree = "<group>"; };
 		A200000000000000000000B4 /* ChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
 		A200000000000000000000B5 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
-		A200000000000000000000B6 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		A200000000000000000000B7 /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
-		A200000000000000000000B8 /* TopBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopBarView.swift; sourceTree = "<group>"; };
 		A200000000000000000000B9 /* GitQuickCommitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitQuickCommitView.swift; sourceTree = "<group>"; };
 		A200000000000000000000BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A200000000000000000000BB /* LocalNetworkPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkPermission.swift; sourceTree = "<group>"; };
@@ -99,7 +93,6 @@
 				A100000000000000000000B4 /* WebContainerView.swift */,
 				A100000000000000000000B5 /* WebBridge.swift */,
 				A100000000000000000000B6 /* ServerStore.swift */,
-				A100000000000000000000B7 /* UpdateChecker.swift */,
 				A100000000000000000000B8 /* DmgInstaller.swift */,
 				A100000000000000000000B9 /* SelfSignedSession.swift */,
 				A100000000000000000000BA /* WandAuth.swift */,
@@ -109,9 +102,7 @@
 				A200000000000000000000B3 /* WandSocket.swift */,
 				A200000000000000000000B4 /* ChatStore.swift */,
 				A200000000000000000000B5 /* ChatView.swift */,
-				A200000000000000000000B6 /* SessionListView.swift */,
 				A200000000000000000000B7 /* NewSessionView.swift */,
-				A200000000000000000000B8 /* TopBarView.swift */,
 				A200000000000000000000B9 /* GitQuickCommitView.swift */,
 				A200000000000000000000BA /* SettingsView.swift */,
 				A200000000000000000000BB /* LocalNetworkPermission.swift */,
@@ -211,7 +202,6 @@
 				A100000000000000000000A4 /* WebContainerView.swift in Sources */,
 				A100000000000000000000A5 /* WebBridge.swift in Sources */,
 				A100000000000000000000A6 /* ServerStore.swift in Sources */,
-				A100000000000000000000A7 /* UpdateChecker.swift in Sources */,
 				A100000000000000000000A8 /* DmgInstaller.swift in Sources */,
 				A100000000000000000000A9 /* SelfSignedSession.swift in Sources */,
 				A100000000000000000000AA /* WandAuth.swift in Sources */,
@@ -221,9 +211,7 @@
 				A200000000000000000000A3 /* WandSocket.swift in Sources */,
 				A200000000000000000000A4 /* ChatStore.swift in Sources */,
 				A200000000000000000000A5 /* ChatView.swift in Sources */,
-				A200000000000000000000A6 /* SessionListView.swift in Sources */,
 				A200000000000000000000A7 /* NewSessionView.swift in Sources */,
-				A200000000000000000000A8 /* TopBarView.swift in Sources */,
 				A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */,
 				A200000000000000000000AA /* SettingsView.swift in Sources */,
 				A200000000000000000000AB /* LocalNetworkPermission.swift in Sources */,

@@ -7,7 +7,7 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
     private let model: WebViewModel
     private weak var webView: WKWebView?
     private var serverURL: URL?
-    private lazy var installer: DmgInstaller = DmgInstaller(server: ServerStore.shared)
+    private lazy var installer = DmgInstaller()
     private var hasLoadedOnce = false
 
     init(model: WebViewModel) {
@@ -36,8 +36,7 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
         case "downloadUpdate":
             let url = (dict["url"] as? String) ?? ""
             let fileName = (dict["fileName"] as? String) ?? "wand-update.dmg"
-            let source = (dict["source"] as? String) ?? "local"
-            installer.downloadAndMount(urlString: url, fileName: fileName, source: source, presentingWindow: webView?.window)
+            installer.downloadAndMount(urlString: url, fileName: fileName, presentingWindow: webView?.window)
         case "backToNative":
             DispatchQueue.main.async { [weak self] in
                 self?.model.requestClose?()

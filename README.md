@@ -92,9 +92,8 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 
 ```
 macos/Wand/
-├── ContentView.swift          # 已连接进入 NativeRootView，未连接进入 ConnectView
-├── NativeRootView.swift       # 原生根导航、认证、设置、网页版兜底、更新检查
-├── SessionListView.swift      # 会话列表与新建入口
+├── ContentView.swift          # 已连接进入 MainShellView，未连接进入 ConnectView
+├── MainShellView.swift        # 原生三栏主界面、会话列表、设置与网页版入口
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
 ├── NewSessionView.swift       # Claude/Codex、会话类型、目录与权限模式

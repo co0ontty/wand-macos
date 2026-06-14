@@ -3,16 +3,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
-/// 输入栏放在 safeAreaInset(edge: .bottom)；键盘避让不走系统自动机制
-/// （NavigationView push 页面 + 多行 TextField 组合下系统避让会漏抬、键盘盖住输入栏），
-/// 而是 .ignoresSafeArea(.keyboard) 关掉系统行为，由 KeyboardObserver
-/// 监听键盘 frame 手动抬升，行为确定。
+/// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
     private let sessionId: String
     private let api: WandAPI
 
     @StateObject private var store: ChatStore
-    @StateObject private var keyboard = KeyboardObserver()
     @StateObject private var speech = SpeechRecognizerService()
     @State private var draft = ""
     @State private var showQuickCommit = false
@@ -58,7 +54,6 @@ struct ChatView: View {
         // 点发送 / 权限按钮不会误收。
         .dismissKeyboardOnTap()
         .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 navigationStatus
@@ -73,9 +68,6 @@ struct ChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
-        // 关掉系统键盘避让，统一交给 KeyboardObserver 手动抬升（见 bottomBar），
-        // 避免「系统抬一次 + 手动抬一次」叠加或两边都不抬的不确定行为。
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showQuickCommit) {
             GitQuickCommitView(sessionId: sessionId, api: api)
         }
@@ -115,7 +107,6 @@ struct ChatView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 6)
             }
-                .modifier(DismissKeyboardOnDrag())
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 8)
                         .onChanged { value in
@@ -142,9 +133,6 @@ struct ChatView: View {
                 .onChange(of: store.loading) { loading in
                     if !loading { pinToBottom(proxy) }
                 }
-                .onChange(of: keyboard.lift) { lift in
-                    if lift > 0 && followsLatest { pinToBottom(proxy) }
-            }
         }
     }
 
@@ -371,9 +359,6 @@ struct ChatView: View {
             }
             inputBar
         }
-        // 手动键盘避让：使用键盘与窗口的完整重叠高度。safeAreaInset 已经处理
-        // 底部安全区，观察器不能再次扣除，否则输入栏会少抬一截。
-        .padding(.bottom, keyboard.lift)
         .background(
             Theme.background
                 .opacity(0.97)
@@ -822,13 +807,6 @@ struct ChatView: View {
                     }
                 }
         }
-    }
-}
-
-/// macOS 没有软键盘：no-op（iOS 版在这里做 scrollDismissesKeyboard / 拖拽收起键盘）。
-private struct DismissKeyboardOnDrag: ViewModifier {
-    func body(content: Content) -> some View {
-        content
     }
 }
 
