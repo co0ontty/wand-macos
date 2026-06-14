@@ -208,6 +208,9 @@ struct NewSessionView: View {
         // 笔记本常规分辨率下不滚动即可见。老 760 装不下 7 个分区 + 5 个模式卡。
         .frame(minWidth: 760, idealWidth: 820, minHeight: 740, idealHeight: 920)
         .background(Theme.background)
+        // SwiftUI 在 macOS 上 .sheet 会自带 NSWindow 标题栏,跟下面的 sheetHeader 重复,
+        // 视觉上「两层标题」很难看。挂这个修饰符把原生标题栏改成透明 + 隐藏文字。
+        .hideNativeTitleBar()
         .task { await loadInitial() }
         .onChange(of: provider) { newProvider in
             // codex 切到仅支持全权限，当前 mode 不在支持集则回到 default。
@@ -562,6 +565,10 @@ struct NewSessionView: View {
     // MARK: - 头部 / 底部
 
     private var sheetHeader: some View {
+        // 顶部 header 整块可拖动：hideNativeTitleBar() 把原生标题栏隐藏后,
+        // 默认 NSWindow 不可拖；用 .gesture(DragGesture) + NSWindow.setFrameOrigin
+        // 把 header 转成拖拽区。直接在 .background() 放 NSView 会被 HStack 拦事件，
+        // 走 SwiftUI gesture 更稳。
         HStack(alignment: .center, spacing: 12) {
             WandBrandMark(size: 32)
             VStack(alignment: .leading, spacing: 2) {
@@ -576,7 +583,10 @@ struct NewSessionView: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
         .wandGlass(.chrome)
+        .windowDrag()
     }
 
     private var sheetFooter: some View {

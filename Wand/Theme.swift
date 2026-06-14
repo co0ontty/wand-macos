@@ -284,6 +284,115 @@ extension View {
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
     }
+
+    /// 隐藏当前 sheet/window 的原生标题栏。
+    /// SwiftUI 的 .sheet 在 macOS 上会自带一个 NSWindow 标题栏(sheetHeader 又自己画一个标题)，
+    /// 视觉上「两层标题」很丑。挂这个修饰符后只保留我们自己的内容头部。
+    /// 老 SDK 不支持 NSWindow.titlebarAppearsTransparent/titleVisibility 时静默降级。
+    func hideNativeTitleBar() -> some View {
+        background(NativeTitleBarHider())
+    }
+
+    /// 挂载后整块 view 都变成可拖动区,拖动时通过 NSWindow.setFrameOrigin 移动窗口。
+    /// 配合 hideNativeTitleBar() 一起用:原生标题栏关掉后,这个修饰符给用户提供替代拖拽入口。
+    func windowDrag() -> some View {
+        modifier(WindowDragModifier())
+    }
+}
+
+/// SwiftUI 版 window drag:用 DragGesture 拿到 cumulative translation,
+/// 再找到当前 NSWindow 改 frame.origin;比 NSView mouseDown 拦截更可靠——
+/// 不会被 HStack 子视图抢事件,只要挂的层级有 contentShape(Rectangle()) 就生效。
+private struct WindowDragModifier: ViewModifier {
+    @State private var dragOrigin: CGPoint?
+    func body(content: Content) -> some View {
+        content.gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    // sheet 是个独立 NSWindow(由 SwiftUI 创建),不在 NSApp.keyWindow 上。
+                    // 走「最后一个有 sheet 的 window」的启发式;SwiftUI sheet 是最后一个
+                    // opened sheet,直接拿 NSApp.windows.last 通常就是它。
+                    guard let window = WindowDragModifier.targetWindow() else { return }
+                    if dragOrigin == nil {
+                        dragOrigin = window.frame.origin
+                    }
+                    let start = dragOrigin ?? window.frame.origin
+                    let newOrigin = CGPoint(
+                        x: start.x + value.translation.width,
+                        y: start.y - value.translation.height
+                    )
+                    window.setFrameOrigin(newOrigin)
+                }
+                .onEnded { _ in
+                    dragOrigin = nil
+                }
+        )
+    }
+
+    /// 找当前 SwiftUI 弹窗对应的 NSWindow:sheet 是 attachedSheet 类型,普通 window
+    /// 走 keyWindow;两个都取不到就退到 mainWindow。
+    private static func targetWindow() -> NSWindow? {
+        for w in NSApp.windows.reversed() {
+            if w.isKind(of: NSWindow.self) && !w.isMainWindow {
+                // sheet 是 attached sheet(通过 -[NSWindow beginSheet:]),SwiftUI 里
+                // 走 NSPanel style 也有可能,这里按 attachedSheet != nil 判定
+                if w.sheetParent != nil || w.styleMask.contains(.titled) {
+                    return w
+                }
+            }
+        }
+        return NSApp.keyWindow ?? NSApp.mainWindow
+    }
+}
+
+/// 拿一个透明 NSView 覆盖在 header 上,绑定 mouseDown 触发 NSWindow.performDrag。
+/// 配合 hideNativeTitleBar() 使用,让隐藏标题栏后用户仍能拖窗口。
+/// SwiftUI 的 .gesture(DragGesture()) 不能改 NSWindow.frame,所以走 AppKit。
+struct WindowDragOverlay: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowDragNSView()
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class WindowDragNSView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        // 默认 mouseDown 已经会调 performDrag,这里显式调一次保险。
+        window?.performDrag(with: event)
+    }
+}
+
+/// 找当前视图所在的 NSWindow,把标题栏改成透明且不显示标题。
+/// SwiftUI 没有原生 API 关掉 sheet 的标题栏,只能从 AppKit 这一层做。
+private struct NativeTitleBarHider: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = SheetTitleBarNSView()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? SheetTitleBarNSView)?.applyToWindow()
+    }
+}
+
+private final class SheetTitleBarNSView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyToWindow()
+    }
+
+    func applyToWindow() {
+        guard let window else { return }
+        // 不要从 styleMask 里硬 remove(.titled),那样会同时干掉关闭/最小化按钮;
+        // 只把标题栏变成透明 + 隐藏文字标题,关闭/缩放/最小化按钮都还在,
+        // 用户拖窗口也能继续拖(可拖区域是标题栏以外的 contentLayoutRect)。
+        if window.styleMask.contains(.titled) {
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+        }
+    }
 }
 
 // MARK: - 按钮样式
