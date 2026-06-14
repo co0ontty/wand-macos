@@ -8,7 +8,6 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
     private weak var webView: WKWebView?
     private var serverURL: URL?
     private lazy var installer: DmgInstaller = DmgInstaller(server: ServerStore.shared)
-    private var didKickOffAutoUpdate = false
     private var hasLoadedOnce = false
 
     init(model: WebViewModel) {
@@ -116,52 +115,11 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
         model.phase = .failed(title: "无法加载 wand 服务器", message: message, canRetry: true)
     }
 
-    // MARK: - Lifecycle: 加载完成 + 启动后做一次自动更新检测
+    // MARK: - Lifecycle
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         NSLog("[Wand] navigation finished: %@", webView.url?.absoluteString ?? "?")
         hasLoadedOnce = true
         model.phase = .ready
-
-        guard !didKickOffAutoUpdate, let serverURL else { return }
-        didKickOffAutoUpdate = true
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-            UpdateChecker(serverURL: serverURL, store: ServerStore.shared).checkOnce { [weak self] result in
-                guard case let .available(latest, fileName, downloadUrl, size, source) = result else { return }
-                DispatchQueue.main.async {
-                    self?.presentUpdateDialog(latest: latest, fileName: fileName, downloadUrl: downloadUrl, size: size, source: source)
-                }
-            }
-        }
-    }
-
-    private func presentUpdateDialog(latest: String, fileName: String, downloadUrl: String, size: Int64, source: String) {
-        guard let win = webView?.window else { return }
-        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        let store = ServerStore.shared
-        if store.skippedDmgVersion == latest { return }
-        if store.downloadedDmgVersion == latest { return }
-
-        let alert = NSAlert()
-        alert.messageText = "Wand 发现新版本"
-        var info = "当前版本：\(current)\n最新版本：\(latest)"
-        if size > 0 { info += "\n文件大小：\(DmgInstaller.formatSize(size))" }
-        info += "\n来源：\(source == "github" ? "GitHub Release" : "本地")"
-        alert.informativeText = info
-        alert.addButton(withTitle: "立即更新")
-        alert.addButton(withTitle: "稍后提醒")
-        alert.addButton(withTitle: "跳过此版本")
-        alert.alertStyle = .informational
-
-        alert.beginSheetModal(for: win) { [weak self] resp in
-            switch resp {
-            case .alertFirstButtonReturn:
-                self?.installer.downloadAndMount(urlString: downloadUrl, fileName: fileName, source: source, presentingWindow: win, latestVersion: latest)
-            case .alertThirdButtonReturn:
-                store.skippedDmgVersion = latest
-            default:
-                break
-            }
-        }
     }
 }

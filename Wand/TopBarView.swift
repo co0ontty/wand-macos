@@ -41,7 +41,8 @@ struct TopBarView: View {
             }
             menuButton
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, 84)
+        .padding(.trailing, 16)
         .frame(height: 44)
         .wandGlass(.chrome)
         .overlay(alignment: .bottom) {

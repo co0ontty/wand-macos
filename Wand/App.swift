@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 @main
 struct WandApp: App {
+    @NSApplicationDelegateAdaptor(WandAppDelegate.self) private var appDelegate
     @StateObject private var store = ServerStore.shared
 
     init() {
@@ -27,6 +29,7 @@ struct WandApp: App {
                     minHeight: 600, idealHeight: 880, maxHeight: .infinity
                 )
         }
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {
@@ -35,6 +38,38 @@ struct WandApp: App {
                 }
                 .keyboardShortcut(",", modifiers: [.command, .shift])
             }
+        }
+    }
+}
+
+final class WandAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // SwiftUI WindowGroup 可能先恢复多个旧窗口；等首个主窗口完成创建后再去重，
+        // 避免在启动过渡阶段误判临时窗口。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.closeDuplicateMainWindows()
+        }
+    }
+
+    func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    private func closeDuplicateMainWindows() {
+        let mainWindows = NSApp.windows.filter {
+            $0.title == "Wand" && $0.sheetParent == nil && $0.styleMask.contains(.titled)
+        }
+        guard mainWindows.count > 1 else { return }
+
+        let retainedWindow = mainWindows.first(where: { $0 === NSApp.keyWindow })
+            ?? mainWindows.first(where: { $0 === NSApp.mainWindow })
+            ?? mainWindows[0]
+        for window in mainWindows where window !== retainedWindow {
+            window.close()
         }
     }
 }

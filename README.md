@@ -83,16 +83,10 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 - **重启 Mac 后授权偶尔失效**（开关显示打开但实际被拒，FB16512666）：在设置里把 Wand 的开关关掉再打开即可恢复；macOS 15.6+ 已修部分场景。
 - macOS 上**没有**重置本地网络权限状态的官方手段（TN3179 明确说明，`tccutil` 管不到它）。
 
-## 自动更新
+## 更新
 
-原生首页启动 5 秒后异步调 `/api/macos-dmg-update?currentVersion=<当前版本>`，如果有新版：
-
-1. 弹原生对话框（NSAlert）："立即更新 / 稍后提醒 / 跳过此版本"
-2. 点"立即更新"→ URLSession 下载 DMG（进度对话框，throttle 50ms）
-3. 下载完调 `hdiutil attach` 挂载，然后用 `NSWorkspace.open` 在 Finder 中显示挂载点
-4. 用户拖拽 Wand.app 到 Applications 完成升级
-
-对称 Android 的 `Intent.ACTION_VIEW` APK：把"实际安装"交回系统/用户决策，比"自动替换 /Applications/Wand.app + helper script 重启"更稳。
+客户端不在启动或打开网页版时主动弹出更新窗口。用户可在网页版完整设置中查看更新并下载 DMG；
+下载完成后由系统挂载，用户拖拽 Wand.app 到 Applications 完成升级。
 
 ## 工程结构
 

@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// 横屏 native 应用主壳:顶栏 + 三栏(左会话 / 中聊天 / 右文件)。
+/// 横屏 native 应用主壳:原生窗口工具栏 + 三栏(左会话 / 中聊天 / 右文件)。
 /// 窗口 < 1100 时自动折叠右栏,只留左 + 中;窗口 < 800 时建议横屏。
 ///
 /// 三栏宽度常量对齐 web 端 token(`.sidebar-width: 300px`, `.file-panel-width: 320px`),
-/// 顶栏 44pt 高。会话列表复用现有 `SessionListView`(胶囊 tile 重排在阶段 3 做),
-/// 中栏和右栏在阶段 4-5 接入。
+/// 顶部操作统一放进 macOS 原生 toolbar，内容区不再额外绘制应用顶栏。
 struct MainShellView: View {
     let serverURL: URL
     let token: String?
@@ -45,28 +44,49 @@ struct MainShellView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            VStack(spacing: 0) {
-                TopBarView(
-                    serverURL: serverURL,
-                    connectionState: connectionState,
-                    sessionTitle: selectedSessionTitle,
-                    sessionSubtitle: selectedSessionSubtitle,
-                    onSettings: { presentSettings = true },
-                    onOpenWeb: { showWebFallback = true },
-                    onSwitchServer: {
-                        NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
-                    },
-                    filePanelOpen: filePanelOpen,
-                    onToggleFilePanel: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            filePanelOpen.toggle()
-                        }
-                    }
-                )
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if showWebFallback {
+                WebFallbackContainer(serverURL: serverURL, token: token)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                nativeShell
             }
+        }
+        .toolbar { windowToolbar }
+        .sheet(isPresented: $presentSettings) {
+            SettingsView(
+                serverURL: serverURL,
+                token: token,
+                onOpenWeb: {
+                    presentSettings = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showWebFallback = true
+                    }
+                }
+            )
+            .environmentObject(ServerStore.shared)
+        }
+        .task {
+            // 进入主壳时跑一次连通性检查,失败显示重连 banner
+            connectionState = .connecting
+            do {
+                _ = try await api.listSessions()
+                connectionState = .connected
+            } catch {
+                connectionState = .disconnected(error.localizedDescription)
+            }
+        }
+        .onChange(of: selectedSessionId) { id in
+            if id == nil {
+                selectedSession = nil
+            }
+        }
+    }
+
+    private var nativeShell: some View {
+        GeometryReader { geo in
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.windowGradient)
             .frame(minWidth: 900, minHeight: 600)
             .overlay(alignment: .bottom) {
@@ -101,39 +121,106 @@ struct MainShellView: View {
                 }
             }
         }
-        .sheet(isPresented: $showWebFallback) {
-            WebFallbackContainer(serverURL: serverURL, token: token) {
-                showWebFallback = false
-            }
-            .frame(minWidth: 900, minHeight: 650)
-        }
-        .sheet(isPresented: $presentSettings) {
-            SettingsView(
-                serverURL: serverURL,
-                token: token,
-                onOpenWeb: {
-                    presentSettings = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        showWebFallback = true
+    }
+
+    // MARK: - 原生窗口工具栏
+
+    @ToolbarContentBuilder
+    private var windowToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            if showWebFallback {
+                Button {
+                    showWebFallback = false
+                } label: {
+                    Label("返回原生界面", systemImage: "chevron.left")
+                }
+            } else {
+                HStack(spacing: 7) {
+                    WandBrandMark(size: 20)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Wand")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(displayHost)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Theme.textSecondary)
                     }
                 }
-            )
-            .environmentObject(ServerStore.shared)
-        }
-        .task {
-            // 进入主壳时跑一次连通性检查,失败显示重连 banner
-            connectionState = .connecting
-            do {
-                _ = try await api.listSessions()
-                connectionState = .connected
-            } catch {
-                connectionState = .disconnected(error.localizedDescription)
             }
         }
-        .onChange(of: selectedSessionId) { id in
-            if id == nil {
-                selectedSession = nil
+        ToolbarItem(placement: .principal) {
+            if showWebFallback {
+                Text("网页版")
+                    .font(.system(size: 13, weight: .medium))
+            } else {
+                HStack(spacing: 6) {
+                    toolbarConnectionDot
+                    Text(selectedSessionTitle ?? "未选择会话")
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                }
+                .help(connectionHelp)
             }
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    filePanelOpen.toggle()
+                }
+            } label: {
+                Image(systemName: filePanelOpen ? "sidebar.right" : "sidebar.squares.right")
+            }
+            .help(filePanelOpen ? "折叠文件面板" : "展开文件面板")
+            .opacity(showWebFallback ? 0 : 1)
+            .disabled(showWebFallback)
+
+            Menu {
+                Button("设置", systemImage: "gearshape") {
+                    presentSettings = true
+                }
+                Button("打开网页版", systemImage: "safari") {
+                    showWebFallback = true
+                }
+                Divider()
+                Button("切换服务器", systemImage: "server.rack") {
+                    NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .help("更多")
+            .opacity(showWebFallback ? 0 : 1)
+            .disabled(showWebFallback)
+        }
+    }
+
+    @ViewBuilder
+    private var toolbarConnectionDot: some View {
+        switch connectionState {
+        case .connecting:
+            ProgressView()
+                .controlSize(.small)
+        case .connected:
+            Circle()
+                .fill(Theme.success)
+                .frame(width: 7, height: 7)
+        case .disconnected:
+            Circle()
+                .fill(Theme.danger)
+                .frame(width: 7, height: 7)
+        }
+    }
+
+    private var displayHost: String {
+        guard let host = serverURL.host else { return serverURL.absoluteString }
+        if let port = serverURL.port { return "\(host):\(port)" }
+        return host
+    }
+
+    private var connectionHelp: String {
+        switch connectionState {
+        case .connecting: return "正在连接服务器"
+        case .connected: return "服务器已连接"
+        case .disconnected(let message): return "服务器连接失败：\(message)"
         }
     }
 
@@ -920,33 +1007,10 @@ struct SessionHeaderView: View {
 struct WebFallbackContainer: View {
     let serverURL: URL
     let token: String?
-    let onClose: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button(action: onClose) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("返回原生界面")
-                            .font(.system(size: 14, weight: .medium))
-                    }
-                    .foregroundColor(Theme.wandAccent)
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                Text("网页版")
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.textSecondary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(Theme.background)
-            Divider().opacity(0.3)
-            WebContainerView(serverURL: serverURL, token: token)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        WebContainerView(serverURL: serverURL, token: token)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
     }
 }
