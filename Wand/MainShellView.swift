@@ -861,7 +861,12 @@ struct MainColumn: View {
                 title: session?.displayTitle
             )
             Divider().opacity(0.3)
+            // 必须按 sessionId 绑定身份:MainShellView 在 if let selectedSessionId 分支内
+            // 复用 MainColumn 节点,只换参数。SwiftUI 默认保留子视图的 @StateObject,
+            // 切换会话时 ChatStore 仍指向上一个会话(socket 不重连、快照不重拉),
+            // 表现为「切了会话,内容不变」。.id(sessionId) 强制整个子树按新身份重建。
             ChatView(sessionId: sessionId, api: api)
+                .id(sessionId)
         }
     }
 }
