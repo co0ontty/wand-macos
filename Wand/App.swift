@@ -6,14 +6,6 @@ struct WandApp: App {
     @NSApplicationDelegateAdaptor(WandAppDelegate.self) private var appDelegate
     @StateObject private var store = ServerStore.shared
 
-    init() {
-        // macOS 15+：主动把「本地网络」授权弹窗钓出来。系统设置的本地网络列表
-        // 没有手动添加入口，必须由应用先发起一次本地网络访问；不触发的话，
-        // URLSession 直连局域网 IP 会被静默拒绝（连接超时），用户既看不到弹窗、
-        // 也没法在设置里找到 Wand 来授权。详见 LocalNetworkPermission.swift。
-        LocalNetworkPermission.triggerPromptIfNeeded()
-    }
-
     var body: some Scene {
         // 用 minWidth + idealWidth + maxWidth=.infinity 让窗口可自由拖大/缩小。
         // 只写 .frame(minWidth:minHeight:) 时 macOS 13+ 的 .windowResizability(.contentSize)
@@ -44,6 +36,12 @@ struct WandApp: App {
 
 final class WandAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 等应用完成激活、主窗口可见后再触发；在 SwiftUI App.init 阶段访问网络时，
+        // 系统权限 UI 还没有可靠的呈现上下文，新安装的 App 可能完全不弹框。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            LocalNetworkPermission.triggerPromptIfNeeded()
+        }
+
         // SwiftUI WindowGroup 可能先恢复多个旧窗口；等首个主窗口完成创建后再去重，
         // 避免在启动过渡阶段误判临时窗口。
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {

@@ -183,6 +183,12 @@ struct MainShellView: View {
                 Button("设置", systemImage: "gearshape") {
                     presentSettings = true
                 }
+                if case .disconnected = connectionState,
+                   LocalNetworkPermission.isLikelyLanHost(serverURL.host) {
+                    Button("打开「本地网络」设置", systemImage: "lock.shield") {
+                        LocalNetworkPermission.openSettings()
+                    }
+                }
                 Button("打开网页版", systemImage: "safari") {
                     showWebFallback = true
                 }

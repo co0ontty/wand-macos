@@ -15,7 +15,7 @@ import Network
 ///   （Quinn/Apple DTS 确认的 15.x 已知问题；app 不在 /Applications 时也会复现）。
 ///
 /// 因此这里做三件事：
-/// 1. `triggerPromptIfNeeded()`：启动时用「UDP connect 到随机 link-local IPv6 地址:9」
+/// 1. `triggerPromptIfNeeded()`：启动时用「UDP connect 到私有 IPv4 地址:9」
 ///    主动触发授权弹窗。这是 TN3179 给出的官方技巧——不产生真实网络流量，且实测能
 ///    绕开部分"正常访问不弹窗"的系统 bug。
 /// 2. `probeDenied(_:)`：用 NWBrowser 探测当前是否已被拒绝——被拒时浏览操作会进入
@@ -44,22 +44,23 @@ enum LocalNetworkPermission {
     static func triggerPromptIfNeeded() {
         guard isEnforced, !triggered else { return }
         triggered = true
-        // TN3179：connect 一个 UDP socket 到随机 link-local IPv6 地址的 9 端口
-        // （discard 协议），即可触发本地网络权限检查，不发出任何真实流量。
+        // TN3179：connect 一个 UDP socket 到本地网络地址的 9 端口（discard
+        // 协议），即可触发本地网络权限检查，不发出任何真实流量。
+        //
+        // 不使用无 scope id 的 IPv6 link-local 地址：这种地址会在进入隐私检查前
+        // 就以 EINVAL / EHOSTUNREACH 失败，导致新安装的 App 实际没有弹权限框。
         // connect 本身可能立刻失败（未授权时），这无所谓——触发弹窗的目的已达到。
-        var addr = sockaddr_in6()
-        addr.sin6_family = sa_family_t(AF_INET6)
-        addr.sin6_port = in_port_t(9).bigEndian
-        var raw = [UInt8](repeating: 0, count: 16)
-        raw[0] = 0xfe
-        raw[1] = 0x80
-        for i in 8..<16 { raw[i] = UInt8.random(in: 1...254) }
-        memcpy(&addr.sin6_addr, &raw, 16)
-        let fd = socket(AF_INET6, SOCK_DGRAM, 0)
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(9).bigEndian
+        _ = "192.168.0.1".withCString {
+            inet_pton(AF_INET, $0, &addr.sin_addr)
+        }
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
         guard fd >= 0 else { return }
         _ = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
         close(fd)

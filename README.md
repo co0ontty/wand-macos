@@ -72,7 +72,7 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 
 应对（`LocalNetworkPermission.swift`）：
 
-1. **启动时主动触发授权弹窗**——TN3179 官方技巧：UDP connect 到随机 link-local IPv6 地址（fe80::/10）的 9 端口，不产生真实流量，且能绕开 15.x 部分场景"正常访问不弹窗"的系统 bug（`WandApp.init` 调用）。
+1. **启动时主动触发授权弹窗**——TN3179 官方技巧：应用完成启动后 UDP connect 到私有 IPv4 地址的 9 端口，不产生真实流量，且避免无 scope 的 IPv6 link-local 地址在进入权限检查前直接失败。
 2. **被拒检测**——NWBrowser 浏览 Bonjour 服务，被拒时进入 `.waiting(.dns(-65570 PolicyDenied))`；首次 start 可能误报 `.ready`，所以探测跑两轮以第二轮为准。ConnectView 在「网络失败 + 目标像局域网地址」时探测并展示引导卡片。
 3. **设置深链**——`x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork`（含回退链）。设置页与会话列表加载失败处都有入口。
 
