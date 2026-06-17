@@ -265,15 +265,26 @@ struct ChatView: View {
         }
     }
 
+    private struct ThinkingLevel: Identifiable {
+        let id: String
+        let label: String
+        let shortLabel: String
+        let menuLabel: String
+    }
+
     private static let thinkingLevels = [
-        (id: "off", label: "off"),
-        (id: "standard", label: "think"),
-        (id: "deep", label: "think hard"),
-        (id: "max", label: "ultrathink"),
+        ThinkingLevel(id: "off", label: "关闭", shortLabel: "关", menuLabel: "关闭"),
+        ThinkingLevel(id: "standard", label: "低", shortLabel: "低", menuLabel: "低（think）"),
+        ThinkingLevel(id: "deep", label: "中", shortLabel: "中", menuLabel: "中（think hard）"),
+        ThinkingLevel(id: "max", label: "高", shortLabel: "高", menuLabel: "高（ultrathink）"),
     ]
 
     private static func thinkingLabel(_ id: String) -> String {
-        thinkingLevels.first { $0.id == id }?.label ?? "off"
+        thinkingLevels.first { $0.id == id }?.label ?? "关闭"
+    }
+
+    private static func thinkingShortLabel(_ id: String) -> String {
+        thinkingLevels.first { $0.id == id }?.shortLabel ?? "关"
     }
 
     private var navigationStatus: some View {
@@ -370,6 +381,9 @@ struct ChatView: View {
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
             composerActionsMenu
+            if store.isStructured {
+                modelThinkingChip
+            }
             composerField
 
             if store.isResponding {
@@ -428,6 +442,84 @@ struct ChatView: View {
                 .padding(.trailing, 4)
                 .padding(.bottom, 3)
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var modelThinkingChip: some View {
+        Menu {
+            Section("模型") {
+                modelButton(id: nil, label: "默认")
+                ForEach(store.availableModels.filter { $0.id != "default" }) { model in
+                    modelButton(id: model.id, label: model.label)
+                }
+            }
+            Section("思考深度") {
+                ForEach(Self.thinkingLevels) { level in
+                    Button {
+                        store.setThinkingEffort(level.id)
+                    } label: {
+                        if store.thinkingEffort == level.id {
+                            Label(level.menuLabel, systemImage: "checkmark")
+                        } else {
+                            Text(level.menuLabel)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(modelThinkingText)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 116)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .opacity(0.65)
+            }
+            .foregroundColor(thinkingTint)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(thinkingTint.opacity(0.10)))
+            .overlay(Capsule().stroke(thinkingTint.opacity(0.22), lineWidth: 1))
+        }
+        .accessibilityLabel("模型与思考深度")
+    }
+
+    private var modelThinkingText: String {
+        "\(shortModelLabel) · \(Self.thinkingShortLabel(store.thinkingEffort))"
+    }
+
+    private var shortModelLabel: String {
+        guard let selected = store.selectedModel, !selected.isEmpty, selected != "default" else {
+            return "默认"
+        }
+        let full = store.availableModels.first(where: { $0.id == selected })?.label ?? selected
+        let base: String
+        if let idx = full.firstIndex(where: { $0 == "（" || $0 == "(" }) {
+            base = String(full[..<idx]).trimmingCharacters(in: .whitespaces)
+        } else {
+            base = full
+        }
+        let leaf = base.split(separator: "/").last.map(String.init) ?? base
+        let lower = leaf.lowercased()
+        if lower.contains("opus") { return "Opus" }
+        if lower.contains("sonnet") { return "Sonnet" }
+        if lower.contains("haiku") { return "Haiku" }
+        if lower.contains("gpt-5") { return "GPT-5" }
+        if lower.contains("gpt-4") { return "GPT-4" }
+        return leaf.count > 12 ? String(leaf.prefix(10)) + "…" : leaf
+    }
+
+    private var thinkingTint: Color {
+        switch store.thinkingEffort {
+        case "standard": return .green
+        case "deep": return .orange
+        case "max": return Theme.danger
+        default: return Theme.brand
+        }
     }
 
     private var sessionSettingsMenu: some View {
@@ -438,18 +530,18 @@ struct ChatView: View {
                     modelButton(id: model.id, label: model.label)
                 }
             } label: {
-                Label("模型 · \(store.selectedModel ?? "默认")", systemImage: "cpu")
+                Label("模型 · \(shortModelLabel)", systemImage: "cpu")
             }
 
             Menu {
-                ForEach(Self.thinkingLevels, id: \.id) { level in
+                ForEach(Self.thinkingLevels) { level in
                     Button {
                         store.setThinkingEffort(level.id)
                     } label: {
                         if store.thinkingEffort == level.id {
-                            Label(level.label, systemImage: "checkmark")
+                            Label(level.menuLabel, systemImage: "checkmark")
                         } else {
-                            Text(level.label)
+                            Text(level.menuLabel)
                         }
                     }
                 }
@@ -579,7 +671,7 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !store.sessionEnded
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func sendDraft() {

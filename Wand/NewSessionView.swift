@@ -119,10 +119,10 @@ struct NewSessionView: View {
     }
 
     private static let thinkingLevels = [
-        (id: "off", label: "off"),
-        (id: "standard", label: "think"),
-        (id: "deep", label: "think hard"),
-        (id: "max", label: "ultrathink"),
+        (id: "off", label: "关闭"),
+        (id: "standard", label: "低"),
+        (id: "deep", label: "中"),
+        (id: "max", label: "高"),
     ]
 
     private var providerModels: [ModelInfo] {
@@ -366,7 +366,7 @@ struct NewSessionView: View {
     }
 
     private var thinkingLabel: String {
-        Self.thinkingLevels.first(where: { $0.id == thinkingEffort })?.label ?? "off"
+        Self.thinkingLevels.first(where: { $0.id == thinkingEffort })?.label ?? "关闭"
     }
 
     @ViewBuilder private var modelMenu: some View {
