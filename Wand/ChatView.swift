@@ -274,9 +274,9 @@ struct ChatView: View {
 
     private static let thinkingLevels = [
         ThinkingLevel(id: "off", label: "关闭", shortLabel: "关", menuLabel: "关闭"),
-        ThinkingLevel(id: "standard", label: "低", shortLabel: "低", menuLabel: "低（think）"),
-        ThinkingLevel(id: "deep", label: "中", shortLabel: "中", menuLabel: "中（think hard）"),
-        ThinkingLevel(id: "max", label: "高", shortLabel: "高", menuLabel: "高（ultrathink）"),
+        ThinkingLevel(id: "standard", label: "低", shortLabel: "低", menuLabel: "低（low）"),
+        ThinkingLevel(id: "deep", label: "中", shortLabel: "中", menuLabel: "中（medium）"),
+        ThinkingLevel(id: "max", label: "高", shortLabel: "高", menuLabel: "高（max）"),
     ]
 
     private static func thinkingLabel(_ id: String) -> String {
