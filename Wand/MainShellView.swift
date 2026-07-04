@@ -383,24 +383,12 @@ struct SidebarColumn: View {
     @State private var scope: Scope = .active
     @State private var isSelecting = false
     @State private var selectedSessionIds: Set<String> = []
-    @State private var pendingDelete: PendingDelete?
     @State private var showClearHistoryConfirmation = false
     @State private var showNewSession = false
     @State private var historyActionInProgress = false
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     enum Scope: String { case active, history }
-
-    enum PendingDelete: Identifiable {
-        case session(SessionSnapshot)
-        case history(HistorySession)
-        var id: String {
-            switch self {
-            case .session(let s): return "s-\(s.id)"
-            case .history(let h): return "h-\(h.id)"
-            }
-        }
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -435,23 +423,6 @@ struct SidebarColumn: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("这会删除本机 Claude 和 Codex 的历史会话文件,无法撤销。")
-        }
-        .alert("删除会话", isPresented: Binding(
-            get: { pendingDelete != nil },
-            set: { if !$0 { pendingDelete = nil } }
-        )) {
-            Button("删除", role: .destructive) { performDelete() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text(pendingDeleteDialogMessage)
-        }
-    }
-
-    private var pendingDeleteDialogMessage: String {
-        switch pendingDelete {
-        case .session: return "此操作无法撤销,确定要删除这个会话吗?"
-        case .history: return "此操作无法撤销,确定要删除这条历史会话吗?"
-        case .none: return ""
         }
     }
 
@@ -587,7 +558,7 @@ struct SidebarColumn: View {
                                 Label("多选", systemImage: "checkmark.circle")
                             }
                             Button(role: .destructive) {
-                                pendingDelete = .session(session)
+                                deleteSession(session)
                             } label: {
                                 Label("删除", systemImage: "trash")
                             }
@@ -624,7 +595,7 @@ struct SidebarColumn: View {
                             .disabled(historyActionInProgress)
                             .contextMenu {
                                 Button(role: .destructive) {
-                                    pendingDelete = .history(h)
+                                    deleteHistory(h)
                                 } label: {
                                     Label("删除", systemImage: "trash")
                                 }
@@ -701,20 +672,20 @@ struct SidebarColumn: View {
         }
     }
 
-    private func performDelete() {
-        guard let pendingDelete else { return }
+    private func deleteSession(_ session: SessionSnapshot) {
         Task {
-            switch pendingDelete {
-            case .session(let s):
-                try? await api.deleteSession(id: s.id)
-                sessions.removeAll { $0.id == s.id }
-                if selectedSessionId == s.id {
-                    selectedSessionId = nil
-                }
-            case .history(let h):
-                try? await api.deleteHistory(h)
-                historySessions.removeAll { $0.id == h.id }
+            try? await api.deleteSession(id: session.id)
+            sessions.removeAll { $0.id == session.id }
+            if selectedSessionId == session.id {
+                selectedSessionId = nil
             }
+        }
+    }
+
+    private func deleteHistory(_ history: HistorySession) {
+        Task {
+            try? await api.deleteHistory(history)
+            historySessions.removeAll { $0.id == history.id }
         }
     }
 

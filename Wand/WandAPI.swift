@@ -115,6 +115,15 @@ final class WandAPI {
         try await request(SessionSnapshot.self, method: "GET", path: "/api/sessions/\(id)?format=chat")
     }
 
+    /// 历史消息分页：返回完整历史的 [offset, offset+limit) 段 + 总数。
+    func fetchMessages(id: String, offset: Int, limit: Int) async throws -> MessagesPage {
+        try await request(
+            MessagesPage.self,
+            method: "GET",
+            path: "/api/sessions/\(id)/messages?offset=\(offset)&limit=\(limit)"
+        )
+    }
+
     func models() async throws -> ModelsResponse {
         try await request(ModelsResponse.self, method: "GET", path: "/api/models")
     }
@@ -178,6 +187,28 @@ final class WandAPI {
         if let view { body["view"] = view }
         if let shortcutKey { body["shortcutKey"] = shortcutKey }
         return try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions/\(id)/input", body: body)
+    }
+
+    /// 由服务端按 index 摘掉队列项并立即发送，避免客户端与自动 flush 重复发送。
+    @discardableResult
+    func promoteQueued(id: String, index: Int, expectedText: String) async throws -> SessionSnapshot {
+        try await request(
+            SessionSnapshot.self,
+            method: "POST",
+            path: "/api/structured-sessions/\(id)/queued/\(index)/promote",
+            body: [
+                "expectedText": expectedText,
+                "idempotencyKey": UUID().uuidString
+            ]
+        )
+    }
+
+    func deleteQueued(id: String, index: Int) async throws {
+        _ = try await requestData(method: "DELETE", path: "/api/structured-sessions/\(id)/queued/\(index)")
+    }
+
+    func clearQueued(id: String) async throws {
+        _ = try await requestData(method: "DELETE", path: "/api/structured-sessions/\(id)/queued")
     }
 
     @discardableResult

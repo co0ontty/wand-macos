@@ -34,15 +34,23 @@ final class ChatStore: ObservableObject {
     /// AskUserQuestion 卡片的选择状态（toolUseId → 各题已选项 + 是否已提交）。
     /// 放 store 而非卡片 @State：流式推送会整条替换消息重建视图，局部状态会丢。
     @Published var askUserSelections: [String: AskUserSelectionState] = [:]
+    // 消息窗口化：messages 是完整历史的后缀，loadedOffset = messages[0] 的绝对下标。
+    @Published private(set) var loadedOffset = 0
+    @Published private(set) var messageTotal = 0
+    @Published private(set) var loadingEarlier = false
 
     let sessionId: String
     let api: WandAPI
     @Published private(set) var snapshot: SessionSnapshot?
     private let socket: WandSocket
     private var started = false
+    private let earlierPageSize = 40
+    private var queuePromotePending = false
 
     var isStructured: Bool { snapshot?.isStructured ?? true }
     var sessionEnded: Bool { ["exited", "failed", "stopped"].contains(status) }
+    var canLoadEarlier: Bool { loadedOffset > 0 }
+    private var isInFlight: Bool { isStructured && isResponding && status == "running" }
 
     init(sessionId: String, api: WandAPI) {
         self.sessionId = sessionId
@@ -86,9 +94,30 @@ final class ChatStore: ObservableObject {
 
     // MARK: - 推送合流
 
+    /// 应用一份窗口化消息快照。服务端 init/output/ended 可能只给最近一窗；
+    /// 本地如果已经加载过更早前缀，需要保留，避免用户刚展开历史又被 WS 尾窗覆盖。
+    private func applyWindowedMessages(_ incoming: [ConversationTurn]?, offset: Int?, total: Int?) {
+        guard let incoming else { return }
+        let snapOffset = offset ?? 0
+        let snapTotal = total ?? max(snapOffset + incoming.count, incoming.count)
+        if incoming.isEmpty, !messages.isEmpty, snapTotal == 0 { return }
+
+        if messages.isEmpty {
+            messages = incoming
+            loadedOffset = snapOffset
+        } else if loadedOffset <= snapOffset {
+            let keep = min(max(snapOffset - loadedOffset, 0), messages.count)
+            messages = Array(messages.prefix(keep)) + incoming
+        } else {
+            messages = incoming
+            loadedOffset = snapOffset
+        }
+        messageTotal = max(snapTotal, loadedOffset + messages.count)
+    }
+
     private func apply(snapshot snap: SessionSnapshot) {
         self.snapshot = snap
-        if let msgs = snap.messages { messages = msgs }
+        applyWindowedMessages(snap.messages, offset: snap.messageOffset, total: snap.messageTotal)
         status = snap.status ?? status
         isResponding = snap.isResponding
         queuedMessages = snap.queuedMessages ?? []
@@ -114,7 +143,7 @@ final class ChatStore: ObservableObject {
             if let data = event.data { applyStatus(data) }
         case "ended":
             if let data = event.data {
-                if let msgs = data.messages { messages = msgs }
+                applyWindowedMessages(data.messages, offset: data.messageOffset, total: data.messageTotal)
                 status = data.status ?? "exited"
                 isResponding = false
                 applyCommonFields(data)
@@ -131,7 +160,7 @@ final class ChatStore: ObservableObject {
 
     /// init 的 data 就是一份完整 SessionSnapshot（以 WsData 超集形状承接）。
     private func applyWsSnapshot(_ data: WsData) {
-        if let msgs = data.messages { messages = msgs }
+        applyWindowedMessages(data.messages, offset: data.messageOffset, total: data.messageTotal)
         status = data.status ?? status
         if let s = data.structuredState { isResponding = s.inFlight ?? false }
         applyCommonFields(data)
@@ -145,7 +174,8 @@ final class ChatStore: ObservableObject {
                 summary: data.summary, currentTaskTitle: data.currentTaskTitle,
                 selectedModel: data.selectedModel, thinkingEffort: data.thinkingEffort,
                 claudeSessionId: data.claudeSessionId,
-                messages: nil, queuedMessages: data.queuedMessages,
+                messages: nil, messageOffset: data.messageOffset, messageTotal: data.messageTotal,
+                queuedMessages: data.queuedMessages,
                 structuredState: data.structuredState, pendingEscalation: data.pendingEscalation,
                 permissionBlocked: data.permissionBlocked,
                 autoApprovePermissions: data.autoApprovePermissions
@@ -156,15 +186,16 @@ final class ChatStore: ObservableObject {
     private func applyOutput(_ data: WsData) {
         let incremental = data.incremental ?? false
         if let msgs = data.messages {
-            // 全量赢
-            messages = msgs
+            // 全量赢（窗口合并：保留已加载的更早前缀）。
+            applyWindowedMessages(msgs, offset: data.messageOffset, total: data.messageTotal)
         } else if incremental, let incoming = data.lastMessage {
             let expected = data.messageCount ?? 0
             if let last = messages.last, last.role == incoming.role {
                 messages[messages.count - 1] = incoming
-            } else if messages.count < expected || expected == 0 {
+            } else if loadedOffset + messages.count < expected || expected == 0 {
                 messages.append(incoming)
             }
+            if expected > 0 { messageTotal = max(messageTotal, expected) }
         }
         if let responding = data.isResponding { isResponding = responding }
         applyCommonFields(data)
@@ -205,10 +236,17 @@ final class ChatStore: ObservableObject {
     func send(text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        // 乐观插入用户消息，等服务端推送修正。
+        let queueing = isStructured && isResponding && status == "running"
+        let previousMessages = messages
+        let previousQueue = queuedMessages
         if isStructured {
-            messages.append(ConversationTurn(role: "user", content: [.text(text: trimmed, subagent: nil)]))
-            isResponding = true
+            if queueing {
+                queuedMessages.append(trimmed)
+                toast = "已加入排队，等当前回复完成会自动发送。"
+            } else {
+                messages.append(ConversationTurn(role: "user", content: [.text(text: trimmed, subagent: nil)]))
+                isResponding = true
+            }
         }
         Task {
             do {
@@ -219,7 +257,14 @@ final class ChatStore: ObservableObject {
                 }
             } catch {
                 toast = error.localizedDescription
-                if isStructured { isResponding = false }
+                if isStructured {
+                    if queueing {
+                        queuedMessages = previousQueue
+                    } else {
+                        messages = previousMessages
+                        isResponding = false
+                    }
+                }
             }
         }
     }
@@ -298,6 +343,62 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    // MARK: - 排队消息（仅结构化会话）
+
+    /// 把第 index 条排队消息立即发送。服务端负责摘队列项，客户端只做乐观显示和失败回滚。
+    func promoteQueued(index: Int) {
+        guard !queuePromotePending, queuedMessages.indices.contains(index) else { return }
+        let previous = queuedMessages
+        let picked = previous[index]
+        var rest = previous
+        rest.remove(at: index)
+        let inFlight = isInFlight
+        queuePromotePending = true
+        queuedMessages = rest
+        toast = inFlight ? "已请求中断当前回复，立即发送这条。" : "已立即发送这条消息。"
+        Task {
+            do {
+                let snap = try await api.promoteQueued(id: sessionId, index: index, expectedText: picked)
+                apply(snapshot: snap)
+            } catch {
+                queuedMessages = previous
+                toast = error.localizedDescription
+            }
+            queuePromotePending = false
+        }
+    }
+
+    /// 删除第 index 条排队消息（乐观 + 失败回滚）。
+    func deleteQueued(index: Int) {
+        let previous = queuedMessages
+        guard previous.indices.contains(index) else { return }
+        queuedMessages.remove(at: index)
+        Task {
+            do {
+                try await api.deleteQueued(id: sessionId, index: index)
+            } catch {
+                queuedMessages = previous
+                toast = error.localizedDescription
+            }
+        }
+    }
+
+    /// 清空全部排队消息（乐观 + 失败回滚）。
+    func clearQueued() {
+        let previous = queuedMessages
+        guard !previous.isEmpty else { return }
+        queuedMessages = []
+        Task {
+            do {
+                try await api.clearQueued(id: sessionId)
+                toast = "已清空 \(previous.count) 条排队消息。"
+            } catch {
+                queuedMessages = previous
+                toast = error.localizedDescription
+            }
+        }
+    }
+
     /// 停止当前回复：结构化会话调 stop（杀掉当前回合），PTY 发 Esc 中断。
     func stopResponding() {
         Task {
@@ -357,6 +458,29 @@ final class ChatStore: ObservableObject {
             } catch {
                 toast = error.localizedDescription
             }
+        }
+    }
+
+    /// 加载更早的一页消息，prepend 到 messages 并前移 loadedOffset。
+    func loadEarlier() {
+        guard canLoadEarlier, !loadingEarlier else { return }
+        let currentOffset = loadedOffset
+        let newOffset = max(0, currentOffset - earlierPageSize)
+        let limit = currentOffset - newOffset
+        guard limit > 0 else { return }
+        loadingEarlier = true
+        Task {
+            do {
+                let page = try await api.fetchMessages(id: sessionId, offset: newOffset, limit: limit)
+                if loadedOffset == currentOffset {
+                    messages = page.messages + messages
+                    loadedOffset = newOffset
+                    messageTotal = max(messageTotal, page.total)
+                }
+            } catch {
+                toast = error.localizedDescription
+            }
+            loadingEarlier = false
         }
     }
 }

@@ -317,6 +317,10 @@ struct SessionSnapshot: Decodable, Identifiable {
     let thinkingEffort: String?
     let claudeSessionId: String?
     let messages: [ConversationTurn]?
+    /// 窗口化：messages 是完整历史的一段后缀，messageOffset 是首条绝对下标。
+    let messageOffset: Int?
+    /// 完整历史 turn 数。更早的消息通过 /api/sessions/:id/messages 按需分页。
+    let messageTotal: Int?
     let queuedMessages: [String]?
     let structuredState: StructuredSessionState?
     let pendingEscalation: EscalationRequest?
@@ -398,6 +402,8 @@ struct WsData: Decodable {
     let thinkingEffort: String?
     let claudeSessionId: String?
     let messages: [ConversationTurn]?
+    let messageOffset: Int?
+    let messageTotal: Int?
     let queuedMessages: [String]?
     let structuredState: StructuredSessionState?
     let pendingEscalation: EscalationRequest?
@@ -414,6 +420,13 @@ struct WsData: Decodable {
     // —— task 事件 ——
     let title: String?
     let tool: String?
+}
+
+/// GET /api/sessions/:id/messages 的分页响应：完整历史的 [offset, offset+limit) 段 + 总数。
+struct MessagesPage: Decodable {
+    let messages: [ConversationTurn]
+    let offset: Int
+    let total: Int
 }
 
 // MARK: - 目录浏览 / 最近路径

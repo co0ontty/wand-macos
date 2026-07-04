@@ -13,6 +13,10 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var showQuickCommit = false
     @State private var followsLatest = true
+    @State private var historyExpanded = false
+    @State private var expandedCurrentReplyAbsoluteIndex = -1
+    @State private var observedLastUserAbsoluteIndex = Int.min
+    @State private var observedLatestAssistantAbsoluteIndex = Int.min
     @State private var voicePressed = false
     @State private var voiceCanceling = false
     /// 语音输入模式：轻点话筒进入，整个输入框变成「按住说话」面板。
@@ -94,8 +98,35 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(Array(groupedMessageItems.enumerated()), id: \.offset) { _, item in
-                        messageItemView(item)
+                    if historyExpanded, store.canLoadEarlier {
+                        loadingEarlierRow("加载更早的消息…")
+                            .onAppear { store.loadEarlier() }
+                    }
+                    if hasCollapsedHistory {
+                        if historyExpanded {
+                            ForEach(Array(historyItems.enumerated()), id: \.offset) { _, item in
+                                messageItemView(item, proxy: proxy)
+                            }
+                            HistorySummaryStrip(
+                                count: collapsedHistoryCount,
+                                preview: historyPreview,
+                                expanded: true,
+                                onToggle: { toggleHistory(proxy) }
+                            )
+                            if store.loadingEarlier && historyItems.isEmpty {
+                                loadingEarlierRow("正在展开历史消息…")
+                            }
+                        } else {
+                            HistorySummaryStrip(
+                                count: collapsedHistoryCount,
+                                preview: historyPreview,
+                                expanded: false,
+                                onToggle: { toggleHistory(proxy) }
+                            )
+                        }
+                    }
+                    ForEach(Array(currentItems.enumerated()), id: \.offset) { _, item in
+                        messageItemView(item, proxy: proxy)
                     }
                     if store.isResponding {
                         respondingIndicator
@@ -123,8 +154,12 @@ struct ChatView: View {
                         jumpToLatestButton(proxy)
                     }
                 }
-                .onAppear { pinToBottom(proxy) }
+                .onAppear {
+                    syncReplyFoldState(force: true)
+                    pinToBottom(proxy)
+                }
                 .onReceive(store.$messages.dropFirst()) { _ in
+                    syncReplyFoldState()
                     scrollToLatestIfFollowing(proxy)
                 }
                 .onChange(of: store.isResponding) { _ in
@@ -136,13 +171,35 @@ struct ChatView: View {
         }
     }
 
-    @ViewBuilder private func messageItemView(_ item: MessageDisplayItem) -> some View {
+    @ViewBuilder private func messageItemView(_ item: MessageDisplayItem, proxy: ScrollViewProxy) -> some View {
         switch item {
         case .turn(let index, let turn):
+            let absoluteIndex = store.loadedOffset + index
+            let controlsCurrentReplyExpansion = turn.role != "user"
+                && index == latestAssistantTurnIndex
+                && absoluteIndex == absoluteLatestAssistantTurnIndex
             TurnView(
                 turn: turn,
                 isLastTurn: index == store.messages.count - 1,
                 isResponding: store.isResponding,
+                currentReplyExpandedOverride: controlsCurrentReplyExpansion
+                    ? (expandedCurrentReplyAbsoluteIndex == absoluteIndex)
+                    : nil,
+                turnIndex: index,
+                historyBoundary: lastUserTurnIndex,
+                onUserExpand: {
+                    followsLatest = false
+                },
+                onCurrentReplyExpandedChange: { expanded in
+                    if controlsCurrentReplyExpansion {
+                        expandedCurrentReplyAbsoluteIndex = expanded ? absoluteIndex : -1
+                    }
+                },
+                onCurrentReplyExpandToBottom: {
+                    if controlsCurrentReplyExpansion {
+                        expandCurrentReplyToBottom(proxy, absoluteIndex: absoluteIndex)
+                    }
+                },
                 askSelections: store.askUserSelections,
                 onAskToggle: { toolUseId, qIdx, optIdx, multi in
                     store.toggleAskOption(
@@ -169,9 +226,64 @@ struct ChatView: View {
         groupExplorationTurns(store.messages)
     }
 
+    private var lastUserTurnIndex: Int {
+        store.messages.lastIndex { $0.role == "user" } ?? -1
+    }
+
+    private var absoluteLastUserTurnIndex: Int {
+        lastUserTurnIndex >= 0 ? store.loadedOffset + lastUserTurnIndex : -1
+    }
+
+    private var latestAssistantTurnIndex: Int {
+        store.messages.last?.role == "user" ? -1 : store.messages.indices.last ?? -1
+    }
+
+    private var absoluteLatestAssistantTurnIndex: Int {
+        latestAssistantTurnIndex >= 0 ? store.loadedOffset + latestAssistantTurnIndex : -1
+    }
+
+    private var historyItems: [MessageDisplayItem] {
+        guard lastUserTurnIndex > 0 else { return [] }
+        return groupedMessageItems.filter { messageItemTurnIndex($0) < lastUserTurnIndex }
+    }
+
+    private var currentItems: [MessageDisplayItem] {
+        guard lastUserTurnIndex >= 0 else { return groupedMessageItems }
+        return groupedMessageItems.filter { messageItemTurnIndex($0) >= lastUserTurnIndex }
+    }
+
+    private var unloadedHistoryCount: Int {
+        absoluteLastUserTurnIndex > 0 ? min(store.loadedOffset, absoluteLastUserTurnIndex) : 0
+    }
+
+    private var hasCollapsedHistory: Bool {
+        !historyItems.isEmpty || unloadedHistoryCount > 0
+    }
+
+    private var collapsedHistoryCount: Int {
+        historyItems.count + unloadedHistoryCount
+    }
+
+    private var historyPreview: String {
+        guard lastUserTurnIndex > 0 else { return "" }
+        for turn in store.messages.prefix(lastUserTurnIndex).reversed() {
+            let text = turn.content.compactMap { block -> String? in
+                guard case .text(let value, _) = block else { return nil }
+                return value
+            }
+            .joined(separator: " ")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            if !text.isEmpty { return text }
+        }
+        return ""
+    }
+
     private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
         Button {
             followsLatest = true
+            historyExpanded = false
             pinToBottom(proxy, animated: true)
         } label: {
             Image(systemName: "arrow.down")
@@ -186,6 +298,47 @@ struct ChatView: View {
         .padding(.trailing, 16)
         .padding(.bottom, 12)
         .transition(.scale(scale: 0.85).combined(with: .opacity))
+    }
+
+    private func toggleHistory(_ proxy: ScrollViewProxy) {
+        let next = !historyExpanded
+        historyExpanded = next
+        if next {
+            followsLatest = false
+            expandedCurrentReplyAbsoluteIndex = -1
+            store.loadEarlier()
+        } else {
+            followsLatest = true
+            pinToBottom(proxy, animated: true)
+        }
+    }
+
+    private func expandCurrentReplyToBottom(_ proxy: ScrollViewProxy, absoluteIndex: Int) {
+        expandedCurrentReplyAbsoluteIndex = absoluteIndex
+        historyExpanded = false
+        followsLatest = true
+        for delay in [0.05, 0.15, 0.35, 0.7] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard expandedCurrentReplyAbsoluteIndex == absoluteIndex else { return }
+                proxy.scrollTo("chat-bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    private func syncReplyFoldState(force: Bool = false) {
+        let boundary = absoluteLastUserTurnIndex
+        let latest = absoluteLatestAssistantTurnIndex
+        if force || observedLastUserAbsoluteIndex != boundary {
+            observedLastUserAbsoluteIndex = boundary
+            observedLatestAssistantAbsoluteIndex = latest
+            historyExpanded = false
+            expandedCurrentReplyAbsoluteIndex = latest
+        } else if observedLatestAssistantAbsoluteIndex != latest {
+            observedLatestAssistantAbsoluteIndex = latest
+            if latest > boundary {
+                expandedCurrentReplyAbsoluteIndex = latest
+            }
+        }
     }
 
     private func scrollToLatestIfFollowing(_ proxy: ScrollViewProxy) {
@@ -227,6 +380,17 @@ struct ChatView: View {
                 .lineLimit(1)
         }
         .padding(.vertical, 4)
+    }
+
+    private func loadingEarlierRow(_ title: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small).tint(Theme.brand)
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 
     // MARK: - 顶部状态
@@ -357,16 +521,9 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if !store.queuedMessages.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "tray.full")
-                        .font(.system(size: 11))
-                    Text("已排队 \(store.queuedMessages.count) 条消息")
-                        .font(.system(size: 12))
-                    Spacer()
-                }
-                .foregroundColor(Theme.textSecondary)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 6)
+                QueueBar(store: store)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
             }
             inputBar
         }
@@ -682,6 +839,8 @@ struct ChatView: View {
         guard !text.isEmpty else { return }
         draft = ""
         followsLatest = true
+        historyExpanded = false
+        expandedCurrentReplyAbsoluteIndex = -1
         store.send(text: text)
     }
 
@@ -904,6 +1063,47 @@ struct ChatView: View {
 
 // MARK: - 单条消息
 
+private struct HistorySummaryStrip: View {
+    let count: Int
+    let preview: String
+    let expanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button {
+            onToggle()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .rotationEffect(.degrees(expanded ? 90 : -90))
+                    .foregroundColor(Theme.textSecondary)
+                Text("已收起 \(count) 段上文")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+                if !preview.isEmpty {
+                    Text(preview)
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+                Text(expanded ? "收起" : "展开")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.brand)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Theme.surface))
+            .overlay(Capsule().stroke(Theme.border, lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 /// 工具调用与结果在渲染层配成一张卡片（对齐 Web 端 buildToolResultMap / Android pairToolBlocks）。
 private enum DisplayItem {
     case plain(ContentBlock)
@@ -915,9 +1115,28 @@ private enum DisplayItem {
     case explorationGroup([ExplorationToolItem])
 }
 
+private struct ActivityGroup: Identifiable {
+    let id: String
+    let summary: String
+    let items: [DisplayItem]
+    let running: Bool
+}
+
+private enum SegmentRenderItem {
+    case item(Int, DisplayItem)
+    case activity(ActivityGroup)
+}
+
 private enum MessageDisplayItem {
     case turn(index: Int, ConversationTurn)
     case explorationGroup(tools: [ExplorationToolItem], lastTurnIndex: Int)
+}
+
+private func messageItemTurnIndex(_ item: MessageDisplayItem) -> Int {
+    switch item {
+    case .turn(let index, _): return index
+    case .explorationGroup(_, let lastTurnIndex): return lastTurnIndex
+    }
 }
 
 private struct ExplorationToolItem {
@@ -1073,19 +1292,402 @@ private func isExplorationTool(_ name: String) -> Bool {
         || lower == "todoread"
 }
 
+private func collapseActivityItems(
+    _ items: [DisplayItem],
+    isLastTurn: Bool,
+    isResponding: Bool
+) -> [SegmentRenderItem] {
+    var renderItems: [SegmentRenderItem] = []
+    var pending: [DisplayItem] = []
+    var pendingStartIndex = -1
+
+    func flushPending() {
+        guard !pending.isEmpty else { return }
+        let groupItems = pending
+        let running = groupItems.contains { isDisplayItemRunning($0, isLastTurn: isLastTurn, isResponding: isResponding) }
+        renderItems.append(.activity(ActivityGroup(
+            id: activityGroupKey(groupItems, startIndex: pendingStartIndex),
+            summary: activitySummary(groupItems, running: running),
+            items: groupItems,
+            running: running
+        )))
+        pending.removeAll(keepingCapacity: true)
+        pendingStartIndex = -1
+    }
+
+    for (index, item) in items.enumerated() {
+        if isCollapsibleActivityItem(item) {
+            if pending.isEmpty { pendingStartIndex = index }
+            pending.append(item)
+        } else {
+            flushPending()
+            renderItems.append(.item(index, item))
+        }
+    }
+    flushPending()
+    return renderItems
+}
+
+private func activityGroupKey(_ items: [DisplayItem], startIndex: Int) -> String {
+    let first = items.first.map(displayItemStableKey) ?? "empty"
+    return "\(startIndex):\(first)"
+}
+
+private func displayItemStableKey(_ item: DisplayItem) -> String {
+    switch item {
+    case .tool(let id, let name, _, _, _, _):
+        return "tool:\(id.isEmpty ? name : id)"
+    case .explorationGroup(let tools):
+        return "explore:\(tools.first?.id ?? "\(tools.count)")"
+    case .plain(let block):
+        switch block {
+        case .thinking(let text, let subagent):
+            return "thinking:\(subagent?.taskId ?? String(text.prefix(24)))"
+        case .toolResult(let id, let text, _, _, _):
+            return "result:\(id.isEmpty ? String(text.prefix(24)) : id)"
+        case .text(let text, _):
+            return "text:\(String(text.prefix(24)))"
+        case .toolUse(let id, let name, _, _, _):
+            return "plain-tool:\(id.isEmpty ? name : id)"
+        case .unknown:
+            return "unknown"
+        }
+    }
+}
+
+private func isCollapsibleActivityItem(_ item: DisplayItem) -> Bool {
+    switch item {
+    case .plain(let block):
+        if case .text = block { return false }
+        if case .unknown = block { return false }
+        return true
+    case .explorationGroup:
+        return true
+    case .tool(_, let name, _, _, _, _):
+        return name != "AskUserQuestion"
+    }
+}
+
+private func isDisplayItemRunning(_ item: DisplayItem, isLastTurn: Bool, isResponding: Bool) -> Bool {
+    guard isLastTurn && isResponding else { return false }
+    switch item {
+    case .tool(_, _, _, _, _, let result):
+        return result == nil
+    case .explorationGroup(let tools):
+        return tools.contains { $0.result == nil }
+    case .plain(let block):
+        if case .thinking = block { return true }
+        return false
+    }
+}
+
+private func activityTools(_ items: [DisplayItem]) -> [ExplorationToolItem] {
+    items.flatMap { item -> [ExplorationToolItem] in
+        switch item {
+        case .tool(let id, let name, let description, let input, let subagent, let result):
+            return [ExplorationToolItem(
+                id: id, name: name, description: description,
+                input: input, subagent: subagent, result: result
+            )]
+        case .explorationGroup(let tools):
+            return tools
+        case .plain:
+            return []
+        }
+    }
+}
+
+private func activitySummary(_ items: [DisplayItem], running: Bool) -> String {
+    let tools = activityTools(items)
+    if items.count == 1, let tool = tools.first, tools.count == 1 {
+        let prefix = running && tool.result == nil ? "正在" : "已"
+        let detail = toolInputSummary(tool.description, tool.input)
+        let label = activityVerb(tool.name)
+        return detail.isEmpty ? "\(prefix)\(label)" : "\(prefix)\(label) \(detail)"
+    }
+    if items.count == 1, case .plain(let block)? = items.first {
+        switch block {
+        case .thinking:
+            return running ? "正在思考" : "已思考"
+        case .toolResult(_, _, let isError, _, _):
+            return isError ? "有 1 条执行错误" : "已生成 1 条执行结果"
+        default:
+            return "已完成 1 项活动"
+        }
+    }
+
+    let readCount = tools.filter { activityKind($0.name) == "read" }.count
+    let commandCount = tools.filter { activityKind($0.name) == "command" }.count
+    let searchCount = tools.filter { activityKind($0.name) == "search" }.count
+    let editCount = tools.filter { activityKind($0.name) == "edit" }.count
+    let webCount = tools.filter { activityKind($0.name) == "web" }.count
+    let todoCount = tools.filter { activityKind($0.name) == "todo" }.count
+    let otherToolCount = tools.count - readCount - commandCount - searchCount - editCount - webCount - todoCount
+    let thinkingCount = items.filter {
+        if case .plain(.thinking(_, _)) = $0 { return true }
+        return false
+    }.count
+    let resultCount = items.filter {
+        if case .plain(.toolResult(_, _, _, _, _)) = $0 { return true }
+        return false
+    }.count
+
+    var parts: [String] = []
+    if readCount > 0 { parts.append("浏览 \(readCount) 个文件") }
+    if commandCount > 0 { parts.append("运行 \(commandCount) 条命令") }
+    if searchCount > 0 { parts.append("搜索 \(searchCount) 次") }
+    if editCount > 0 { parts.append("修改 \(editCount) 个文件") }
+    if webCount > 0 { parts.append("访问 \(webCount) 个网页") }
+    if todoCount > 0 { parts.append("更新 \(todoCount) 次待办") }
+    if thinkingCount > 0 { parts.append("思考 \(thinkingCount) 段") }
+    if resultCount > 0 { parts.append("生成 \(resultCount) 条结果") }
+    if otherToolCount > 0 { parts.append("调用 \(otherToolCount) 个工具") }
+
+    let prefix = running ? "正在" : "已"
+    return parts.isEmpty ? "\(prefix)完成 \(items.count) 项活动" : prefix + parts.joined(separator: "，")
+}
+
+private func activityVerb(_ name: String) -> String {
+    switch activityKind(name) {
+    case "read": return "浏览"
+    case "command": return "运行"
+    case "search": return "搜索代码"
+    case "edit": return "修改"
+    case "web": return "访问网页"
+    case "todo": return "更新待办"
+    default: return toolLabel(name)
+    }
+}
+
+private func activityKind(_ name: String) -> String {
+    let lower = name.lowercased()
+    if lower.hasPrefix("read") || lower.contains("notebook") { return "read" }
+    if lower == "bash" || lower.contains("command") || lower.contains("shell") { return "command" }
+    if lower.contains("grep") || lower.contains("glob") || lower.contains("search") || lower.contains("find") { return "search" }
+    if lower.contains("edit") || lower.contains("write") { return "edit" }
+    if lower.contains("web") || lower.contains("fetch") || lower.contains("http") { return "web" }
+    if lower.contains("todo") { return "todo" }
+    return "other"
+}
+
+private func toolInputSummary(_ description: String?, _ input: [String: JSONValue]) -> String {
+    if let description, !description.isEmpty { return description }
+    for key in ["command", "file_path", "path", "pattern", "query", "prompt", "url", "description"] {
+        if let value = input[key] {
+            let text = value.summaryText
+            if !text.isEmpty { return text }
+        }
+    }
+    if let first = input.first {
+        return "\(first.key): \(first.value.summaryText)"
+    }
+    return ""
+}
+
+private struct AssistantReplyHeader: View {
+    let collapsed: Bool
+    let preview: String
+    let onToggle: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Button {
+                onToggle()
+            } label: {
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle().fill(Theme.brand.opacity(0.14))
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Theme.brand)
+                    }
+                    .frame(width: 24, height: 24)
+                    Text("Wand")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                    if collapsed, !preview.isEmpty {
+                        Text(preview)
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(Theme.textSecondary)
+                        .rotationEffect(.degrees(collapsed ? 0 : 180))
+                }
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Rectangle()
+                .fill(Theme.border.opacity(0.65))
+                .frame(height: 0.5)
+        }
+    }
+}
+
+private func replyPreview(_ content: [ContentBlock]) -> String {
+    let text = content.compactMap { block -> String? in
+        guard case .text(let value, _) = block else { return nil }
+        return value
+    }
+    .joined(separator: " ")
+    .components(separatedBy: .whitespacesAndNewlines)
+    .filter { !$0.isEmpty }
+    .joined(separator: " ")
+    if !text.isEmpty { return text }
+    let toolCount = content.reduce(0) { total, block in
+        if case .toolUse = block { return total + 1 }
+        return total
+    }
+    return toolCount > 0 ? "\(toolCount) 个工具调用" : ""
+}
+
+private struct ActivitySummaryRow: View {
+    let group: ActivityGroup
+    let onClick: () -> Void
+
+    var body: some View {
+        Button {
+            onClick()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: activityIconName(group.items))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(group.running ? Theme.brand : Theme.textSecondary)
+                    .frame(width: 18)
+                Text(group.summary)
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func activityIconName(_ items: [DisplayItem]) -> String {
+        if let first = activityTools(items).first {
+            let lower = first.name.lowercased()
+            if lower.contains("bash") || lower.contains("command") { return "terminal" }
+            if lower.contains("edit") || lower.contains("write") { return "pencil" }
+            if lower.contains("read") { return "doc.text.magnifyingglass" }
+            if lower.contains("grep") || lower.contains("glob") || lower.contains("search") { return "magnifyingglass" }
+            if lower.contains("web") || lower.contains("fetch") { return "globe" }
+            if lower.contains("task") || lower.contains("agent") { return "person.2" }
+            return "wrench.and.screwdriver"
+        }
+        if case .plain(.thinking(_, _))? = items.first {
+            return "brain"
+        }
+        return "doc.text"
+    }
+}
+
+private struct ActivityDetailSheet<Content: View>: View {
+    let group: ActivityGroup
+    @ViewBuilder let itemView: (DisplayItem) -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Text("执行详情")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Text(group.summary)
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Theme.surface))
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(group.items.enumerated()), id: \.offset) { _, item in
+                        itemView(item)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 8)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 520, minHeight: 420)
+        .background(Theme.background)
+    }
+}
+
 private struct TurnView: View {
     let turn: ConversationTurn
-    var isLastTurn = false
-    var isResponding = false
-    var askSelections: [String: AskUserSelectionState] = [:]
-    var onAskToggle: (String, Int, Int, Bool) -> Void = { _, _, _, _ in }
-    var onAskSubmit: (String, String) -> Void = { _, _ in }
+    var isLastTurn: Bool
+    var isResponding: Bool
+    var currentReplyExpandedOverride: Bool?
+    var turnIndex: Int
+    var historyBoundary: Int
+    var showHeader: Bool
+    var showContent: Bool
+    var onUserExpand: () -> Void
+    var onCurrentReplyExpandedChange: (Bool) -> Void
+    var onCurrentReplyExpandToBottom: () -> Void
+    var askSelections: [String: AskUserSelectionState]
+    var onAskToggle: (String, Int, Int, Bool) -> Void
+    var onAskSubmit: (String, String) -> Void
+
+    @State private var localCollapsed: Bool
+    @State private var openActivityGroup: ActivityGroup?
+
+    init(
+        turn: ConversationTurn,
+        isLastTurn: Bool = false,
+        isResponding: Bool = false,
+        currentReplyExpandedOverride: Bool? = nil,
+        turnIndex: Int = -1,
+        historyBoundary: Int = -1,
+        showHeader: Bool = true,
+        showContent: Bool = true,
+        onUserExpand: @escaping () -> Void = {},
+        onCurrentReplyExpandedChange: @escaping (Bool) -> Void = { _ in },
+        onCurrentReplyExpandToBottom: @escaping () -> Void = {},
+        askSelections: [String: AskUserSelectionState] = [:],
+        onAskToggle: @escaping (String, Int, Int, Bool) -> Void = { _, _, _, _ in },
+        onAskSubmit: @escaping (String, String) -> Void = { _, _ in }
+    ) {
+        self.turn = turn
+        self.isLastTurn = isLastTurn
+        self.isResponding = isResponding
+        self.currentReplyExpandedOverride = currentReplyExpandedOverride
+        self.turnIndex = turnIndex
+        self.historyBoundary = historyBoundary
+        self.showHeader = showHeader
+        self.showContent = showContent
+        self.onUserExpand = onUserExpand
+        self.onCurrentReplyExpandedChange = onCurrentReplyExpandedChange
+        self.onCurrentReplyExpandToBottom = onCurrentReplyExpandToBottom
+        self.askSelections = askSelections
+        self.onAskToggle = onAskToggle
+        self.onAskSubmit = onAskSubmit
+        _localCollapsed = State(initialValue: turnIndex >= 0 && historyBoundary >= 0 && turnIndex < historyBoundary)
+        _openActivityGroup = State(initialValue: nil)
+    }
 
     var body: some View {
         if turn.role == "user" {
             userBubble
         } else {
-            assistantBlocks
+            assistantReply
         }
     }
 
@@ -1113,13 +1715,87 @@ private struct TurnView: View {
         }
     }
 
-    private var assistantBlocks: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(pairToolBlocks(turn.content).enumerated()), id: \.offset) { _, item in
-                itemView(item)
+    private var defaultCollapsed: Bool {
+        turnIndex >= 0 && historyBoundary >= 0 && turnIndex < historyBoundary
+    }
+
+    private var shouldFoldCurrentReply: Bool {
+        isLastTurn && turnIndex > historyBoundary
+    }
+
+    private var collapsed: Bool {
+        if let currentReplyExpandedOverride {
+            return !currentReplyExpandedOverride
+        }
+        return localCollapsed
+    }
+
+    private func setCollapsed(_ next: Bool) {
+        if currentReplyExpandedOverride == nil {
+            localCollapsed = next
+        }
+        onCurrentReplyExpandedChange(!next)
+    }
+
+    private var assistantReply: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if showHeader {
+                AssistantReplyHeader(
+                    collapsed: collapsed,
+                    preview: replyPreview(turn.content),
+                    onToggle: {
+                        let next = !collapsed
+                        setCollapsed(next)
+                        if !next {
+                            if shouldFoldCurrentReply {
+                                onCurrentReplyExpandToBottom()
+                            } else {
+                                onUserExpand()
+                            }
+                        }
+                    }
+                )
+            }
+            if showContent && (!showHeader || !collapsed) {
+                assistantBlocks
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeInOut(duration: 0.16), value: collapsed)
+        .onChange(of: historyBoundary) { _ in
+            if currentReplyExpandedOverride == nil {
+                localCollapsed = defaultCollapsed
+            }
+        }
+    }
+
+    private var assistantBlocks: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(renderItems.enumerated()), id: \.offset) { _, renderItem in
+                switch renderItem {
+                case .item(_, let item):
+                    itemView(item)
+                case .activity(let group):
+                    ActivitySummaryRow(group: group) {
+                        openActivityGroup = group
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(item: $openActivityGroup) { group in
+            ActivityDetailSheet(group: group) { item in
+                itemView(item)
+            }
+        }
+    }
+
+    private var pairedItems: [DisplayItem] {
+        pairToolBlocks(turn.content)
+    }
+
+    private var renderItems: [SegmentRenderItem] {
+        collapseActivityItems(pairedItems, isLastTurn: isLastTurn, isResponding: isResponding)
     }
 
     @ViewBuilder private func itemView(_ item: DisplayItem) -> some View {
@@ -2568,6 +3244,115 @@ struct TodoProgressBar: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
+    }
+}
+
+private struct QueueBar: View {
+    @ObservedObject var store: ChatStore
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "tray.full")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("已排队 \(store.queuedMessages.count) 条消息")
+                        .font(.system(size: 12))
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .foregroundColor(Theme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(store.queuedMessages.enumerated()), id: \.offset) { index, text in
+                        QueueItemRow(
+                            index: index,
+                            text: text,
+                            onPromote: { store.promoteQueued(index: index) },
+                            onDelete: { store.deleteQueued(index: index) }
+                        )
+                    }
+                    HStack {
+                        Spacer()
+                        Button {
+                            store.clearQueued()
+                        } label: {
+                            Label("全部清空", systemImage: "trash")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Theme.danger)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 2)
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+        .animation(.easeInOut(duration: 0.16), value: expanded)
+    }
+}
+
+private struct QueueItemRow: View {
+    let index: Int
+    let text: String
+    let onPromote: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("\(index + 1)")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(Theme.brand)
+                .frame(width: 18)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(2)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button(action: onPromote) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.brand)
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .help("立即发送")
+            Button(action: onDelete) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(Theme.danger)
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .help("删除")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Theme.background.opacity(0.55))
+        )
     }
 }
 
