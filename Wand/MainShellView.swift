@@ -372,6 +372,40 @@ struct MainShellView: View {
 // MARK: - 侧栏容器
 
 struct SidebarColumn: View {
+    private enum ListEntry: Identifiable {
+        case session(SessionSnapshot)
+        case recoverable(HistorySession)
+
+        var id: String {
+            switch self {
+            case .session(let session): return "session-\(session.id)"
+            case .recoverable(let session): return "recoverable-\(session.id)"
+            }
+        }
+
+        var sortTimestamp: Double {
+            switch self {
+            case .session(let session):
+                return Self.parseISO8601(session.startedAt)?.timeIntervalSince1970 ?? 0
+            case .recoverable(let session):
+                if let mtimeMs = session.mtimeMs { return mtimeMs / 1000 }
+                return Self.parseISO8601(session.timestamp)?.timeIntervalSince1970 ?? 0
+            }
+        }
+
+        private static func parseISO8601(_ value: String?) -> Date? {
+            guard let value, !value.isEmpty else { return nil }
+            return fractionalFormatter.date(from: value) ?? isoFormatter.date(from: value)
+        }
+
+        private static let fractionalFormatter: ISO8601DateFormatter = {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter
+        }()
+        private static let isoFormatter = ISO8601DateFormatter()
+    }
+
     let api: WandAPI
     @Binding var selectedSessionId: String?
     let onSessionSelected: (SessionSnapshot) -> Void
@@ -380,15 +414,11 @@ struct SidebarColumn: View {
     @State private var historySessions: [HistorySession] = []
     @State private var loading = true
     @State private var loadError: String?
-    @State private var scope: Scope = .active
     @State private var isSelecting = false
     @State private var selectedSessionIds: Set<String> = []
-    @State private var showClearHistoryConfirmation = false
     @State private var showNewSession = false
     @State private var historyActionInProgress = false
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
-
-    enum Scope: String { case active, history }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -409,24 +439,9 @@ struct SidebarColumn: View {
         .onReceive(refreshTimer) { _ in
             Task { await load(silent: true) }
         }
-        .onChange(of: scope) { _ in
-            isSelecting = false
-            selectedSessionIds.removeAll()
-            Task { await load(silent: true) }
-        }
-        .confirmationDialog(
-            "确认清空全部历史会话?",
-            isPresented: $showClearHistoryConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("清空全部", role: .destructive) { clearAllHistory() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("这会删除本机 Claude 和 Codex 的历史会话文件,无法撤销。")
-        }
     }
 
-    // MARK: - 头部(scope Picker + 右上角按钮)
+    // MARK: - 头部
 
     private var header: some View {
         HStack(spacing: 8) {
@@ -455,26 +470,19 @@ struct SidebarColumn: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Picker("会话范围", selection: $scope) {
-                    Text("进行中").tag(Scope.active)
-                    Text("历史会话").tag(Scope.history)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 200)
+                Text("会话")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
                 Spacer()
                 Button {
-                    if scope == .history {
-                        showClearHistoryConfirmation = true
-                    } else {
-                        isSelecting = true
-                    }
+                    isSelecting = true
                 } label: {
-                    Image(systemName: scope == .history ? "trash" : "checkmark.circle")
+                    Image(systemName: "checkmark.circle")
                         .font(.system(size: 16))
-                        .foregroundColor(scope == .history ? Theme.danger : Theme.textSecondary)
+                        .foregroundColor(Theme.textSecondary)
                 }
                 .buttonStyle(.plain)
-                .help(scope == .history ? "清空历史" : "多选")
+                .help("多选")
                 Button {
                     showNewSession = true
                 } label: {
@@ -484,7 +492,6 @@ struct SidebarColumn: View {
                 }
                 .buttonStyle(.plain)
                 .help("新建会话")
-                .disabled(scope == .history)
             }
         }
         .padding(.horizontal, 14)
@@ -516,9 +523,7 @@ struct SidebarColumn: View {
                 Spacer()
             }
             .padding(20)
-        } else if scope == .history {
-            historyList
-        } else if visibleSessions.isEmpty {
+        } else if listEntries.isEmpty {
             VStack(spacing: 14) {
                 Spacer()
                 WandBrandMark(size: 52)
@@ -535,33 +540,12 @@ struct SidebarColumn: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 6) {
-                    ForEach(visibleSessions) { session in
-                        SessionTile(
-                            session: session,
-                            isSelected: selectedSessionId == session.id,
-                            isSelecting: isSelecting,
-                            checked: selectedSessionIds.contains(session.id)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if isSelecting {
-                                toggleSelection(session.id)
-                            } else {
-                                onSessionSelected(session)
-                            }
-                        }
-                        .contextMenu {
-                            Button {
-                                isSelecting = true
-                                selectedSessionIds.insert(session.id)
-                            } label: {
-                                Label("多选", systemImage: "checkmark.circle")
-                            }
-                            Button(role: .destructive) {
-                                deleteSession(session)
-                            } label: {
-                                Label("删除", systemImage: "trash")
-                            }
+                    ForEach(listEntries) { entry in
+                        switch entry {
+                        case .session(let session):
+                            managedSessionTile(session)
+                        case .recoverable(let session):
+                            recoverableSessionTile(session)
                         }
                     }
                 }
@@ -571,50 +555,59 @@ struct SidebarColumn: View {
         }
     }
 
-    @ViewBuilder
-    private var historyList: some View {
-        let items = visibleHistorySessions
-        if items.isEmpty {
-            VStack(spacing: 8) {
-                Spacer()
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 28))
-                    .foregroundColor(Theme.textSecondary)
-                Text("没有可恢复的历史会话")
-                    .font(.footnote)
-                    .foregroundColor(Theme.textSecondary)
-                Spacer()
-            }
-        } else {
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(items) { h in
-                        HistoryTile(history: h)
-                            .contentShape(Rectangle())
-                            .onTapGesture { resume(h) }
-                            .disabled(historyActionInProgress)
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    deleteHistory(h)
-                                } label: {
-                                    Label("删除", systemImage: "trash")
-                                }
-                            }
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+    private func managedSessionTile(_ session: SessionSnapshot) -> some View {
+        SessionTile(
+            session: session,
+            isSelected: selectedSessionId == session.id,
+            isSelecting: isSelecting,
+            checked: selectedSessionIds.contains(session.id)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelecting {
+                toggleSelection(session.id)
+            } else {
+                onSessionSelected(session)
             }
         }
+        .contextMenu {
+            Button {
+                isSelecting = true
+                selectedSessionIds.insert(session.id)
+            } label: {
+                Label("多选", systemImage: "checkmark.circle")
+            }
+            Button(role: .destructive) {
+                deleteSession(session)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    private func recoverableSessionTile(_ session: HistorySession) -> some View {
+        HistoryTile(history: session)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if !isSelecting { resume(session) }
+            }
+            .disabled(historyActionInProgress)
+            .contextMenu {
+                Button(role: .destructive) {
+                    deleteHistory(session)
+                } label: {
+                    Label("删除", systemImage: "trash")
+                }
+            }
     }
 
     // MARK: - 数据
 
     private var visibleSessions: [SessionSnapshot] {
-        sessions.filter { !($0.archived ?? false) }
+        sessions
     }
 
-    private var visibleHistorySessions: [HistorySession] {
+    private var recoverableSessions: [HistorySession] {
         let managedIds = Set(sessions.compactMap(\.claudeSessionId))
         return historySessions
             .filter {
@@ -623,6 +616,11 @@ struct SidebarColumn: View {
                     && !managedIds.contains($0.claudeSessionId)
             }
             .sorted { ($0.mtimeMs ?? 0) > ($1.mtimeMs ?? 0) }
+    }
+
+    private var listEntries: [ListEntry] {
+        (visibleSessions.map(ListEntry.session) + recoverableSessions.map(ListEntry.recoverable))
+            .sorted { $0.sortTimestamp > $1.sortTimestamp }
     }
 
     private func load(silent: Bool = false) async {
@@ -697,7 +695,6 @@ struct SidebarColumn: View {
                 let resumed = try await api.resumeHistory(history)
                 historySessions.removeAll { $0.id == history.id }
                 sessions.insert(resumed, at: 0)
-                scope = .active
                 onSessionSelected(resumed)
                 loadError = nil
             } catch {
@@ -707,16 +704,6 @@ struct SidebarColumn: View {
         }
     }
 
-    private func clearAllHistory() {
-        Task {
-            // clearAllHistory 是批量接口,这里按 provider 拆两次调,失败不致命。
-            let claudeIds = historySessions.filter { $0.provider != "codex" }.map { $0.id }
-            let codexIds = historySessions.filter { $0.provider == "codex" }.map { $0.id }
-            if !claudeIds.isEmpty { try? await api.deleteHistoryBatch(provider: "claude", ids: claudeIds) }
-            if !codexIds.isEmpty { try? await api.deleteHistoryBatch(provider: "codex", ids: codexIds) }
-            historySessions.removeAll()
-        }
-    }
 }
 
 // MARK: - 会话 tile(web 风格:圆角胶囊,active 时品牌色描边 + 左侧 3px 指示条)
@@ -803,10 +790,10 @@ struct HistoryTile: View {
     let history: HistorySession
 
     private var displayTitle: String {
-        // 优先 firstUserMessage(用户第一句),降级到 cwd 末段,都没有就 "历史会话"。
+        // 优先 firstUserMessage(用户第一句),降级到 cwd 末段。
         if !history.firstUserMessage.isEmpty { return history.firstUserMessage }
         let last = (history.cwd as NSString).lastPathComponent
-        return last.isEmpty ? "历史会话" : last
+        return last.isEmpty ? "会话" : last
     }
 
     private var dateText: String {
@@ -819,7 +806,7 @@ struct HistoryTile: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "clock")
+            Image(systemName: "bubble.left.and.text.bubble.right")
                 .font(.system(size: 12))
                 .foregroundColor(Theme.textMuted)
                 .frame(width: 16)
@@ -828,7 +815,7 @@ struct HistoryTile: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
                     .lineLimit(1)
-                Text(dateText)
+                Text("\(history.provider == "codex" ? "Codex" : "Claude") · \(dateText)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(Theme.textSecondary)
             }
