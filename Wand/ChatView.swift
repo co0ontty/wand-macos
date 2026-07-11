@@ -22,6 +22,8 @@ struct ChatView: View {
     /// 语音输入模式：轻点话筒进入，整个输入框变成「按住说话」面板。
     @State private var voiceMode = false
     @State private var showFileImporter = false
+    @State private var showModelThinkingPanel = false
+    @State private var showSessionSettingsPanel = false
     @State private var uploadingAttachments = false
     @State private var gitStatus: GitStatusResult?
     /// 轻点 vs 按住的计时器：按满阈值才开始录音，阈值内松手按轻点处理。
@@ -429,25 +431,15 @@ struct ChatView: View {
         }
     }
 
-    private struct ThinkingLevel: Identifiable {
-        let id: String
-        let label: String
-        let shortLabel: String
-        let menuLabel: String
+    private var thinkingLevels: [ThinkingEffortOption] {
+        thinkingEffortOptions(
+            provider: store.snapshot?.provider ?? "claude",
+            selectedModel: store.selectedModel,
+            models: store.availableModels
+        )
     }
 
-    private static let thinkingLevels = [
-        ThinkingLevel(id: "off", label: "关闭", shortLabel: "关", menuLabel: "关闭"),
-        ThinkingLevel(id: "standard", label: "低", shortLabel: "低", menuLabel: "低（low）"),
-        ThinkingLevel(id: "deep", label: "中", shortLabel: "中", menuLabel: "中（medium）"),
-        ThinkingLevel(id: "max", label: "高", shortLabel: "高", menuLabel: "高（max）"),
-    ]
-
-    private static func thinkingLabel(_ id: String) -> String {
-        thinkingLevels.first { $0.id == id }?.label ?? "关闭"
-    }
-
-    private static func thinkingShortLabel(_ id: String) -> String {
+    private func thinkingShortLabel(_ id: String) -> String {
         thinkingLevels.first { $0.id == id }?.shortLabel ?? "关"
     }
 
@@ -603,26 +595,8 @@ struct ChatView: View {
     }
 
     private var modelThinkingChip: some View {
-        Menu {
-            Section("模型") {
-                modelButton(id: nil, label: "默认")
-                ForEach(store.availableModels.filter { $0.id != "default" }) { model in
-                    modelButton(id: model.id, label: model.label)
-                }
-            }
-            Section("思考深度") {
-                ForEach(Self.thinkingLevels) { level in
-                    Button {
-                        store.setThinkingEffort(level.id)
-                    } label: {
-                        if store.thinkingEffort == level.id {
-                            Label(level.menuLabel, systemImage: "checkmark")
-                        } else {
-                            Text(level.menuLabel)
-                        }
-                    }
-                }
-            }
+        Button {
+            showModelThinkingPanel = true
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "cpu")
@@ -643,10 +617,14 @@ struct ChatView: View {
             .overlay(Capsule().stroke(thinkingTint.opacity(0.22), lineWidth: 1))
         }
         .accessibilityLabel("模型与思考深度")
+        .buttonStyle(.plain)
+        .popover(isPresented: $showModelThinkingPanel, arrowEdge: .bottom) {
+            modelThinkingPanel
+        }
     }
 
     private var modelThinkingText: String {
-        "\(shortModelLabel) · \(Self.thinkingShortLabel(store.thinkingEffort))"
+        "\(shortModelLabel) · \(thinkingShortLabel(store.thinkingEffort))"
     }
 
     private var shortModelLabel: String {
@@ -680,37 +658,47 @@ struct ChatView: View {
     }
 
     private var sessionSettingsMenu: some View {
-        Menu {
+        Button {
+            showSessionSettingsPanel = true
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(Theme.brand)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("会话设置")
+        .popover(isPresented: $showSessionSettingsPanel, arrowEdge: .bottom) {
+            modelThinkingPanel
+        }
+    }
+
+    private var modelThinkingPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Menu {
                 modelButton(id: nil, label: "默认")
                 ForEach(store.availableModels.filter { $0.id != "default" }) { model in
                     modelButton(id: model.id, label: model.label)
                 }
             } label: {
-                Label("模型 · \(shortModelLabel)", systemImage: "cpu")
-            }
-
-            Menu {
-                ForEach(Self.thinkingLevels) { level in
-                    Button {
-                        store.setThinkingEffort(level.id)
-                    } label: {
-                        if store.thinkingEffort == level.id {
-                            Label(level.menuLabel, systemImage: "checkmark")
-                        } else {
-                            Text(level.menuLabel)
-                        }
-                    }
+                HStack {
+                    Label("模型", systemImage: "cpu")
+                    Spacer()
+                    Text(shortModelLabel).font(.system(.caption, design: .monospaced))
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
                 }
-            } label: {
-                Label("思考深度 · \(Self.thinkingLabel(store.thinkingEffort))", systemImage: "brain")
+                .foregroundColor(Theme.textPrimary)
+                .contentShape(Rectangle())
             }
-        } label: {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(Theme.brand)
+            Divider()
+            ThinkingEffortSlider(
+                options: thinkingLevels,
+                selection: store.thinkingEffort,
+                accent: thinkingTint,
+                onSelect: store.setThinkingEffort
+            )
         }
-        .accessibilityLabel("会话设置")
+        .padding(14)
+        .frame(width: 286)
     }
 
     private var gitChangesButton: some View {

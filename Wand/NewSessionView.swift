@@ -118,15 +118,12 @@ struct NewSessionView: View {
         }
     }
 
-    private static let thinkingLevels = [
-        (id: "off", label: "关闭"),
-        (id: "standard", label: "低"),
-        (id: "deep", label: "中"),
-        (id: "max", label: "高"),
-    ]
-
     private var providerModels: [ModelInfo] {
         provider == .codex ? codexModels : availableModels
+    }
+
+    private var thinkingLevels: [ThinkingEffortOption] {
+        thinkingEffortOptions(provider: provider.rawValue, selectedModel: selectedModel, models: providerModels)
     }
 
     private var supportedModes: Set<ModeOption> {
@@ -167,13 +164,15 @@ struct NewSessionView: View {
                         ) {
                             modelMenu
                         }
-                        optionMenuCard(
-                            title: "思考深度",
-                            value: thinkingLabel,
-                            icon: "brain"
-                        ) {
-                            thinkingMenu
-                        }
+                        ThinkingEffortSlider(
+                            options: thinkingLevels,
+                            selection: thinkingEffort,
+                            accent: Theme.wandAccent
+                        ) { thinkingEffort = $0 }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(cardBackground(selected: false))
+                        .frame(maxWidth: .infinity)
                     }
 
                     fieldLabel("模式")
@@ -365,10 +364,6 @@ struct NewSessionView: View {
         return providerModels.first(where: { $0.id == selectedModel })?.label ?? selectedModel
     }
 
-    private var thinkingLabel: String {
-        Self.thinkingLevels.first(where: { $0.id == thinkingEffort })?.label ?? "关闭"
-    }
-
     @ViewBuilder private var modelMenu: some View {
         Button {
             selectedModel = ""
@@ -392,20 +387,6 @@ struct NewSessionView: View {
         }
         if providerModels.isEmpty {
             Text("暂未加载到模型列表")
-        }
-    }
-
-    @ViewBuilder private var thinkingMenu: some View {
-        ForEach(Self.thinkingLevels, id: \.id) { level in
-            Button {
-                thinkingEffort = level.id
-            } label: {
-                if thinkingEffort == level.id {
-                    Label(level.label, systemImage: "checkmark")
-                } else {
-                    Text(level.label)
-                }
-            }
         }
     }
 
