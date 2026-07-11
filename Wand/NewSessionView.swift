@@ -18,6 +18,7 @@ struct NewSessionView: View {
     @State private var firstMessage = ""
     @State private var availableModels: [ModelInfo] = []
     @State private var codexModels: [ModelInfo] = []
+    @State private var serverDefaultModels = ProviderDefaultModels(claude: nil, codex: nil)
     @State private var selectedModel = ""
     @State private var thinkingEffort = "off"
     @State private var creating = false
@@ -123,7 +124,12 @@ struct NewSessionView: View {
     }
 
     private var thinkingLevels: [ThinkingEffortOption] {
-        thinkingEffortOptions(provider: provider.rawValue, selectedModel: selectedModel, models: providerModels)
+        thinkingEffortOptions(
+            provider: provider.rawValue,
+            selectedModel: selectedModel,
+            defaultModel: provider == .codex ? serverDefaultModels.codex : serverDefaultModels.claude,
+            models: providerModels
+        )
     }
 
     private var supportedModes: Set<ModeOption> {
@@ -611,6 +617,10 @@ struct NewSessionView: View {
         if let response = try? await api.models() {
             availableModels = response.models
             codexModels = response.codexModels
+            serverDefaultModels = response.defaultModels ?? ProviderDefaultModels(
+                claude: response.defaultModel,
+                codex: response.defaultCodexModel
+            )
         }
         recentPaths = (try? await api.recentPaths()) ?? []
         if cwd.isEmpty {

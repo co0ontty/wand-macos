@@ -29,6 +29,7 @@ final class ChatStore: ObservableObject {
     @Published var loadError: String?
     @Published var toast: String?
     @Published var availableModels: [ModelInfo] = []
+    @Published var defaultModel: String?
     @Published var selectedModel: String?
     @Published var thinkingEffort = "off"
     /// AskUserQuestion 卡片的选择状态（toolUseId → 各题已选项 + 是否已提交）。
@@ -299,7 +300,9 @@ final class ChatStore: ObservableObject {
 
     private func loadModels() async {
         guard let response = try? await api.models() else { return }
-        availableModels = snapshot?.provider == "codex" ? response.codexModels : response.models
+        let provider = snapshot?.provider ?? "claude"
+        availableModels = provider == "codex" ? response.codexModels : response.models
+        defaultModel = response.defaultModelId(for: provider)
     }
 
     // MARK: - AskUserQuestion 交互（对齐 Web 端 __askSelect / __askSubmit）

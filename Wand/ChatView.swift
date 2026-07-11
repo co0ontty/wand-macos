@@ -435,6 +435,7 @@ struct ChatView: View {
         thinkingEffortOptions(
             provider: store.snapshot?.provider ?? "claude",
             selectedModel: store.selectedModel,
+            defaultModel: store.defaultModel,
             models: store.availableModels
         )
     }
