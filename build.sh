@@ -17,6 +17,11 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 VERSION="${1:?usage: build.sh <version> (例如 1.16.0)}"
+BUILD_STAMP="${WAND_BUILD_STAMP:-}"
+if [[ -n "$BUILD_STAMP" && ! "$BUILD_STAMP" =~ ^[0-9]{12}$ ]]; then
+  echo "❌ WAND_BUILD_STAMP 必须是 YYYYMMDDHHMM（收到：$BUILD_STAMP）" >&2
+  exit 1
+fi
 # 数字 build 号：major*10000 + minor*100 + patch
 VERSION_CODE=$(echo "$VERSION" | awk -F. '{patch=$3; sub(/[-+].*/, "", patch); printf "%d", $1*10000+$2*100+patch}')
 
@@ -51,6 +56,7 @@ xcodebuild \
   ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$VERSION" \
   CURRENT_PROJECT_VERSION="$VERSION_CODE" \
+  WAND_BUILD_STAMP="$BUILD_STAMP" \
   CODE_SIGN_IDENTITY="-" \
   CODE_SIGN_STYLE=Manual \
   DEVELOPMENT_TEAM="" \
