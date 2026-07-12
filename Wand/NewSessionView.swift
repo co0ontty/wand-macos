@@ -95,6 +95,17 @@ struct NewSessionView: View {
             }
         }
 
+        init?(apiValue: String) {
+            switch apiValue {
+            case "managed": self = .managed
+            case "full-access": self = .fullAccess
+            case "auto-edit": self = .autoEdit
+            case "default": self = .standard
+            case "native": self = .native
+            default: return nil
+            }
+        }
+
         /// 对齐 Web getSupportedModes：codex 只支持全权限。
         static func supported(for tool: Provider) -> Set<Self> {
             tool == .codex ? [.fullAccess] : Set(allCases)
@@ -604,16 +615,19 @@ struct NewSessionView: View {
 
     private func loadInitial() async {
         let config = try? await api.serverConfig()
-        if let defaultMode = config?.defaultMode, let parsed = ModeOption(rawValue: defaultMode) {
+        provider = config?.defaultProvider == "codex" ? .codex : .claude
+        sessionType = config?.defaultSessionKind == "pty" ? .pty : .structured
+        if let defaultMode = config?.defaultMode, let parsed = ModeOption(apiValue: defaultMode) {
             if supportedModes.contains(parsed) {
                 mode = parsed
             }
         }
-        // ServerConfigInfo 在 macOS 端只暴露 defaultCwd/defaultMode；模型和思考深度
-        // 暂时用本地默认，跟 iOS NewSessionView 的 onAppear 行为对齐（等 wand 服务端
-        // 把 defaultModel/defaultThinkingEffort 加进 /api/config 后再接入）。
         selectedModel = ""
-        thinkingEffort = "off"
+        thinkingEffort = config?.defaultThinkingEffort ?? "off"
+        serverDefaultModels = config?.defaultModels ?? ProviderDefaultModels(
+            claude: config?.defaultModel,
+            codex: config?.defaultCodexModel
+        )
         if let response = try? await api.models() {
             availableModels = response.models
             codexModels = response.codexModels
@@ -640,6 +654,13 @@ struct NewSessionView: View {
         let prompt = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             do {
+                try await api.updateNewSessionDefaults(
+                    mode: mode.apiValue,
+                    model: selectedModel.isEmpty ? nil : selectedModel,
+                    provider: provider.rawValue,
+                    thinkingEffort: thinkingEffort,
+                    defaultSessionKind: sessionType.rawValue
+                )
                 let snapshot: SessionSnapshot
                 switch sessionType {
                 case .structured:
@@ -647,6 +668,8 @@ struct NewSessionView: View {
                         provider: provider.rawValue,
                         cwd: path,
                         mode: mode.apiValue,
+                        model: selectedModel,
+                        thinkingEffort: thinkingEffort,
                         prompt: prompt.isEmpty ? nil : prompt
                     )
                 case .pty:
@@ -654,6 +677,8 @@ struct NewSessionView: View {
                         provider: provider.rawValue,
                         cwd: path,
                         mode: mode.apiValue,
+                        model: selectedModel,
+                        thinkingEffort: thinkingEffort,
                         initialInput: prompt.isEmpty ? nil : prompt
                     )
                 }
