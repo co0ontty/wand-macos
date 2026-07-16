@@ -19,8 +19,6 @@ struct ChatView: View {
     @State private var observedLatestAssistantAbsoluteIndex = Int.min
     @State private var voicePressed = false
     @State private var voiceCanceling = false
-    /// 语音输入模式：轻点话筒进入，整个输入框变成「按住说话」面板。
-    @State private var voiceMode = false
     @State private var showFileImporter = false
     @State private var showModelThinkingPanel = false
     @State private var showSessionSettingsPanel = false
@@ -100,34 +98,14 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if historyExpanded, store.canLoadEarlier {
-                        loadingEarlierRow("加载更早的消息…")
-                            .onAppear { store.loadEarlier() }
-                    }
-                    if hasCollapsedHistory {
-                        if historyExpanded {
-                            ForEach(Array(historyItems.enumerated()), id: \.offset) { _, item in
-                                messageItemView(item, proxy: proxy)
-                            }
-                            HistorySummaryStrip(
-                                count: collapsedHistoryCount,
-                                preview: historyPreview,
-                                expanded: true,
-                                onToggle: { toggleHistory(proxy) }
-                            )
-                            if store.loadingEarlier && historyItems.isEmpty {
-                                loadingEarlierRow("正在展开历史消息…")
-                            }
-                        } else {
-                            HistorySummaryStrip(
-                                count: collapsedHistoryCount,
-                                preview: historyPreview,
-                                expanded: false,
-                                onToggle: { toggleHistory(proxy) }
-                            )
+                    if store.canLoadEarlier {
+                        Button(action: { store.loadEarlier() }) {
+                            loadingEarlierRow(store.loadingEarlier ? "正在加载更早消息…" : "加载更早的消息")
                         }
+                        .buttonStyle(.plain)
+                        .disabled(store.loadingEarlier)
                     }
-                    ForEach(Array(currentItems.enumerated()), id: \.offset) { _, item in
+                    ForEach(Array(groupedMessageItems.enumerated()), id: \.offset) { _, item in
                         messageItemView(item, proxy: proxy)
                     }
                     if store.isResponding {
@@ -570,28 +548,28 @@ struct ChatView: View {
     }
 
     private var composerField: some View {
-        ZStack(alignment: .bottomTrailing) {
-            if voiceMode {
-                voiceHoldField
-            } else {
-                growingTextField
-                    .focused($inputFocused)
-                    .padding(.leading, 14)
-                    .padding(.trailing, 48)
-                    .padding(.vertical, 9)
-                    .background(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(Theme.surface)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Theme.border, lineWidth: 1)
-                    )
+        growingTextField
+            .focused($inputFocused)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Theme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1)
+            )
+            .overlay {
+                if draft.isEmpty {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(voiceTapOrHoldGesture(onTap: {
+                            inputFocused = true
+                        }))
+                        .accessibilityLabel("消息输入框，轻点打字，按住说话")
+                }
             }
-            micButton
-                .padding(.trailing, 4)
-                .padding(.bottom, 3)
-        }
         .frame(maxWidth: .infinity)
     }
 
@@ -795,15 +773,22 @@ struct ChatView: View {
     /// 避免老系统回车直接清空草稿但没发出去)。
     @ViewBuilder private var growingTextField: some View {
         if #available(iOS 16.0, macOS 13.0, *) {
-            TextField("发消息…", text: $draft, axis: .vertical)
+            TextField(composerPlaceholder, text: $draft, axis: .vertical)
                 .lineLimit(1...5)
                 .font(.system(size: 16))
                 .onSubmit { handleReturnKey(shift: false) }
         } else {
-            TextField("发消息…", text: $draft)
+            TextField(composerPlaceholder, text: $draft)
                 .font(.system(size: 16))
                 .onSubmit { handleReturnKey(shift: false) }
         }
+    }
+
+    private var composerPlaceholder: String {
+        if voicePressed {
+            return voiceCanceling ? "松开手指，取消输入" : "松开结束 · 上滑取消"
+        }
+        return "打字或按住说话"
     }
 
     /// 拦截回车:无修饰键 → 发送;带 Shift → 插入换行(老系统回退路径)。
@@ -828,94 +813,11 @@ struct ChatView: View {
         guard !text.isEmpty else { return }
         draft = ""
         followsLatest = true
-        historyExpanded = false
         expandedCurrentReplyAbsoluteIndex = -1
         store.send(text: text)
     }
 
     // MARK: - 按住说话（端侧语音识别）
-
-    /// 麦克风按钮：
-    /// - 轻点 → 切换语音输入模式（整个输入框变成「按住说话」面板，图标变键盘）；
-    /// - 长按 → 立即按住说话（原交互）：按住录音、上滑取消、松手把识别文本追加进输入框。
-    private var micButton: some View {
-        Image(systemName: micButtonSymbol)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundColor(voicePressed ? .white : Theme.brand)
-            .frame(width: 32, height: 32)
-            .background(
-                Circle().fill(
-                    voicePressed
-                        ? (voiceCanceling ? Theme.danger : Theme.brand)
-                        : Theme.brand.opacity(0.12)
-                )
-            )
-            .scaleEffect(voicePressed ? 1.1 : 1)
-            .animation(.easeInOut(duration: 0.15), value: voicePressed)
-            .animation(.easeInOut(duration: 0.15), value: voiceCanceling)
-            .gesture(voiceTapOrHoldGesture(onTap: {
-                voiceMode.toggle()
-                if voiceMode { inputFocused = false }
-            }))
-            .accessibilityLabel(voiceMode ? "切回键盘输入" : "轻点切语音模式，长按说话")
-    }
-
-    private var micButtonSymbol: String {
-        if speech.isRecording { return "waveform" }
-        return voiceMode && !voicePressed ? "keyboard" : "mic"
-    }
-
-    /// 语音模式下替换文本框的「按住说话」面板：
-    /// 按住录音（同话筒长按），轻点切回键盘输入；非录音时显示当前草稿，所见即所得。
-    private var voiceHoldField: some View {
-        HStack {
-            if voicePressed || draft.isEmpty {
-                Spacer(minLength: 0)
-            }
-            Group {
-                if voicePressed {
-                    Text(voiceCanceling ? "松开手指，取消输入" : "松开结束 · 上滑取消")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(voiceCanceling ? Theme.danger : Theme.brand)
-                } else if draft.isEmpty {
-                    Text("按住说话")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Theme.textSecondary)
-                } else {
-                    Text(draft)
-                        .font(.system(size: 16))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(2)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, 48)
-        .padding(.vertical, 9)
-        .frame(minHeight: 38)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(
-                    voicePressed
-                        ? (voiceCanceling ? Theme.danger.opacity(0.16) : Theme.brand.opacity(0.14))
-                        : Theme.surface
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Theme.border, lineWidth: 1)
-        )
-        .animation(.easeInOut(duration: 0.15), value: voicePressed)
-        .animation(.easeInOut(duration: 0.15), value: voiceCanceling)
-        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .gesture(voiceTapOrHoldGesture(onTap: {
-            // 轻点面板：切回键盘并自动聚焦，直接接着打字。
-            voiceMode = false
-            DispatchQueue.main.async { inputFocused = true }
-        }))
-        .accessibilityLabel("按住说话，轻点切回键盘输入")
-    }
 
     /// 上滑超过该距离进入「松开取消」态（对齐 Web 端 VOICE_CANCEL_THRESHOLD）。
     private static let voiceCancelThreshold: CGFloat = 60
