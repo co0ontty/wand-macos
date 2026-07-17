@@ -732,7 +732,12 @@ struct SessionTile: View {
 
     private var subtitle: String {
         if let cwd = session.cwd, !cwd.isEmpty { return cwd }
-        return provider == "codex" ? "Codex" : "Claude"
+        switch provider {
+        case "codex": return "Codex"
+        case "grok": return "Grok"
+        case "opencode": return "OpenCode"
+        default: return "Claude"
+        }
     }
 
     var body: some View {
@@ -815,7 +820,7 @@ struct HistoryTile: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
                     .lineLimit(1)
-                Text("\(history.provider == "codex" ? "Codex" : "Claude") · \(dateText)")
+                Text("\(history.provider == "codex" ? "Codex" : history.provider == "grok" ? "Grok" : history.provider == "opencode" ? "OpenCode" : "Claude") · \(dateText)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(Theme.textSecondary)
             }
@@ -889,15 +894,21 @@ struct SessionHeaderView: View {
     let title: String?
 
     private var isCodex: Bool { provider == "codex" }
-    private var providerLabel: String { isCodex ? "Codex" : "Claude" }
+    private var providerLabel: String {
+        switch provider {
+        case "codex": return "Codex"
+        case "grok": return "Grok"
+        default: return "Claude"
+        }
+    }
     private var providerColor: Color { isCodex ? Theme.codex : Theme.wandAccent }
     private var providerMuted: NSColor { isCodex ? Theme.infoMuted : Theme.wandAccentMuted }
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "terminal")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(providerColor)
+            BrandLogoShape(provider: provider)
+                .fill(providerColor)
+                .frame(width: 14, height: 14)
             Text(providerLabel)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)

@@ -367,7 +367,14 @@ struct SessionSnapshot: Decodable, Identifiable {
     let autoApprovePermissions: Bool?
 
     var isStructured: Bool { (sessionKind ?? "pty") == "structured" }
-    var providerLabel: String { provider == "codex" ? "Codex" : "Claude" }
+    var providerLabel: String {
+        switch provider {
+        case "codex": return "Codex"
+        case "grok": return "Grok"
+        case "opencode": return "OpenCode"
+        default: return "Claude"
+        }
+    }
 
     /// 列表标题：摘要 > 当前任务 > cwd 末段。
     var displayTitle: String {

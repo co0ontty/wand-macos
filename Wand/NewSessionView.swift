@@ -26,11 +26,29 @@ struct NewSessionView: View {
     @State private var showBrowser = false
 
     enum Provider: String, CaseIterable, Identifiable {
-        case claude, codex
+        case claude, codex, grok
         var id: String { rawValue }
-        var label: String { self == .claude ? "Claude" : "Codex" }
-        var desc: String { self == .claude ? "完整 Claude 会话能力" : "结构化 JSONL 或 PTY 会话" }
-        var symbol: String { self == .claude ? "sparkle" : "command" }
+        var label: String {
+            switch self {
+            case .claude: return "Claude"
+            case .codex: return "Codex"
+            case .grok: return "Grok"
+            }
+        }
+        var desc: String {
+            switch self {
+            case .claude: return "完整 Claude 会话能力"
+            case .codex: return "结构化 JSONL 或 PTY 会话"
+            case .grok: return "Grok Build 的流式或终端会话"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .claude: return "sparkle"
+            case .codex: return "command"
+            case .grok: return "g.circle"
+            }
+        }
     }
 
     enum SessionType: String, CaseIterable, Identifiable {
@@ -47,10 +65,14 @@ struct NewSessionView: View {
                 return "Codex JSONL 结构化聊天界面，支持多轮对话和工具调用展示。"
             case (.structured, .claude):
                 return "结构化聊天界面，支持多轮对话、流式输出和工具调用展示。"
+            case (.structured, .grok):
+                return "Grok streaming-json 结构化聊天界面，支持多轮续聊与思考过程展示。"
             case (.pty, .codex):
                 return "Codex PTY 终端会话；terminal 是原始输出，chat 是解析后的阅读视图。"
             case (.pty, .claude):
                 return "原始 PTY 终端会话，支持持续交互、终端视图和权限流。"
+            case (.pty, .grok):
+                return "Grok Build TUI 的原始 PTY 终端会话。"
             }
         }
     }
@@ -108,12 +130,19 @@ struct NewSessionView: View {
 
         /// 对齐 Web getSupportedModes：codex 只支持全权限。
         static func supported(for tool: Provider) -> Set<Self> {
-            tool == .codex ? [.fullAccess] : Set(allCases)
+            if tool == .codex { return [.fullAccess] }
+            if tool == .grok { return [.managed, .fullAccess, .standard] }
+            return Set(allCases)
         }
 
         func hint(for tool: Provider) -> String {
             if tool == .codex {
                 return "Codex 支持 PTY 终端与结构化（JSONL）两种会话，结构化模式按 full-access 启动。"
+            }
+            if tool == .grok {
+                return self == .managed || self == .fullAccess
+                    ? "Grok 将以 always-approve 运行；支持 TUI 与 streaming-json 结构化会话。"
+                    : "Grok 使用自身权限确认；支持 TUI 与 streaming-json 结构化会话。"
             }
             switch self {
             case .fullAccess:
@@ -131,14 +160,18 @@ struct NewSessionView: View {
     }
 
     private var providerModels: [ModelInfo] {
-        provider == .codex ? codexModels : availableModels
+        switch provider {
+        case .claude: availableModels
+        case .codex: codexModels
+        case .grok: []
+        }
     }
 
     private var thinkingLevels: [ThinkingEffortOption] {
         thinkingEffortOptions(
             provider: provider.rawValue,
             selectedModel: selectedModel,
-            defaultModel: provider == .codex ? serverDefaultModels.codex : serverDefaultModels.claude,
+            defaultModel: provider == .codex ? serverDefaultModels.codex : provider == .claude ? serverDefaultModels.claude : nil,
             models: providerModels
         )
     }
@@ -615,7 +648,11 @@ struct NewSessionView: View {
 
     private func loadInitial() async {
         let config = try? await api.serverConfig()
-        provider = config?.defaultProvider == "codex" ? .codex : .claude
+        switch config?.defaultProvider {
+        case "codex": provider = .codex
+        case "grok": provider = .grok
+        default: provider = .claude
+        }
         sessionType = config?.defaultSessionKind == "pty" ? .pty : .structured
         if let defaultMode = config?.defaultMode, let parsed = ModeOption(apiValue: defaultMode) {
             if supportedModes.contains(parsed) {

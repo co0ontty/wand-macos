@@ -299,7 +299,7 @@ final class WandAPI {
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = [
             "provider": provider,
-            "runner": provider == "codex" ? "codex-cli-exec" : "claude-cli-print",
+            "runner": provider == "codex" ? "codex-cli-exec" : provider == "grok" ? "grok-cli-headless" : "claude-cli-print",
             "cwd": cwd,
         ]
         if let mode, !mode.isEmpty { body["mode"] = mode }
@@ -426,7 +426,7 @@ final class WandAPI {
             if provider == "codex" {
                 body["defaultCodexModel"] = model
                 body["defaultModels"] = ["codex": model]
-            } else {
+            } else if provider == "claude" {
                 body["defaultModel"] = model
                 body["defaultModels"] = ["claude": model]
             }
