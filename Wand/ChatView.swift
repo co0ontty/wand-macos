@@ -513,26 +513,6 @@ struct ChatView: View {
                 modelThinkingChip
             }
             composerField
-
-            if store.isResponding {
-                Button(action: { showStopConfirm = true }) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(width: 38, height: 38)
-                        .background(Circle().fill(Theme.danger))
-                }
-            }
-            Button(action: sendDraft) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 38, height: 38)
-                    .background(
-                        Circle().fill(canSend ? Theme.brand : Theme.brand.opacity(0.4))
-                    )
-            }
-            .disabled(!canSend)
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
@@ -548,29 +528,61 @@ struct ChatView: View {
     }
 
     private var composerField: some View {
-        growingTextField
-            .focused($inputFocused)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Theme.surface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 1)
-            )
-            .overlay {
-                if draft.isEmpty {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .gesture(voiceTapOrHoldGesture(onTap: {
-                            inputFocused = true
-                        }))
-                        .accessibilityLabel("消息输入框，轻点打字，按住说话")
+        HStack(alignment: .bottom, spacing: 4) {
+            growingTextField
+                .focused($inputFocused)
+                .padding(.leading, 10)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity)
+
+            if store.isResponding {
+                Button(action: { showStopConfirm = true }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(Theme.danger))
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("停止任务")
             }
+            composerVoiceButton
+            Button(action: sendDraft) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        Circle().fill(canSend ? Theme.brand : Theme.brand.opacity(0.4))
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+            .accessibilityLabel("发送")
+            .padding(.trailing, 3)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Theme.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
         .frame(maxWidth: .infinity)
+    }
+
+    private var composerVoiceButton: some View {
+        Image(systemName: voicePressed ? "waveform" : "mic")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundColor(voiceCanceling ? Theme.danger : (voicePressed ? Theme.brand : Theme.textSecondary))
+            .frame(width: 38, height: 38)
+            .background(Circle().fill(Theme.brand.opacity(0.10)))
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+            .gesture(voiceTapOrHoldGesture(onTap: { inputFocused = true }))
+            .accessibilityLabel("语音输入")
+            .accessibilityValue(voicePressed ? "正在录音" : "长按录音")
     }
 
     private var modelThinkingChip: some View {
@@ -788,7 +800,7 @@ struct ChatView: View {
         if voicePressed {
             return voiceCanceling ? "松开手指，取消输入" : "松开结束 · 上滑取消"
         }
-        return "打字或按住说话"
+        return "输入消息"
     }
 
     /// 拦截回车:无修饰键 → 发送;带 Shift → 插入换行(老系统回退路径)。
