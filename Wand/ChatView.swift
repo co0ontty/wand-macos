@@ -1088,6 +1088,71 @@ private enum DisplayItem {
     case explorationGroup([ExplorationToolItem])
 }
 
+private struct SubagentSegment {
+    let id: String
+    let meta: SubagentMeta
+    let blocks: [ContentBlock]
+}
+
+private enum AssistantContentSegment {
+    case parent([ContentBlock])
+    case subagent(SubagentSegment)
+}
+
+/// 同一个 taskId 在一轮内聚合成一个固定高度角色窗口，父 Agent 内容仍按原来的
+/// 活动分组规则展示。这样长任务不会把整段会话无限撑高。
+private func splitAssistantContentBySubagent(_ content: [ContentBlock]) -> [AssistantContentSegment] {
+    var segments: [AssistantContentSegment] = []
+    var subagentIndexByID: [String: Int] = [:]
+    var parentBlocks: [ContentBlock] = []
+
+    func flushParent() {
+        guard !parentBlocks.isEmpty else { return }
+        segments.append(.parent(parentBlocks))
+        parentBlocks.removeAll(keepingCapacity: true)
+    }
+
+    for block in content {
+        guard let meta = blockSubagentMeta(block) else {
+            parentBlocks.append(block)
+            continue
+        }
+        flushParent()
+        let id = subagentIdentity(meta)
+        if let index = subagentIndexByID[id], case .subagent(let existing) = segments[index] {
+            segments[index] = .subagent(SubagentSegment(
+                id: existing.id,
+                meta: existing.meta,
+                blocks: existing.blocks + [block]
+            ))
+        } else {
+            subagentIndexByID[id] = segments.count
+            segments.append(.subagent(SubagentSegment(id: id, meta: meta, blocks: [block])))
+        }
+    }
+    flushParent()
+    return segments
+}
+
+private func blockSubagentMeta(_ block: ContentBlock) -> SubagentMeta? {
+    switch block {
+    case .text(_, let subagent),
+         .thinking(_, let subagent),
+         .toolUse(_, _, _, _, let subagent),
+         .toolResult(_, _, _, _, let subagent):
+        return subagent
+    case .unknown:
+        return nil
+    }
+}
+
+private func subagentIdentity(_ meta: SubagentMeta) -> String {
+    if let taskID = meta.taskId, !taskID.isEmpty { return "task:\(taskID)" }
+    if let agentType = meta.agentType, !agentType.isEmpty { return "type:\(agentType)" }
+    if let description = meta.taskDescription, !description.isEmpty { return "desc:\(description)" }
+    return "__subagent"
+}
+
 private struct ActivityGroup: Identifiable {
     let id: String
     let summary: String
@@ -1603,6 +1668,149 @@ private struct ActivityDetailSheet<Content: View>: View {
     }
 }
 
+private let subagentWindowContentHeight: CGFloat = 280
+
+private struct SubagentRoleWindow<Content: View>: View {
+    let meta: SubagentMeta
+    let items: [DisplayItem]
+    let running: Bool
+    @ViewBuilder let itemView: (DisplayItem) -> Content
+
+    private var title: String {
+        let raw = meta.agentType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if raw.isEmpty { return "猫猫子 Agent" }
+        return raw.hasPrefix("猫猫") ? raw : "猫猫 \(raw)"
+    }
+
+    private var subtitle: String {
+        let text = meta.taskDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.isEmpty ? "子 Agent 输出" : text
+    }
+
+    private var tailAnchorID: String {
+        "subagent-tail:\(subagentIdentity(meta))"
+    }
+
+    var body: some View {
+        let refreshToken = subagentTailRefreshToken(items)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 9) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                Text(running ? "处理中" : "\(items.count) 条内容")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.codex)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Theme.codex.opacity(0.10)))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider().overlay(Theme.border.opacity(0.7))
+
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        if items.isEmpty {
+                            Text("等待子 Agent 输出…")
+                                .font(.system(size: 13))
+                                .foregroundColor(Theme.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                        } else {
+                            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                                itemView(item)
+                            }
+                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(tailAnchorID)
+                    }
+                    .padding(10)
+                }
+                .frame(height: subagentWindowContentHeight)
+                .background(Theme.background.opacity(0.45))
+                .onAppear {
+                    scrollToTail(proxy)
+                }
+                .onChange(of: refreshToken) { _ in
+                    scrollToTail(proxy)
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Theme.codex.opacity(0.28), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.04), radius: 8, y: 2)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title)，\(subtitle)")
+    }
+
+    private func scrollToTail(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(tailAnchorID, anchor: .bottom)
+        }
+    }
+}
+
+/// 数量不变的流式文本/工具结果也必须触发窗口跟尾。
+private func subagentTailRefreshToken(_ items: [DisplayItem]) -> Int {
+    var hasher = Hasher()
+    hasher.combine(items.count)
+    for item in items {
+        switch item {
+        case .tool(let id, let name, _, _, _, let result):
+            hasher.combine(id)
+            hasher.combine(name)
+            hasher.combine(result?.text)
+            hasher.combine(result?.isError)
+            hasher.combine(result?.truncated)
+        case .explorationGroup(let tools):
+            for tool in tools {
+                hasher.combine(tool.id)
+                hasher.combine(tool.result?.text)
+                hasher.combine(tool.result?.isError)
+                hasher.combine(tool.result?.truncated)
+            }
+        case .plain(let block):
+            switch block {
+            case .text(let text, _), .thinking(let text, _):
+                hasher.combine(text)
+            case .toolUse(let id, let name, _, _, _):
+                hasher.combine(id)
+                hasher.combine(name)
+            case .toolResult(let id, let text, let isError, let truncated, _):
+                hasher.combine(id)
+                hasher.combine(text)
+                hasher.combine(isError)
+                hasher.combine(truncated)
+            case .unknown:
+                hasher.combine("unknown")
+            }
+        }
+    }
+    return hasher.finalize()
+}
+
 private struct TurnView: View {
     let turn: ConversationTurn
     var isLastTurn: Bool
@@ -1744,13 +1952,20 @@ private struct TurnView: View {
 
     private var assistantBlocks: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(renderItems.enumerated()), id: \.offset) { _, renderItem in
-                switch renderItem {
-                case .item(_, let item):
-                    itemView(item)
-                case .activity(let group):
-                    ActivitySummaryRow(group: group) {
-                        openActivityGroup = group
+            ForEach(Array(assistantSegments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .parent(let blocks):
+                    parentBlocksView(blocks)
+                case .subagent(let subagent):
+                    let items = pairToolBlocks(subagent.blocks)
+                    SubagentRoleWindow(
+                        meta: subagent.meta,
+                        items: items,
+                        running: isLastTurn && isResponding && items.contains {
+                            isDisplayItemRunning($0, isLastTurn: true, isResponding: true)
+                        }
+                    ) { item in
+                        itemView(item, showSubagentTags: false)
                     }
                 }
             }
@@ -1763,21 +1978,37 @@ private struct TurnView: View {
         }
     }
 
-    private var pairedItems: [DisplayItem] {
-        pairToolBlocks(turn.content)
+    private var assistantSegments: [AssistantContentSegment] {
+        splitAssistantContentBySubagent(turn.content)
     }
 
-    private var renderItems: [SegmentRenderItem] {
-        collapseActivityItems(pairedItems, isLastTurn: isLastTurn, isResponding: isResponding)
+    @ViewBuilder private func parentBlocksView(_ blocks: [ContentBlock]) -> some View {
+        let items = collapseActivityItems(
+            pairToolBlocks(blocks),
+            isLastTurn: isLastTurn,
+            isResponding: isResponding
+        )
+        ForEach(Array(items.enumerated()), id: \.offset) { _, renderItem in
+            switch renderItem {
+            case .item(_, let item):
+                itemView(item)
+            case .activity(let group):
+                ActivitySummaryRow(group: group) {
+                    openActivityGroup = group
+                }
+            }
+        }
     }
 
-    @ViewBuilder private func itemView(_ item: DisplayItem) -> some View {
+    @ViewBuilder private func itemView(_ item: DisplayItem, showSubagentTags: Bool = true) -> some View {
         switch item {
         case .plain(let block):
-            BlockView(block: block)
+            BlockView(block: block, showSubagentTag: showSubagentTags)
         case .tool(let id, let name, let description, let input, let subagent, let result):
             VStack(alignment: .leading, spacing: 4) {
-                subagentTag(subagent)
+                if showSubagentTags {
+                    subagentTag(subagent)
+                }
                 toolView(
                     id: id, name: name, description: description,
                     input: input, result: result
@@ -1836,13 +2067,16 @@ private struct TurnView: View {
 
 private struct BlockView: View {
     let block: ContentBlock
+    var showSubagentTag = true
 
     var body: some View {
         switch block {
         case .text(let text, let subagent):
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    subagentTag(subagent)
+                    if showSubagentTag {
+                        subagentTag(subagent)
+                    }
                     MarkdownText(text: text)
                 }
             }
@@ -1863,7 +2097,9 @@ private struct BlockView: View {
         case .toolUse(_, let name, let description, let input, let subagent):
             // 兜底：正常路径已在 TurnView 配对分流，这里处理极端的落单 ToolUse。
             VStack(alignment: .leading, spacing: 4) {
-                subagentTag(subagent)
+                if showSubagentTag {
+                    subagentTag(subagent)
+                }
                 ToolUseCard(name: name, description: description, input: input, result: nil, running: false)
             }
         case .toolResult(_, let text, let isError, let truncated, _):
