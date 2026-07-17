@@ -2,6 +2,19 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum ComposerMetrics {
+    static let actionVisualSize: CGFloat = 34
+    static let actionTouchSize: CGFloat = 44
+    static let actionSpacing: CGFloat = 0
+}
+
+private struct ComposerInputHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
 /// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
@@ -28,6 +41,7 @@ struct ChatView: View {
     @State private var voiceHoldWork: DispatchWorkItem?
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
+    @State private var draftNeedsExpanded = false
     @FocusState private var inputFocused: Bool
 
     init(sessionId: String, api: WandAPI) {
@@ -507,16 +521,49 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            composerActionsMenu
-            if store.isStructured {
-                modelThinkingChip
+        let shape = RoundedRectangle(
+            cornerRadius: inputExpanded ? 18 : 24,
+            style: .continuous
+        )
+
+        return VStack(alignment: .leading, spacing: inputExpanded ? 6 : 0) {
+            HStack(
+                alignment: inputExpanded ? .bottom : .center,
+                spacing: ComposerMetrics.actionSpacing
+            ) {
+                if !inputExpanded {
+                    composerActionsMenu
+                }
+                composerInputContent
+                if !inputExpanded {
+                    trailingButtons
+                }
             }
-            composerField
+            if inputExpanded {
+                HStack(spacing: ComposerMetrics.actionSpacing) {
+                    composerActionsMenu
+                    if store.isStructured {
+                        modelThinkingChip
+                    }
+                    Spacer(minLength: 0)
+                    trailingButtons
+                }
+            }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, inputExpanded ? 7 : 4)
+        .background(shape.fill(Theme.surface.opacity(0.96)))
+        .overlay(
+            shape.stroke(
+                inputFocused ? Theme.brand.opacity(0.55) : Theme.border,
+                lineWidth: inputFocused ? 1.2 : 1
+            )
+        )
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
         .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.18), value: inputExpanded)
         .confirmationDialog(
             "确定要停止当前正在运行的任务吗？",
             isPresented: $showStopConfirm,
@@ -527,58 +574,72 @@ struct ChatView: View {
         }
     }
 
-    private var composerField: some View {
-        HStack(alignment: .bottom, spacing: 4) {
-            growingTextField
-                .focused($inputFocused)
-                .padding(.leading, 10)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity)
+    private var inputExpanded: Bool {
+        inputFocused || voicePressed || draftNeedsExpanded
+    }
 
-            if store.isResponding {
-                Button(action: { showStopConfirm = true }) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(width: 38, height: 38)
-                        .background(Circle().fill(Theme.danger))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("停止任务")
-            }
-            composerVoiceButton
-            Button(action: sendDraft) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 38, height: 38)
-                    .background(
-                        Circle().fill(canSend ? Theme.brand : Theme.brand.opacity(0.4))
+    private var composerInputContent: some View {
+        growingTextField
+            .focused($inputFocused)
+            .padding(.horizontal, inputExpanded ? 6 : 4)
+            .padding(.vertical, inputExpanded ? 5 : 3)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .contentShape(Rectangle())
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: ComposerInputHeightPreferenceKey.self,
+                        value: geometry.size.height
                     )
+                }
             }
+            .onPreferenceChange(ComposerInputHeightPreferenceKey.self) { height in
+                draftNeedsExpanded = !draft.isEmpty && height > 40
+            }
+    }
+
+    @ViewBuilder private var trailingButtons: some View {
+        if store.isResponding {
+            Button(action: { showStopConfirm = true }) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(
+                        width: ComposerMetrics.actionVisualSize,
+                        height: ComposerMetrics.actionVisualSize
+                    )
+                    .background(Circle().fill(Theme.danger))
+            }
+            .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
             .buttonStyle(.plain)
-            .disabled(!canSend)
-            .accessibilityLabel("发送")
-            .padding(.trailing, 3)
+            .accessibilityLabel("停止任务")
         }
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Theme.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Theme.border, lineWidth: 1)
-        )
-        .frame(maxWidth: .infinity)
+        composerVoiceButton
+        Button(action: sendDraft) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(canSend ? Theme.surface : Theme.textSecondary.opacity(0.55))
+                .frame(
+                    width: ComposerMetrics.actionVisualSize,
+                    height: ComposerMetrics.actionVisualSize
+                )
+                .background(
+                    Circle().fill(canSend ? Theme.textPrimary : Theme.textSecondary.opacity(0.16))
+                )
+        }
+        .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
+        .buttonStyle(.plain)
+        .disabled(!canSend)
+        .accessibilityLabel("发送")
     }
 
     private var composerVoiceButton: some View {
         Image(systemName: voicePressed ? "waveform" : "mic")
             .font(.system(size: 18, weight: .semibold))
             .foregroundColor(voiceCanceling ? Theme.danger : (voicePressed ? Theme.brand : Theme.textSecondary))
-            .frame(width: 38, height: 38)
+            .frame(width: ComposerMetrics.actionVisualSize, height: ComposerMetrics.actionVisualSize)
             .background(Circle().fill(Theme.brand.opacity(0.10)))
-            .frame(width: 44, height: 44)
+            .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
             .contentShape(Circle())
             .gesture(voiceTapOrHoldGesture(onTap: { inputFocused = true }))
             .accessibilityLabel("语音输入")
@@ -606,6 +667,7 @@ struct ChatView: View {
             .padding(.vertical, 7)
             .background(Capsule().fill(thinkingTint.opacity(0.10)))
             .overlay(Capsule().stroke(thinkingTint.opacity(0.22), lineWidth: 1))
+            .frame(minHeight: ComposerMetrics.actionTouchSize)
         }
         .accessibilityLabel("模型与思考深度")
         .buttonStyle(.plain)
@@ -746,16 +808,24 @@ struct ChatView: View {
                 ProgressView()
                     .controlSize(.small)
                     .tint(Theme.textSecondary)
-                    .frame(width: 38, height: 38)
+                    .frame(
+                        width: ComposerMetrics.actionVisualSize,
+                        height: ComposerMetrics.actionVisualSize
+                    )
             } else {
                 Image(systemName: "plus")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(Theme.textSecondary)
-                    .frame(width: 38, height: 38)
+                    .frame(
+                        width: ComposerMetrics.actionVisualSize,
+                        height: ComposerMetrics.actionVisualSize
+                    )
                     .background(Circle().fill(Theme.surface))
                     .overlay(Circle().stroke(Theme.border, lineWidth: 1))
             }
         }
+        .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
+        .buttonStyle(.plain)
         .accessibilityLabel("更多操作")
     }
 
