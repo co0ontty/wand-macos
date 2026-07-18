@@ -8,16 +8,11 @@ private enum ComposerMetrics {
     static let actionSpacing: CGFloat = 0
 }
 
-private struct ComposerInputHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
 /// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
+    @Environment(\.colorSchemeContrast) private var contrast
+
     private let sessionId: String
     private let api: WandAPI
 
@@ -41,7 +36,6 @@ struct ChatView: View {
     @State private var voiceHoldWork: DispatchWorkItem?
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
-    @State private var draftNeedsExpanded = false
     @FocusState private var inputFocused: Bool
 
     init(sessionId: String, api: WandAPI) {
@@ -521,49 +515,41 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        let shape = RoundedRectangle(
-            cornerRadius: inputExpanded ? 18 : 24,
-            style: .continuous
-        )
+        // macOS 有稳定的桌面空间：输入区始终保持“正文 + 工具栏”两层，
+        // 鼠标或键盘聚焦只改变描边颜色，不再触发布局放大/缩小。
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
 
-        return VStack(alignment: .leading, spacing: inputExpanded ? 6 : 0) {
-            HStack(
-                alignment: inputExpanded ? .bottom : .center,
-                spacing: ComposerMetrics.actionSpacing
-            ) {
-                if !inputExpanded {
-                    composerActionsMenu
-                }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .bottom, spacing: ComposerMetrics.actionSpacing) {
                 composerInputContent
-                if !inputExpanded {
-                    trailingButtons
-                }
             }
-            if inputExpanded {
-                HStack(spacing: ComposerMetrics.actionSpacing) {
-                    composerActionsMenu
-                    if store.isStructured {
-                        modelThinkingChip
-                    }
-                    Spacer(minLength: 0)
-                    trailingButtons
+            HStack(spacing: ComposerMetrics.actionSpacing) {
+                composerActionsMenu
+                if store.isStructured {
+                    modelThinkingChip
                 }
+                Spacer(minLength: 0)
+                trailingButtons
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, inputExpanded ? 7 : 4)
+        .padding(.vertical, 7)
         .background(shape.fill(Theme.surface.opacity(0.96)))
         .overlay(
             shape.stroke(
-                inputFocused ? Theme.brand.opacity(0.55) : Theme.border,
-                lineWidth: inputFocused ? 1.2 : 1
+                inputFocused ? Theme.wandAccent.opacity(contrast == .increased ? 1 : 0.62) : Theme.border,
+                lineWidth: contrast == .increased ? 2 : (inputFocused ? 1.35 : 1)
             )
         )
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+        .shadow(
+            color: inputFocused ? Theme.wandAccent.opacity(0.12) : Color.black.opacity(0.04),
+            radius: 8,
+            x: 0,
+            y: 3
+        )
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .animation(.easeInOut(duration: 0.18), value: inputExpanded)
         .confirmationDialog(
             "确定要停止当前正在运行的任务吗？",
             isPresented: $showStopConfirm,
@@ -574,28 +560,13 @@ struct ChatView: View {
         }
     }
 
-    private var inputExpanded: Bool {
-        inputFocused || voicePressed || draftNeedsExpanded
-    }
-
     private var composerInputContent: some View {
         growingTextField
             .focused($inputFocused)
-            .padding(.horizontal, inputExpanded ? 6 : 4)
-            .padding(.vertical, inputExpanded ? 5 : 3)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             .contentShape(Rectangle())
-            .background {
-                GeometryReader { geometry in
-                    Color.clear.preference(
-                        key: ComposerInputHeightPreferenceKey.self,
-                        value: geometry.size.height
-                    )
-                }
-            }
-            .onPreferenceChange(ComposerInputHeightPreferenceKey.self) { height in
-                draftNeedsExpanded = !draft.isEmpty && height > 40
-            }
     }
 
     @ViewBuilder private var trailingButtons: some View {
@@ -858,10 +829,16 @@ struct ChatView: View {
             TextField(composerPlaceholder, text: $draft, axis: .vertical)
                 .lineLimit(1...5)
                 .font(.system(size: 16))
+                .textFieldStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .tint(Theme.wandAccent)
                 .onSubmit { handleReturnKey(shift: false) }
         } else {
             TextField(composerPlaceholder, text: $draft)
                 .font(.system(size: 16))
+                .textFieldStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .tint(Theme.wandAccent)
                 .onSubmit { handleReturnKey(shift: false) }
         }
     }

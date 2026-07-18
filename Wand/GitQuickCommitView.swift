@@ -22,6 +22,12 @@ struct GitQuickCommitView: View {
     @State private var message = ""
     @State private var tagName = ""
     @State private var tagEdited = false
+    @FocusState private var focusedInput: QuickCommitInput?
+
+    private enum QuickCommitInput: Hashable {
+        case message
+        case tag
+    }
 
     // AI 预生成
     @State private var generating = false
@@ -194,9 +200,13 @@ struct GitQuickCommitView: View {
             pairOldLine(label: "Commit", old: oldCommitLine)
             TextField("留空由 AI 根据改动生成", text: $message)
                 .font(.system(size: 15))
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+                .textFieldStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .tint(Theme.wandAccent)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .focused($focusedInput, equals: .message)
+                .wandInputSurface(focused: focusedInput == .message)
                 .disabled(committing)
         }
 
@@ -205,9 +215,13 @@ struct GitQuickCommitView: View {
             pairOldLine(label: "Tag", old: status?.latestTag ?? "无 tag")
             TextField("留空则 AI 生成（拖入 Tag 球时生效）", text: $tagName)
                 .font(.system(size: 14, design: .monospaced))
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+                .textFieldStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .tint(Theme.wandAccent)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .focused($focusedInput, equals: .tag)
+                .wandInputSurface(focused: focusedInput == .tag)
                 .disabled(committing)
                 .onChange(of: tagName) { _ in tagEdited = true }
         }

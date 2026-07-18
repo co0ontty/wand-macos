@@ -226,6 +226,22 @@ extension View {
         }
     }
 
+    /// Wand 文本输入表面：系统字体与原生编辑行为保持不变，只统一安静的静态态、
+    /// 清晰的聚焦态和无过冲反馈。高对比度下改用实底与更粗描边。
+    func wandInputSurface(
+        focused: Bool,
+        invalid: Bool = false,
+        cornerRadius: CGFloat = 12
+    ) -> some View {
+        modifier(
+            WandInputSurfaceModifier(
+                focused: focused,
+                invalid: invalid,
+                cornerRadius: cornerRadius
+            )
+        )
+    }
+
     /// 隐藏当前 sheet/window 的原生标题栏。
     /// SwiftUI 的 .sheet 在 macOS 上会自带一个 NSWindow 标题栏(sheetHeader 又自己画一个标题)，
     /// 视觉上「两层标题」很丑。挂这个修饰符后只保留我们自己的内容头部。
@@ -238,6 +254,41 @@ extension View {
     /// 配合 hideNativeTitleBar() 一起用:原生标题栏关掉后,这个修饰符给用户提供替代拖拽入口。
     func windowDrag() -> some View {
         modifier(WindowDragModifier())
+    }
+}
+
+private struct WandInputSurfaceModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    let focused: Bool
+    let invalid: Bool
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let highContrast = contrast == .increased
+        let stroke = invalid ? Theme.danger : (focused ? Theme.wandAccent : Theme.border)
+
+        content
+            .background {
+                shape.fill(
+                    reduceTransparency || highContrast
+                        ? Theme.surfaceElevated
+                        : Theme.surface.opacity(focused ? 0.98 : 0.86)
+                )
+            }
+            .overlay {
+                shape.stroke(
+                    stroke,
+                    lineWidth: highContrast ? 2 : (focused || invalid ? 1.5 : 1)
+                )
+            }
+            .shadow(
+                color: focused && !highContrast ? Theme.wandAccent.opacity(0.12) : .clear,
+                radius: 10,
+                y: 4
+            )
     }
 }
 

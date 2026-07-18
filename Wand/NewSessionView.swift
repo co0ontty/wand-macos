@@ -24,6 +24,12 @@ struct NewSessionView: View {
     @State private var creating = false
     @State private var errorMessage: String?
     @State private var showBrowser = false
+    @FocusState private var focusedInput: NewSessionInput?
+
+    private enum NewSessionInput: Hashable {
+        case cwd
+        case firstMessage
+    }
 
     enum Provider: String, CaseIterable, Identifiable {
         case claude, codex, grok
@@ -482,6 +488,9 @@ struct NewSessionView: View {
                 TextField("/path/to/project", text: $cwd)
                     .font(.system(size: 14, design: .monospaced))
                     .textFieldStyle(.plain)
+                    .foregroundColor(Theme.textPrimary)
+                    .tint(Theme.wandAccent)
+                    .focused($focusedInput, equals: .cwd)
                     .padding(.leading, 12)
                     .padding(.vertical, 11)
                 Button {
@@ -542,7 +551,7 @@ struct NewSessionView: View {
                 }
             }
         }
-        .background(cardBackground(selected: false))
+        .wandInputSurface(focused: focusedInput == .cwd)
     }
 
     @ViewBuilder
@@ -554,15 +563,23 @@ struct NewSessionView: View {
             TextField("想让它做什么…", text: $firstMessage, axis: .vertical)
                 .font(.system(size: 14))
                 .lineLimit(2...6)
+                .textFieldStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .tint(Theme.wandAccent)
+                .focused($focusedInput, equals: .firstMessage)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .background(cardBackground(selected: false))
+                .wandInputSurface(focused: focusedInput == .firstMessage)
         } else {
             TextField("想让它做什么…", text: $firstMessage)
                 .font(.system(size: 14))
+                .textFieldStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .tint(Theme.wandAccent)
+                .focused($focusedInput, equals: .firstMessage)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .background(cardBackground(selected: false))
+                .wandInputSurface(focused: focusedInput == .firstMessage)
         }
     }
 

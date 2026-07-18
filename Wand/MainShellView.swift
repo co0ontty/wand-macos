@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// 横屏 native 应用主壳:原生窗口工具栏 + 三栏(左会话 / 中聊天 / 右文件)。
@@ -706,13 +707,45 @@ struct SidebarColumn: View {
 
 }
 
-// MARK: - 会话 tile(web 风格:圆角胶囊,active 时品牌色描边 + 左侧 3px 指示条)
+// MARK: - 会话 tile
+
+private enum SessionListDateLabel {
+    private static let isoFormatter = ISO8601DateFormatter()
+    private static let fractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.unitsStyle = .short
+        return formatter
+    }()
+
+    static func relative(iso value: String?) -> String {
+        guard let value,
+              let date = fractionalFormatter.date(from: value) ?? isoFormatter.date(from: value) else {
+            return ""
+        }
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    static func relative(milliseconds: Double?) -> String {
+        guard let milliseconds, milliseconds > 0 else { return "" }
+        return relativeFormatter.localizedString(
+            for: Date(timeIntervalSince1970: milliseconds / 1000),
+            relativeTo: Date()
+        )
+    }
+}
 
 struct SessionTile: View {
     let session: SessionSnapshot
     let isSelected: Bool
     let isSelecting: Bool
     let checked: Bool
+    @State private var hovering = false
 
     private var provider: String { session.provider ?? "claude" }
     private var status: String { session.status ?? "idle" }
@@ -740,29 +773,68 @@ struct SessionTile: View {
         }
     }
 
+    private var providerLabel: String {
+        switch provider {
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        case "grok": return "Grok"
+        default: return "Claude"
+        }
+    }
+
+    private var recentTime: String {
+        SessionListDateLabel.relative(iso: session.endedAt ?? session.startedAt)
+    }
+
+    private var compactPath: String {
+        let parts = subtitle.split(separator: "/").map(String.init)
+        guard parts.count > 2 else { return subtitle }
+        return "…/\(parts.suffix(2).joined(separator: "/"))"
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            // 左侧 3px 指示条:active / 多选勾选时亮品牌色
             Rectangle()
                 .fill(isSelected || checked ? Theme.wandAccent : Color.clear)
-                .frame(width: 3)
-            HStack(spacing: 10) {
+                .frame(width: 2)
+            HStack(spacing: 9) {
                 if isSelecting {
                     Image(systemName: checked ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 16))
                         .foregroundColor(checked ? Theme.wandAccent : Theme.textSecondary)
+                        .frame(width: 22, height: 22)
+                } else {
+                    BrandLogoShape(provider: provider)
+                        .fill(provider == "codex" ? Theme.codex : Theme.wandAccent)
+                        .frame(width: 17, height: 17)
+                        .frame(width: 22, height: 22)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if !recentTime.isEmpty {
+                            Text(recentTime)
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.textMuted)
+                                .fixedSize()
+                        }
+                    }
+                    HStack(spacing: 5) {
                         Circle()
                             .fill(statusColor)
                             .frame(width: 5, height: 5)
-                        Text(subtitle)
-                            .font(.system(size: 11))
+                        Text("\(providerLabel) · \(session.isStructured ? "聊天" : "终端")")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundColor(Theme.textSecondary)
+                            .fixedSize()
+                        Text("·")
+                            .foregroundColor(Theme.textMuted)
+                        Text(compactPath)
+                            .font(.system(size: 10, design: .monospaced))
                             .foregroundColor(Theme.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -770,29 +842,33 @@ struct SessionTile: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 9)
             .padding(.vertical, 8)
         }
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isSelected
-                      ? Color(nsColor: Theme.wandAccentMuted)
-                      : Theme.surfaceElevated.opacity(0.5))
+                .fill(
+                    isSelected
+                        ? Color(nsColor: Theme.wandAccentMuted)
+                        : hovering ? Theme.surfaceElevated.opacity(0.62) : Color.clear
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(
                     isSelected
                         ? Color(nsColor: Theme.borderFocus)
-                        : Color(nsColor: Theme.borderSubtle),
-                    lineWidth: isSelected ? 1.5 : 0.5
+                        : Color.clear,
+                    lineWidth: isSelected ? 1 : 0
                 )
         )
+        .onHover { hovering = $0 }
     }
 }
 
 struct HistoryTile: View {
     let history: HistorySession
+    @State private var hovering = false
 
     private var displayTitle: String {
         // 优先 firstUserMessage(用户第一句),降级到 cwd 末段。
@@ -801,41 +877,52 @@ struct HistoryTile: View {
         return last.isEmpty ? "会话" : last
     }
 
+    private var providerLabel: String {
+        switch history.provider {
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        case "grok": return "Grok"
+        default: return "Claude"
+        }
+    }
+
     private var dateText: String {
-        let ms = history.mtimeMs ?? 0
-        let date = Date(timeIntervalSince1970: ms / 1000)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter.string(from: date)
+        SessionListDateLabel.relative(milliseconds: history.mtimeMs)
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "bubble.left.and.text.bubble.right")
-                .font(.system(size: 12))
-                .foregroundColor(Theme.textMuted)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
-                    .lineLimit(1)
-                Text("\(history.provider == "codex" ? "Codex" : history.provider == "grok" ? "Grok" : history.provider == "opencode" ? "OpenCode" : "Claude") · \(dateText)")
-                    .font(.system(size: 11, design: .monospaced))
+        HStack(spacing: 9) {
+            BrandLogoShape(provider: history.provider)
+                .fill(history.provider == "codex" ? Theme.codex : Theme.wandAccent)
+                .frame(width: 17, height: 17)
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(displayTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !dateText.isEmpty {
+                        Text(dateText)
+                            .font(.system(size: 10))
+                            .foregroundColor(Theme.textMuted)
+                            .fixedSize()
+                    }
+                }
+                Text("\(providerLabel) · 可恢复")
+                    .font(.system(size: 10.5, weight: .medium))
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 11)
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Theme.surfaceElevated.opacity(0.5))
+                .fill(hovering ? Theme.surfaceElevated.opacity(0.62) : Color.clear)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5)
-        )
+        .onHover { hovering = $0 }
     }
 }
 
