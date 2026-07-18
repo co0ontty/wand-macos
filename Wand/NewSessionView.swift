@@ -262,7 +262,7 @@ struct NewSessionView: View {
         // 弹窗最小高度拉到 740,理想 920：保证首条消息、底部创建按钮在 13-15 寸
         // 笔记本常规分辨率下不滚动即可见。老 760 装不下 7 个分区 + 5 个模式卡。
         .frame(minWidth: 760, idealWidth: 820, minHeight: 740, idealHeight: 920)
-        .background(Theme.background)
+        .background(WandAmbientBackground())
         // SwiftUI 在 macOS 上 .sheet 会自带 NSWindow 标题栏,跟下面的 sheetHeader 重复,
         // 视觉上「两层标题」很难看。挂这个修饰符把原生标题栏改成透明 + 隐藏文字。
         .hideNativeTitleBar()

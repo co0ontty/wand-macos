@@ -23,7 +23,7 @@ struct ConnectView: View {
 
     var body: some View {
         ZStack {
-            Theme.background.ignoresSafeArea()
+            WandAmbientBackground()
 
             VStack(spacing: 0) {
                 if isPresentedAsSheet {

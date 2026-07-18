@@ -33,7 +33,10 @@ enum Theme {
     // MARK: - 品牌色(对齐 web --accent #C5653D)
 
     /// 新品牌主色,对齐 web --accent。暖珊瑚,深一档更接近 web。
-    static let wandAccent = Color(red: 0.773, green: 0.396, blue: 0.239)        // #C5653D
+    static let wandAccent = dynamic(
+        light: rgb(0.773, 0.396, 0.239),
+        dark: rgb(0.831, 0.459, 0.314)
+    ) // #C5653D / #D47550
     /// 加深版:active / pressed 状态。
     static let wandAccentStrong = Color(red: 0.686, green: 0.325, blue: 0.188)  // #AF5330
     /// 0.12 透明,卡片背景用。
@@ -56,46 +59,49 @@ enum Theme {
     /// 主背景:对齐 web --bg-primary 暖米色。暗色下走 web 没明确的暗色(纯 web 是亮色),
     /// 这里在暗色下用暖灰底,保留品牌识别。
     static let background = dynamic(
-        light: rgb(0.965, 0.945, 0.910),  // #F6F1E8
-        dark: rgb(0.122, 0.106, 0.090)    // #1F1B17
+        light: rgb(0.961, 0.953, 0.933),  // #F5F3EE
+        dark: rgb(0.075, 0.067, 0.059)    // #13110F
     )
 
     /// 二级背景,顶栏 / 侧栏 / 输入栏胶囊(对齐 web --bg-secondary)。
     static let surface = dynamic(
-        light: rgbA(1.0, 0.984, 0.961, 0.92),     // rgba(255, 251, 245, 0.92)
-        dark: rgbA(0.157, 0.137, 0.114, 0.85)      // 暖灰半透
+        light: rgbA(1.0, 0.992, 0.976, 0.86),      // #FFFDF9
+        dark: rgbA(0.129, 0.118, 0.102, 0.86)      // #211E1A
     )
 
     /// 浮起层背景(对齐 web --bg-elevated)。
     static let surfaceElevated = dynamic(
-        light: rgb(1.0, 0.980, 0.949),    // #FFFAF2
-        dark: rgb(0.184, 0.165, 0.137)
+        light: rgb(0.988, 0.980, 0.965),  // #FCFAF6
+        dark: rgb(0.114, 0.102, 0.090)    // #1D1A17
     )
 
     // MARK: - 边框(对齐 web --border-*)
 
-    static let borderSubtle = rgbA(0.588, 0.463, 0.333, 0.12)  // rgba(150,118,85,0.12)
-    static let borderDefault = rgbA(0.490, 0.357, 0.224, 0.25)  // rgba(125,91,57,0.25)
-    static let border = Color(nsColor: dynamicNS(light: borderDefault, dark: borderDefault))
+    static let borderSubtle = rgbA(0.424, 0.345, 0.282, 0.10)
+    static let borderDefault = rgbA(0.424, 0.345, 0.282, 0.18)
+    static let border = dynamic(
+        light: rgb(0.851, 0.824, 0.788),
+        dark: rgb(0.239, 0.216, 0.188)
+    ) // #D9D2C9 / #3D3730
     static let borderFocus = rgbA(0.773, 0.396, 0.239, 0.50)    // rgba(197,101,61,0.5)
 
     // MARK: - 文本(对齐 web --text-*)
 
     static let textPrimary = dynamic(
-        light: rgb(0.165, 0.122, 0.086),   // #2A1F16
-        dark: rgb(0.957, 0.953, 0.933)     // 暖白
+        light: rgb(0.157, 0.137, 0.122),   // #28231F
+        dark: rgb(0.953, 0.933, 0.906)     // #F3EEE7
     )
     static let textSecondary = dynamic(
-        light: rgb(0.353, 0.271, 0.208),   // #5A4535
-        dark: rgb(0.792, 0.769, 0.722)
+        light: rgb(0.384, 0.353, 0.325),   // #625A53
+        dark: rgb(0.780, 0.745, 0.706)     // #C7BEB4
     )
     static let textTertiary = dynamic(
-        light: rgb(0.478, 0.388, 0.314),   // #7A6350
-        dark: rgb(0.643, 0.580, 0.518)
+        light: rgb(0.478, 0.443, 0.408),
+        dark: rgb(0.659, 0.620, 0.580)
     )
     static let textMuted = dynamic(
-        light: rgb(0.549, 0.451, 0.373),   // #8C735F
-        dark: rgb(0.514, 0.451, 0.388)
+        light: rgb(0.545, 0.510, 0.475),   // #8B8279
+        dark: rgb(0.584, 0.545, 0.506)     // #958B81
     )
     // MARK: - 语义色(对齐 web --success/--warning/--danger/--info)
 
@@ -174,7 +180,7 @@ enum Theme {
 
     /// WKWebView overscroll 区域底色,避免加载前/回弹时露出白底。
     static var nsBackground: NSColor {
-        dynamicNS(light: rgb(0.965, 0.945, 0.910), dark: rgb(0.122, 0.106, 0.090))
+        dynamicNS(light: rgb(0.961, 0.953, 0.933), dark: rgb(0.075, 0.067, 0.059))
     }
 
     // MARK: - 渐变背景(对齐 web body 径向渐变)
@@ -183,8 +189,8 @@ enum Theme {
     static var windowGradient: LinearGradient {
         LinearGradient(
             colors: [
-                Color(nsColor: rgb(0.984, 0.969, 0.945)),  // #FBF7F1
-                Color(nsColor: rgb(0.965, 0.945, 0.910))   // #F6F1E8
+                background,
+                background
             ],
             startPoint: .top,
             endPoint: .bottom
@@ -198,6 +204,81 @@ extension View {
     /// 挂原生 Liquid Glass；旧系统和辅助功能模式使用实色描边表面。
     func wandGlass(_ kind: Theme.Glass) -> some View {
         modifier(WandGlassModifier(kind: kind))
+    }
+
+    func wandGlassCard(cornerRadius: CGFloat = 16) -> some View {
+        modifier(WandGlassCardModifier(cornerRadius: cornerRadius))
+    }
+}
+
+struct WandAmbientBackground: View {
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Theme.background
+                Circle()
+                    .fill(Theme.wandAccent.opacity(0.034))
+                    .frame(width: max(proxy.size.width, proxy.size.height) * 0.84)
+                    .offset(x: -proxy.size.width * 0.38, y: -proxy.size.height * 0.38)
+                Circle()
+                    .fill(Theme.textMuted.opacity(0.024))
+                    .frame(width: max(proxy.size.width, proxy.size.height) * 0.60)
+                    .offset(x: proxy.size.width * 0.48, y: -proxy.size.height * 0.04)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+}
+
+private struct WandPathWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+struct WandPathRevealText: View {
+    let path: String
+    var fontSize: CGFloat = 10
+    var color: Color = Theme.textMuted
+    var initialDelay: Double = 1.8
+    var staggerWindow: Double = 1.2
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var textWidth: CGFloat = 0
+    @State private var revealed = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let overflow = max(0, textWidth - proxy.size.width)
+            Text(path.replacingOccurrences(of: "\\", with: "/"))
+                .font(.system(size: fontSize, weight: .regular, design: .monospaced))
+                .foregroundColor(color)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .background(
+                    GeometryReader { textProxy in
+                        Color.clear.preference(key: WandPathWidthKey.self, value: textProxy.size.width)
+                    }
+                )
+                .offset(x: (reduceMotion || revealed) ? -overflow : 0)
+                .accessibilityLabel(path)
+                .task(id: "\(path)-\(Int(proxy.size.width))-\(Int(textWidth))") {
+                    revealed = reduceMotion
+                    guard !reduceMotion, overflow > 0 else { return }
+                    let hash = UInt64(bitPattern: Int64(path.hashValue))
+                    let stagger = staggerWindow > 0 ? Double(hash % 1_000) / 1_000 * staggerWindow : 0
+                    try? await Task.sleep(nanoseconds: UInt64((initialDelay + stagger) * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.linear(duration: min(8, max(1.2, Double(overflow / 28))))) {
+                        revealed = true
+                    }
+                }
+        }
+        .clipped()
+        .frame(height: ceil(fontSize * 1.45))
+        .onPreferenceChange(WandPathWidthKey.self) { textWidth = $0 }
     }
 }
 
@@ -222,6 +303,29 @@ private struct WandGlassModifier: ViewModifier {
             content
                 .background(shape.fill(Theme.surface))
                 .overlay(shape.stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5))
+        }
+    }
+}
+
+private struct WandGlassCardModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    let cornerRadius: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if reduceTransparency || contrast == .increased {
+            content
+                .background(shape.fill(Theme.surfaceElevated))
+                .overlay(shape.stroke(Theme.border, lineWidth: contrast == .increased ? 1.5 : 1))
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.tint(Theme.wandAccent.opacity(0.035)), in: shape)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .background(shape.fill(Theme.surface.opacity(0.72)))
+                .overlay(shape.stroke(Color.white.opacity(0.14), lineWidth: 0.75))
         }
     }
 }
@@ -438,22 +542,20 @@ struct WandSecondaryButtonStyle: ButtonStyle {
     }
 }
 
-/// 复用的品牌 logo:珊瑚渐变圆角方块 + 魔杖图标。
+/// 复用的品牌 logo:克制的品牌色圆角方块 + 魔杖图标。
 struct WandBrandMark: View {
     var size: CGFloat = 64
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Theme.wandAccent, Theme.wandAccentStrong],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(Theme.wandAccent)
                 .frame(width: size, height: size)
-                .shadow(color: Color(nsColor: Theme.wandAccentGlow), radius: size * 0.18, y: size * 0.06)
+                .overlay(
+                    RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 0.7)
+                )
+                .shadow(color: Theme.wandAccent.opacity(0.10), radius: 1, y: 1)
             Image(systemName: "wand.and.stars")
                 .font(.system(size: size * 0.46, weight: .medium))
                 .foregroundColor(.white)

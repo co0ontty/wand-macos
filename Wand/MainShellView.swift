@@ -94,7 +94,7 @@ struct MainShellView: View {
         GeometryReader { geo in
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.windowGradient)
+            .background(WandAmbientBackground())
             .frame(minWidth: 900, minHeight: 600)
             .overlay(alignment: .bottom) {
                 if geo.size.width < 800 {
@@ -773,23 +773,8 @@ struct SessionTile: View {
         }
     }
 
-    private var providerLabel: String {
-        switch provider {
-        case "codex": return "Codex"
-        case "opencode": return "OpenCode"
-        case "grok": return "Grok"
-        default: return "Claude"
-        }
-    }
-
     private var recentTime: String {
         SessionListDateLabel.relative(iso: session.endedAt ?? session.startedAt)
-    }
-
-    private var compactPath: String {
-        let parts = subtitle.split(separator: "/").map(String.init)
-        guard parts.count > 2 else { return subtitle }
-        return "…/\(parts.suffix(2).joined(separator: "/"))"
     }
 
     var body: some View {
@@ -797,50 +782,43 @@ struct SessionTile: View {
             Rectangle()
                 .fill(isSelected || checked ? Theme.wandAccent : Color.clear)
                 .frame(width: 2)
-            HStack(spacing: 9) {
-                if isSelecting {
-                    Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 16))
-                        .foregroundColor(checked ? Theme.wandAccent : Theme.textSecondary)
-                        .frame(width: 22, height: 22)
-                } else {
-                    BrandLogoShape(provider: provider)
-                        .fill(provider == "codex" ? Theme.codex : Theme.wandAccent)
-                        .frame(width: 17, height: 17)
-                        .frame(width: 22, height: 22)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(Theme.textPrimary)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        if !recentTime.isEmpty {
-                            Text(recentTime)
-                                .font(.system(size: 10))
-                                .foregroundColor(Theme.textMuted)
-                                .fixedSize()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .top, spacing: 8) {
+                    Group {
+                        if isSelecting {
+                            Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 16))
+                                .foregroundColor(checked ? Theme.wandAccent : Theme.textSecondary)
+                        } else {
+                            BrandLogoShape(provider: provider)
+                                .fill(provider == "codex" ? Theme.codex : Theme.wandAccent)
+                                .frame(width: 17, height: 17)
                         }
                     }
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 5, height: 5)
-                        Text("\(providerLabel) · \(session.isStructured ? "聊天" : "终端")")
+                    .frame(width: 42, height: 22)
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack(spacing: 6) {
+                    Text(recentTime)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .frame(width: 42)
+                    Circle().fill(statusColor).frame(width: 5, height: 5)
+                    if let cwd = session.cwd, !cwd.isEmpty {
+                        WandPathRevealText(path: cwd, fontSize: 9.5, color: Theme.textMuted)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text(status)
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundColor(Theme.textSecondary)
-                            .fixedSize()
-                        Text("·")
-                            .foregroundColor(Theme.textMuted)
-                        Text(compactPath)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(Theme.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
                     }
                 }
-                Spacer(minLength: 0)
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 8)
@@ -862,7 +840,10 @@ struct SessionTile: View {
                     lineWidth: isSelected ? 1 : 0
                 )
         )
+        .wandGlassCard(cornerRadius: 12)
         .onHover { hovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue("\(session.isStructured ? "聊天模式" : "终端模式")，\(status)")
     }
 }
 
@@ -877,44 +858,42 @@ struct HistoryTile: View {
         return last.isEmpty ? "会话" : last
     }
 
-    private var providerLabel: String {
-        switch history.provider {
-        case "codex": return "Codex"
-        case "opencode": return "OpenCode"
-        case "grok": return "Grok"
-        default: return "Claude"
-        }
-    }
-
     private var dateText: String {
         SessionListDateLabel.relative(milliseconds: history.mtimeMs)
     }
 
     var body: some View {
-        HStack(spacing: 9) {
-            BrandLogoShape(provider: history.provider)
-                .fill(history.provider == "codex" ? Theme.codex : Theme.wandAccent)
-                .frame(width: 17, height: 17)
-                .frame(width: 22, height: 22)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(displayTitle)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if !dateText.isEmpty {
-                        Text(dateText)
-                            .font(.system(size: 10))
-                            .foregroundColor(Theme.textMuted)
-                            .fixedSize()
-                    }
-                }
-                Text("\(providerLabel) · 可恢复")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 8) {
+                BrandLogoShape(provider: history.provider)
+                    .fill(history.provider == "codex" ? Theme.codex : Theme.wandAccent)
+                    .frame(width: 17, height: 17)
+                    .frame(width: 42, height: 22)
+                Text(displayTitle)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 6) {
+                Text(dateText)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundColor(Theme.textMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(width: 42)
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundColor(history.provider == "codex" ? Theme.codex : Theme.wandAccent)
+                Text("可恢复")
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundColor(Theme.textSecondary)
+                if !history.cwd.isEmpty {
+                    Text("·").foregroundColor(Theme.textMuted.opacity(0.55))
+                    WandPathRevealText(path: history.cwd, fontSize: 9.5, color: Theme.textMuted)
+                        .frame(maxWidth: .infinity)
+                }
             }
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
@@ -922,7 +901,10 @@ struct HistoryTile: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(hovering ? Theme.surfaceElevated.opacity(0.62) : Color.clear)
         )
+        .wandGlassCard(cornerRadius: 12)
         .onHover { hovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue("聊天模式，可恢复")
     }
 }
 

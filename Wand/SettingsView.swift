@@ -27,7 +27,7 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 700, idealWidth: 760, minHeight: 520, idealHeight: 560)
-        .background(Theme.background)
+        .background(WandAmbientBackground())
         .task {
             serverVersion = (try? await api.serverConfig())?.currentVersion
         }
@@ -109,7 +109,7 @@ struct SettingsView: View {
             .padding(.vertical, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.background)
+        .background(WandAmbientBackground())
     }
 
     private var detailHeader: some View {

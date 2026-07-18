@@ -438,12 +438,10 @@ struct ChatView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: 190)
-            Text(store.snapshot?.cwd ?? "未设置工作目录")
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundColor(Theme.textSecondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 190)
+            if let cwd = store.snapshot?.cwd, !cwd.isEmpty {
+                WandPathRevealText(path: cwd, fontSize: 8, color: Theme.textMuted, staggerWindow: 0)
+                    .frame(width: 190)
+            }
         }
         .accessibilityElement(children: .combine)
     }
