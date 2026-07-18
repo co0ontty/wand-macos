@@ -195,26 +195,35 @@ enum Theme {
 // MARK: - 液态玻璃修饰符
 
 extension View {
-    /// 挂原生 Liquid Glass；旧系统仅保留基本半透明背景。
-    @ViewBuilder
+    /// 挂原生 Liquid Glass；旧系统和辅助功能模式使用实色描边表面。
     func wandGlass(_ kind: Theme.Glass) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(
-                kind.nativeEffect,
-                in: RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
-            )
+        modifier(WandGlassModifier(kind: kind))
+    }
+}
+
+private struct WandGlassModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    let kind: Theme.Glass
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
+        let highContrast = contrast == .increased
+
+        if reduceTransparency || highContrast {
+            content
+                .background(shape.fill(Theme.surfaceElevated))
+                .overlay(shape.stroke(Theme.border, lineWidth: highContrast ? 1.5 : 1))
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(kind.nativeEffect, in: shape)
         } else {
-            self.background(
-                RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
-                    .fill(Theme.surface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
-                    .stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5)
-            )
+            content
+                .background(shape.fill(Theme.surface))
+                .overlay(shape.stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5))
         }
     }
-
 }
 
 // MARK: - 兼容旧 API

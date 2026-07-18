@@ -654,7 +654,7 @@ struct NewSessionView: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 14)
-        .background(Theme.surface)
+        .wandGlass(.chrome)
     }
 
     // MARK: - 状态
