@@ -28,7 +28,6 @@ struct ConnectView: View {
             VStack(spacing: 0) {
                 if isPresentedAsSheet {
                     sheetHeader
-                    Rectangle().fill(Theme.border).frame(height: 1)
                 }
                 Spacer(minLength: 0)
                 card
@@ -62,6 +61,7 @@ struct ConnectView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
+        .wandGlass(.chrome)
     }
 
     @ViewBuilder
@@ -106,8 +106,7 @@ struct ConnectView: View {
         }
         .frame(minHeight: 430)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .wandGlass(.panel)
-        .shadow(color: Theme.ShadowToken.lg.color, radius: Theme.ShadowToken.lg.radius, y: Theme.ShadowToken.lg.yOffset)
+        .wandGlassCard(cornerRadius: 20)
     }
 
     private var compactCard: some View {
@@ -116,8 +115,7 @@ struct ConnectView: View {
             formContent
         }
         .padding(28)
-        .wandGlass(.panel)
-        .shadow(color: Theme.ShadowToken.md.color, radius: Theme.ShadowToken.md.radius, y: Theme.ShadowToken.md.yOffset)
+        .wandGlassCard(cornerRadius: 20)
     }
 
     private var intro: some View {

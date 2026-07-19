@@ -750,11 +750,36 @@ struct SessionTile: View {
     private var provider: String { session.provider ?? "claude" }
     private var status: String { session.status ?? "idle" }
     private var statusColor: Color {
+        if session.hasPendingPermission { return Theme.warning }
+        if session.isResponding { return Theme.success }
         switch status {
         case "running", "thinking": return Theme.success
-        case "waiting": return Theme.warning
+        case "waiting", "waiting-input", "waiting_input", "reconnecting": return Theme.warning
         case "failed": return Theme.danger
         default: return Theme.textMuted
+        }
+    }
+
+    private var prominentStatus: Bool {
+        session.hasPendingPermission
+            || session.isResponding
+            || ["running", "thinking", "waiting", "waiting-input", "waiting_input", "reconnecting"]
+                .contains(status)
+    }
+
+    private var statusLabel: String {
+        if session.hasPendingPermission { return "等待授权" }
+        if session.isResponding { return "思考中" }
+        switch status {
+        case "running": return "运行中"
+        case "thinking": return "思考中"
+        case "waiting", "waiting-input", "waiting_input": return "等待输入"
+        case "reconnecting": return "重连中"
+        case "failed": return "已失败"
+        case "idle": return "空闲"
+        case "exited": return "已退出"
+        case "stopped": return "已停止"
+        default: return status
         }
     }
 
@@ -780,8 +805,8 @@ struct SessionTile: View {
     var body: some View {
         HStack(spacing: 0) {
             Rectangle()
-                .fill(isSelected || checked ? Theme.wandAccent : Color.clear)
-                .frame(width: 2)
+                .fill(isSelected || checked ? Theme.wandAccent : prominentStatus ? statusColor : Color.clear)
+                .frame(width: prominentStatus ? 3 : 2)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 8) {
                     Group {
@@ -809,7 +834,20 @@ struct SessionTile: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                         .frame(width: 42)
-                    Circle().fill(statusColor).frame(width: 5, height: 5)
+                    if prominentStatus {
+                        HStack(spacing: 4) {
+                            Circle().fill(statusColor).frame(width: 5, height: 5)
+                            Text(statusLabel)
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .foregroundColor(statusColor)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2.5)
+                        .background(Capsule().fill(statusColor.opacity(0.12)))
+                    } else {
+                        Circle().fill(statusColor).frame(width: 5, height: 5)
+                    }
                     if let cwd = session.cwd, !cwd.isEmpty {
                         WandPathRevealText(path: cwd, fontSize: 9.5, color: Theme.textMuted)
                             .frame(maxWidth: .infinity)
@@ -828,6 +866,7 @@ struct SessionTile: View {
                 .fill(
                     isSelected
                         ? Color(nsColor: Theme.wandAccentMuted)
+                        : prominentStatus ? statusColor.opacity(0.055)
                         : hovering ? Theme.surfaceElevated.opacity(0.62) : Color.clear
                 )
         )
@@ -843,7 +882,7 @@ struct SessionTile: View {
         .wandGlassCard(cornerRadius: 12)
         .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityValue("\(session.isStructured ? "聊天模式" : "终端模式")，\(status)")
+        .accessibilityValue("\(session.isStructured ? "聊天模式" : "终端模式")，\(statusLabel)")
     }
 }
 

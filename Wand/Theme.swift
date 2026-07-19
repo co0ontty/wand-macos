@@ -301,8 +301,9 @@ private struct WandGlassModifier: ViewModifier {
             content.glassEffect(kind.nativeEffect, in: shape)
         } else {
             content
-                .background(shape.fill(Theme.surface))
-                .overlay(shape.stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5))
+                .background(.ultraThinMaterial, in: shape)
+                .background(shape.fill(Theme.surface.opacity(0.56)))
+                .overlay(shape.stroke(Color.white.opacity(0.14), lineWidth: 0.5))
         }
     }
 }
@@ -315,18 +316,14 @@ private struct WandGlassCardModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if reduceTransparency || contrast == .increased {
-            content
-                .background(shape.fill(Theme.surfaceElevated))
-                .overlay(shape.stroke(Theme.border, lineWidth: contrast == .increased ? 1.5 : 1))
-        } else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.tint(Theme.wandAccent.opacity(0.035)), in: shape)
-        } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .background(shape.fill(Theme.surface.opacity(0.72)))
-                .overlay(shape.stroke(Color.white.opacity(0.14), lineWidth: 0.75))
-        }
+        content
+            .background(shape.fill(Theme.surfaceElevated.opacity(reduceTransparency || contrast == .increased ? 1 : 0.92)))
+            .overlay(
+                shape.stroke(
+                    contrast == .increased ? Theme.textMuted : Theme.border,
+                    lineWidth: contrast == .increased ? 1.5 : 1
+                )
+            )
     }
 }
 
@@ -398,9 +395,9 @@ private struct WandInputSurfaceModifier: ViewModifier {
                 )
             }
             .shadow(
-                color: focused && !highContrast ? Theme.wandAccent.opacity(0.12) : .clear,
-                radius: 10,
-                y: 4
+                color: focused && !highContrast ? Theme.wandAccent.opacity(0.05) : .clear,
+                radius: 6,
+                y: 2
             )
     }
 }

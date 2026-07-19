@@ -46,7 +46,7 @@ struct ChatView: View {
 
     var body: some View {
         ZStack {
-            Theme.background.ignoresSafeArea()
+            WandAmbientBackground()
             if store.loading {
                 ProgressView().tint(Theme.brand)
             } else if let error = store.loadError {
@@ -393,15 +393,7 @@ struct ChatView: View {
         .padding(.horizontal, 22)
         .padding(.vertical, 24)
         .frame(maxWidth: 340)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Theme.surface)
-                .shadow(color: Color.black.opacity(0.07), radius: 18, y: 7)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Theme.border, lineWidth: 1)
-        )
+        .wandGlassCard(cornerRadius: 20)
         .padding(.horizontal, 24)
     }
 
@@ -532,7 +524,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(shape.fill(Theme.surface.opacity(0.96)))
+        .wandGlass(.panel)
         .overlay(
             shape.stroke(
                 inputFocused ? Theme.wandAccent.opacity(contrast == .increased ? 1 : 0.62) : Theme.border,
@@ -540,10 +532,10 @@ struct ChatView: View {
             )
         )
         .shadow(
-            color: inputFocused ? Theme.wandAccent.opacity(0.12) : Color.black.opacity(0.04),
-            radius: 8,
+            color: inputFocused ? Theme.wandAccent.opacity(0.05) : Color.black.opacity(0.025),
+            radius: 6,
             x: 0,
-            y: 3
+            y: 2
         )
         .padding(.horizontal, 12)
         .padding(.top, 6)

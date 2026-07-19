@@ -9,8 +9,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             // 全窗口背景,避免 ConnectView/加载中状态留下空白
-            Theme.background
-                .ignoresSafeArea()
+            WandAmbientBackground()
             if let serverURL = store.serverURL {
                 MainShellView(serverURL: serverURL, token: store.token)
                     .id(serverURL.absoluteString)
