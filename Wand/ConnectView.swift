@@ -11,6 +11,7 @@ struct ConnectView: View {
     @State private var input: String = ""
     @State private var error: String? = nil
     @State private var isConnecting = false
+    @State private var showTroubleshooting = false
     @FocusState private var inputFocused: Bool
 
     /// 「本地网络」权限引导：nil = 不展示；false = 提示性引导（无法确定是否被拒）；
@@ -44,6 +45,16 @@ struct ConnectView: View {
         )
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { inputFocused = true }
+        }
+        .sheet(isPresented: $showTroubleshooting) {
+            TroubleshootingView(
+                context: TroubleshootingContext(
+                    serverURL: troubleshootingURL,
+                    errorMessage: error,
+                    source: "连接服务器"
+                ),
+                onRetry: connect
+            )
         }
     }
 
@@ -188,7 +199,8 @@ struct ConnectView: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 12))
                 .foregroundColor(Theme.danger)
@@ -197,12 +209,23 @@ struct ConnectView: View {
                 .foregroundColor(Theme.danger)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+            }
+            Button { showTroubleshooting = true } label: {
+                Label("打开故障排查", systemImage: "stethoscope")
+            }
+            .buttonStyle(.link)
+            .font(.system(size: 12, weight: .medium))
         }
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Theme.danger.opacity(0.1))
         )
+    }
+
+    private var troubleshootingURL: URL? {
+        if let decoded = WandAuth.decodeConnectCode(trimmedInput) { return decoded.url }
+        return WandAuth.candidateURLs(from: trimmedInput).first
     }
 
     /// macOS 15+「本地网络」权限引导卡片。denied = 已确认被系统拒绝。

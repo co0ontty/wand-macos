@@ -93,6 +93,23 @@ final class ChatStore: ObservableObject {
         socket.close()
     }
 
+    func retryLoad() {
+        loading = true
+        loadError = nil
+        Task {
+            do {
+                let snap = try await api.getSession(id: sessionId)
+                apply(snapshot: snap)
+                loading = false
+                socket.connect()
+                socket.subscribe(sessionId: sessionId)
+            } catch {
+                loading = false
+                loadError = error.localizedDescription
+            }
+        }
+    }
+
     // MARK: - 推送合流
 
     /// 应用一份窗口化消息快照。服务端 init/output/ended 可能只给最近一窗；

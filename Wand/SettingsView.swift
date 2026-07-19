@@ -14,6 +14,12 @@ struct SettingsView: View {
     @State private var serverVersion: String?
     @State private var confirmDisconnect = false
     @State private var selectedPane: SettingsPane = .connection
+    @State private var showTroubleshooting = false
+    @State private var permissionDenied: Bool?
+    @State private var updateInfo: MacUpdateInfo?
+    @State private var updateError: String?
+    @State private var checkingUpdate = false
+    private let dmgInstaller = DmgInstaller()
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
@@ -30,6 +36,17 @@ struct SettingsView: View {
         .background(WandAmbientBackground())
         .task {
             serverVersion = (try? await api.serverConfig())?.currentVersion
+            LocalNetworkPermission.probeDenied { permissionDenied = $0 }
+            await checkForUpdate()
+        }
+        .sheet(isPresented: $showTroubleshooting) {
+            TroubleshootingView(
+                context: TroubleshootingContext(
+                    serverURL: serverURL,
+                    errorMessage: nil,
+                    source: "设置"
+                )
+            )
         }
         .confirmationDialog(
             "断开后需要重新输入连接码才能连回来。",
@@ -100,6 +117,8 @@ struct SettingsView: View {
                     connectionContent
                 case .permissions:
                     permissionsContent
+                case .troubleshooting:
+                    troubleshootingContent
                 case .about:
                     aboutContent
                 }
@@ -172,10 +191,10 @@ struct SettingsView: View {
                     .foregroundColor(LocalNetworkPermission.isEnforced ? Theme.warning : Theme.success)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(LocalNetworkPermission.isEnforced ? "由系统管理" : "无需额外授权")
+                    Text(permissionTitle)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
-                    Text(LocalNetworkPermission.isEnforced ? "无法连接局域网服务器时，请检查系统权限。" : "当前 macOS 版本不会单独限制 Wand 的局域网访问。")
+                    Text(permissionMessage)
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textSecondary)
                 }
@@ -189,7 +208,18 @@ struct SettingsView: View {
         }
     }
 
+    private var troubleshootingContent: some View {
+        settingsCard("连接与权限诊断", description: "检测服务器可达性、安装位置与本地网络权限，并生成可复制的脱敏报告。") {
+            Button { showTroubleshooting = true } label: {
+                Label("打开故障排查", systemImage: "stethoscope")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.brand)
+        }
+    }
+
     private var aboutContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
         settingsCard("Wand") {
             HStack(spacing: 14) {
                 WandBrandMark(size: 48)
@@ -209,6 +239,64 @@ struct SettingsView: View {
                     .font(.system(size: 13))
             }
         }
+        settingsCard("软件更新", description: "直接从当前 Wand 服务检查并下载 macOS 客户端更新。") {
+            if checkingUpdate {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在检查更新…") }
+                    .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+            } else if let updateError {
+                Text(updateError).font(.system(size: 12)).foregroundColor(Theme.danger)
+            } else if let updateInfo, updateInfo.updateAvailable {
+                Text("发现 v\(updateInfo.latestVersion ?? "新版")")
+                    .font(.system(size: 13, weight: .semibold))
+                if let size = updateInfo.size {
+                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                        .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                }
+                Button("下载并打开 DMG") { downloadUpdate(updateInfo) }
+                    .buttonStyle(.borderedProminent).tint(Theme.brand)
+            } else {
+                Text("当前已是最新版本")
+                    .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+            }
+            Button("重新检查") { Task { await checkForUpdate() } }
+                .buttonStyle(.bordered)
+        }
+        }
+    }
+
+    private var permissionTitle: String {
+        if !LocalNetworkPermission.isEnforced { return "无需额外授权" }
+        if permissionDenied == true { return "检测到已拒绝" }
+        if permissionDenied == false { return "未检测到明确拒绝" }
+        return "正在检测"
+    }
+
+    private var permissionMessage: String {
+        if !LocalNetworkPermission.isEnforced { return "当前 macOS 版本不会单独限制 Wand 的局域网访问。" }
+        if permissionDenied == true { return "系统正在阻止 Wand 访问局域网，请打开权限后重新检测。" }
+        return "macOS 不提供可直接读取的授权状态；连接异常时可用故障排查进一步检测。"
+    }
+
+    private func checkForUpdate() async {
+        checkingUpdate = true
+        updateError = nil
+        do { updateInfo = try await api.macUpdate(currentVersion: rawAppVersion) }
+        catch { updateError = "检查更新失败：\(error.localizedDescription)" }
+        checkingUpdate = false
+    }
+
+    private func downloadUpdate(_ info: MacUpdateInfo) {
+        guard let url = info.downloadUrl else { return }
+        dmgInstaller.serverURL = serverURL
+        dmgInstaller.downloadAndMount(
+            urlString: url,
+            fileName: info.fileName ?? "wand-update.dmg",
+            presentingWindow: NSApp.keyWindow
+        )
+    }
+
+    private var rawAppVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }
 
     private var localNetworkDescription: String {
@@ -279,6 +367,7 @@ struct SettingsView: View {
 private enum SettingsPane: String, CaseIterable, Identifiable {
     case connection
     case permissions
+    case troubleshooting
     case about
 
     var id: String { rawValue }
@@ -287,6 +376,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .connection: return "连接与服务"
         case .permissions: return "权限"
+        case .troubleshooting: return "故障排查"
         case .about: return "关于"
         }
     }
@@ -295,6 +385,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .connection: return "管理当前服务器，并进入网页版完整设置。"
         case .permissions: return "查看 Wand 在这台 Mac 上使用的系统权限。"
+        case .troubleshooting: return "诊断连接与本地网络权限问题。"
         case .about: return "版本信息与项目链接。"
         }
     }
@@ -303,6 +394,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .connection: return "server.rack"
         case .permissions: return "hand.raised"
+        case .troubleshooting: return "stethoscope"
         case .about: return "info.circle"
         }
     }

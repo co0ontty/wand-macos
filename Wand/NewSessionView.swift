@@ -22,6 +22,7 @@ struct NewSessionView: View {
     @State private var selectedModel = ""
     @State private var thinkingEffort = "off"
     @State private var creating = false
+    @State private var fullAccessAcknowledged = false
     @State private var errorMessage: String?
     @State private var showBrowser = false
     @FocusState private var focusedInput: NewSessionInput?
@@ -234,6 +235,9 @@ struct NewSessionView: View {
                     fieldLabel("模式")
                     modeGrid
                     fieldHint(modeHint)
+                    if mode == .fullAccess {
+                        fullAccessWarning
+                    }
 
                     fieldLabel("工作目录")
                     cwdCard
@@ -277,6 +281,9 @@ struct NewSessionView: View {
                 selectedModel = ""
                 _ = first
             }
+        }
+        .onChange(of: mode) { selected in
+            if selected != .fullAccess { fullAccessAcknowledged = false }
         }
     }
 
@@ -601,6 +608,23 @@ struct NewSessionView: View {
         )
     }
 
+    private var fullAccessWarning: some View {
+        Toggle(isOn: $fullAccessAcknowledged) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("我确认此目录和环境可以自动执行高权限操作")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("全权限模式会自动同意权限请求。未确认前不能启动会话。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .padding(12)
+        .background(Theme.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.warning.opacity(0.4), lineWidth: 1))
+    }
+
     // MARK: - 头部 / 底部
 
     private var sheetHeader: some View {
@@ -630,6 +654,11 @@ struct NewSessionView: View {
 
     private var sheetFooter: some View {
         HStack(spacing: 10) {
+            Text("\(provider.label) · \(sessionType.label) · \(mode.label) · \((cwd as NSString).lastPathComponent)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(Theme.textSecondary)
+                .lineLimit(1)
+                .help(cwd)
             Spacer()
             Button("取消") { dismiss() }
                 .buttonStyle(WandSecondaryButtonStyle())
@@ -660,7 +689,9 @@ struct NewSessionView: View {
     // MARK: - 状态
 
     private var canCreate: Bool {
-        !cwd.trimmingCharacters(in: .whitespaces).isEmpty && !creating
+        !cwd.trimmingCharacters(in: .whitespaces).isEmpty
+            && !creating
+            && (mode != .fullAccess || fullAccessAcknowledged)
     }
 
     private func loadInitial() async {

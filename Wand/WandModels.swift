@@ -730,6 +730,16 @@ struct GitPushResult: Decodable {
     let error: String?
 }
 
+struct MacUpdateInfo: Decodable {
+    let updateAvailable: Bool
+    let currentVersion: String
+    let latestVersion: String?
+    let downloadUrl: String?
+    let fileName: String?
+    let size: Int64?
+    let source: String?
+}
+
 /// POST /api/sessions/:id/quick-commit 响应。
 struct QuickCommitResult: Decodable {
     struct Commit: Decodable {

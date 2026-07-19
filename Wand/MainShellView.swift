@@ -18,6 +18,7 @@ struct MainShellView: View {
     @State private var selectedSession: SessionSnapshot?
     /// 连接状态(给顶栏的 connection dot 用)。
     @State private var connectionState: ConnectionState = .connecting
+    @State private var showTroubleshooting = false
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
@@ -73,15 +74,18 @@ struct MainShellView: View {
             )
             .environmentObject(ServerStore.shared)
         }
+        .sheet(isPresented: $showTroubleshooting) {
+            TroubleshootingView(
+                context: TroubleshootingContext(
+                    serverURL: serverURL,
+                    errorMessage: disconnectedMessage,
+                    source: "主窗口连接状态"
+                ),
+                onRetry: checkConnection
+            )
+        }
         .task {
-            // 进入主壳时跑一次连通性检查,失败显示重连 banner
-            connectionState = .connecting
-            do {
-                _ = try await api.listSessions()
-                connectionState = .connected
-            } catch {
-                connectionState = .disconnected(error.localizedDescription)
-            }
+            await checkConnectionAsync()
         }
         .onChange(of: selectedSessionId) { id in
             if id == nil {
@@ -184,10 +188,9 @@ struct MainShellView: View {
                 Button("设置", systemImage: "gearshape") {
                     presentSettings = true
                 }
-                if case .disconnected = connectionState,
-                   LocalNetworkPermission.isLikelyLanHost(serverURL.host) {
-                    Button("打开「本地网络」设置", systemImage: "lock.shield") {
-                        LocalNetworkPermission.openSettings()
+                if case .disconnected = connectionState {
+                    Button("故障排查", systemImage: "stethoscope") {
+                        showTroubleshooting = true
                     }
                 }
                 Button("打开网页版", systemImage: "safari") {
@@ -237,6 +240,25 @@ struct MainShellView: View {
         }
     }
 
+    private var disconnectedMessage: String? {
+        if case .disconnected(let message) = connectionState { return message }
+        return nil
+    }
+
+    private func checkConnection() {
+        Task { await checkConnectionAsync() }
+    }
+
+    private func checkConnectionAsync() async {
+        connectionState = .connecting
+        do {
+            _ = try await api.listSessions()
+            connectionState = .connected
+        } catch {
+            connectionState = .disconnected(error.localizedDescription)
+        }
+    }
+
     // MARK: - 状态
 
     @State private var showWebFallback: Bool = false
@@ -277,7 +299,13 @@ struct MainShellView: View {
 
     @ViewBuilder
     private var mainColumn: some View {
-        if let sessionId = selectedSessionId {
+        if case .disconnected(let message) = connectionState {
+            ConnectionFailureView(
+                message: message,
+                onRetry: checkConnection,
+                onTroubleshoot: { showTroubleshooting = true }
+            )
+        } else if let sessionId = selectedSessionId {
             MainColumn(
                 api: api,
                 sessionId: sessionId,
@@ -368,6 +396,42 @@ struct MainShellView: View {
         return "会话 \(selectedSessionId?.prefix(6) ?? "")"
     }
 
+}
+
+private struct ConnectionFailureView: View {
+    let message: String
+    let onRetry: () -> Void
+    let onTroubleshoot: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 34, weight: .medium))
+                .foregroundColor(Theme.danger)
+            Text("无法连接服务器")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 460)
+                .textSelection(.enabled)
+            HStack(spacing: 10) {
+                Button("重试", action: onRetry)
+                    .buttonStyle(.borderedProminent).tint(Theme.brand)
+                Button(action: onTroubleshoot) {
+                    Label("故障排查", systemImage: "stethoscope")
+                }
+                .buttonStyle(.bordered)
+            }
+            Spacer()
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+    }
 }
 
 // MARK: - 侧栏容器
@@ -804,9 +868,7 @@ struct SessionTile: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Rectangle()
-                .fill(isSelected || checked ? Theme.wandAccent : prominentStatus ? statusColor : Color.clear)
-                .frame(width: prominentStatus ? 3 : 2)
+            Color.clear.frame(width: 3)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 8) {
                     Group {
@@ -842,9 +904,6 @@ struct SessionTile: View {
                                 .foregroundColor(statusColor)
                                 .lineLimit(1)
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2.5)
-                        .background(Capsule().fill(statusColor.opacity(0.12)))
                     } else {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                     }
@@ -863,22 +922,16 @@ struct SessionTile: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(
-                    isSelected
-                        ? Color(nsColor: Theme.wandAccentMuted)
-                        : prominentStatus ? statusColor.opacity(0.055)
-                        : hovering ? Theme.surfaceElevated.opacity(0.62) : Color.clear
-                )
+                .fill(hovering ? Theme.surfaceElevated.opacity(0.62) : Color.clear)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(
-                    isSelected
-                        ? Color(nsColor: Theme.borderFocus)
-                        : Color.clear,
-                    lineWidth: isSelected ? 1 : 0
-                )
-        )
+        .overlay(alignment: .leading) {
+            if isSelected && !isSelecting {
+                Capsule()
+                    .fill(Theme.wandAccent)
+                    .frame(width: 3)
+                    .padding(.vertical, 9)
+            }
+        }
         .wandGlassCard(cornerRadius: 12)
         .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)

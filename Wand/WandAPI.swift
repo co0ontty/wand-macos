@@ -433,4 +433,12 @@ final class WandAPI {
         }
         _ = try await requestData(method: "POST", path: "/api/settings/config", body: body)
     }
+
+    func macUpdate(currentVersion: String) async throws -> MacUpdateInfo {
+        try await request(
+            MacUpdateInfo.self,
+            method: "GET",
+            path: "/api/macos-dmg-update?currentVersion=\(percentEncode(currentVersion))"
+        )
+    }
 }

@@ -82,6 +82,7 @@ STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
 cp -R "$APP_DST" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
+cp "$PROJECT_ROOT/首次打开说明.txt" "$STAGING/首次打开说明.txt"
 
 # 估算 DMG 大小（应用大小 + 20MB padding）
 SIZE_KB=$(($(du -sk "$STAGING" | awk '{print $1}') + 20000))

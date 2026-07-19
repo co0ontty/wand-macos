@@ -36,6 +36,7 @@ struct ChatView: View {
     @State private var voiceHoldWork: DispatchWorkItem?
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
+    @State private var showTroubleshooting = false
     @FocusState private var inputFocused: Bool
 
     init(sessionId: String, api: WandAPI) {
@@ -51,12 +52,23 @@ struct ChatView: View {
                 ProgressView().tint(Theme.brand)
             } else if let error = store.loadError {
                 VStack(spacing: 12) {
-                    Text("加载失败").font(.headline).foregroundColor(Theme.textPrimary)
+                    Image(systemName: "exclamationmark.bubble.fill")
+                        .font(.system(size: 30)).foregroundColor(Theme.danger)
+                    Text("会话加载失败").font(.headline).foregroundColor(Theme.textPrimary)
                     Text(error).font(.footnote).foregroundColor(Theme.textSecondary)
                         .multilineTextAlignment(.center)
+                        .textSelection(.enabled)
+                    HStack(spacing: 10) {
+                        Button("重新加载") { store.retryLoad() }
+                            .buttonStyle(.borderedProminent).tint(Theme.brand)
+                        Button { showTroubleshooting = true } label: {
+                            Label("故障排查", systemImage: "stethoscope")
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
                 .padding(32)
-            } else if store.isStructured && store.messages.isEmpty && !store.isResponding {
+            } else if store.messages.isEmpty && !store.isResponding {
                 sessionLaunchPanel
             } else {
                 messageList
@@ -82,6 +94,16 @@ struct ChatView: View {
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(isPresented: $showQuickCommit) {
             GitQuickCommitView(sessionId: sessionId, api: api)
+        }
+        .sheet(isPresented: $showTroubleshooting) {
+            TroubleshootingView(
+                context: TroubleshootingContext(
+                    serverURL: api.baseURL,
+                    errorMessage: store.loadError,
+                    source: "会话 \(sessionId)"
+                ),
+                onRetry: store.retryLoad
+            )
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -434,15 +456,34 @@ struct ChatView: View {
     private var sessionLaunchPanel: some View {
         VStack(spacing: 18) {
             WandBrandMark(size: 52)
-            Text(store.snapshot?.providerLabel ?? "结构化会话")
+            Text(emptySessionTitle)
                 .font(.system(size: 18, weight: .bold))
                 .foregroundColor(Theme.textPrimary)
+            Text(emptySessionMessage)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 24)
         .frame(maxWidth: 340)
         .wandGlassCard(cornerRadius: 20)
         .padding(.horizontal, 24)
+    }
+
+    private var emptySessionTitle: String {
+        if store.sessionEnded { return "会话已结束" }
+        return store.isStructured ? "会话尚无消息" : "终端尚无输出"
+    }
+
+    private var emptySessionMessage: String {
+        if store.sessionEnded {
+            return "这个会话没有保存可显示的内容。你可以从输入框继续尝试，或返回列表选择其他会话。"
+        }
+        return store.isStructured
+            ? "在下方输入消息开始对话。"
+            : "PTY 会话已经连接；输入命令或消息后，输出会显示在这里。"
     }
 
     private func modelButton(id: String?, label: String) -> some View {
