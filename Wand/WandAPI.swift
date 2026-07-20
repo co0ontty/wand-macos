@@ -299,7 +299,7 @@ final class WandAPI {
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = [
             "provider": provider,
-            "runner": provider == "codex" ? "codex-cli-exec" : provider == "grok" ? "grok-cli-headless" : "claude-cli-print",
+            "runner": structuredRunner(for: provider),
             "cwd": cwd,
         ]
         if let mode, !mode.isEmpty { body["mode"] = mode }
@@ -319,7 +319,11 @@ final class WandAPI {
         thinkingEffort: String? = nil,
         initialInput: String?
     ) async throws -> SessionSnapshot {
-        var body: [String: Any] = ["command": provider, "provider": provider, "cwd": cwd]
+        var body: [String: Any] = [
+            "command": provider == "qoder" ? "qodercli" : provider,
+            "provider": provider,
+            "cwd": cwd,
+        ]
         if let mode, !mode.isEmpty { body["mode"] = mode }
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
@@ -423,12 +427,13 @@ final class WandAPI {
             "defaultThinkingEffort": thinkingEffort,
         ]
         if let model {
-            if provider == "codex" {
-                body["defaultCodexModel"] = model
-                body["defaultModels"] = ["codex": model]
-            } else if provider == "claude" {
-                body["defaultModel"] = model
-                body["defaultModels"] = ["claude": model]
+            body["defaultModels"] = [provider: model]
+            switch provider {
+            case "codex": body["defaultCodexModel"] = model
+            case "opencode": body["defaultOpenCodeModel"] = model
+            case "grok": body["defaultGrokModel"] = model
+            case "qoder": body["defaultQoderModel"] = model
+            default: body["defaultModel"] = model
             }
         }
         _ = try await requestData(method: "POST", path: "/api/settings/config", body: body)
@@ -440,5 +445,15 @@ final class WandAPI {
             method: "GET",
             path: "/api/macos-dmg-update?currentVersion=\(percentEncode(currentVersion))"
         )
+    }
+
+    private func structuredRunner(for provider: String) -> String {
+        switch provider {
+        case "codex": return "codex-cli-exec"
+        case "opencode": return "opencode-cli-run"
+        case "grok": return "grok-cli-headless"
+        case "qoder": return "qoder-cli-print"
+        default: return "claude-cli-print"
+        }
     }
 }

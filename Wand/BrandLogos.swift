@@ -1,18 +1,21 @@
 import SwiftUI
 
 // MARK: - 品牌 logo 矢量 Shape
-// 路径数据来自 simple-icons（CC0），24x24 viewBox，由脚本从 SVG path 转换为
-// SwiftUI Path 命令（圆弧已展开为贝塞尔曲线）。填充色由调用方 .fill(color) 决定。
+// Claude / Codex / Grok 路径来自 simple-icons（CC0）的 24x24 viewBox；OpenCode / Qoder
+// 使用本地几何字形。SVG path 由脚本转换为 SwiftUI Path 命令（圆弧已展开为贝塞尔曲线）。
+// 填充色由调用方 .fill(color) 决定。
 // 用法：BrandLogoShape(provider: session.provider).fill(tint).frame(width: 21, height: 21)
 
-/// 按 provider 渲染品牌 logo：Claude 星芒 / Codex 六角结 / Grok 几何 G。
+/// 按 provider 渲染品牌 logo；OpenCode / Qoder 用清晰的产品字形，避免回落为 Claude 标记。
 struct BrandLogoShape: Shape {
     let provider: String?
 
     func path(in rect: CGRect) -> Path {
         switch provider {
         case "codex": return Self.codexPath(in: rect)
+        case "opencode": return Self.openCodePath(in: rect)
         case "grok": return Self.grokPath(in: rect)
+        case "qoder": return Self.qoderPath(in: rect)
         default: return Self.claudePath(in: rect)
         }
     }
@@ -308,6 +311,76 @@ struct BrandLogoShape: Shape {
         p.addCurve(to: point(2.69884, 29.826), control1: point(7.36924, 24.9165), control2: point(5.04257, 27.3598))
         p.addCurve(to: point(0.36364, 32.5), control1: point(1.86829, 30.7002), control2: point(1.0349, 31.5745))
         p.addLine(to: point(10.9474, 23.0341))
+        p.closeSubpath()
+        return p
+    }
+
+    /// OpenCode：代码括号字形。客户端不加载远程资源，保持列表图标清晰可辨。
+    private static func openCodePath(in rect: CGRect) -> Path {
+        let w = rect.width / 24.0
+        let h = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 9.2 * w, y: 3 * h))
+        p.addLine(to: CGPoint(x: 11.5 * w, y: 5.3 * h))
+        p.addLine(to: CGPoint(x: 5.1 * w, y: 12 * h))
+        p.addLine(to: CGPoint(x: 11.5 * w, y: 18.7 * h))
+        p.addLine(to: CGPoint(x: 9.2 * w, y: 21 * h))
+        p.addLine(to: CGPoint(x: 0.7 * w, y: 12 * h))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 14.8 * w, y: 3 * h))
+        p.addLine(to: CGPoint(x: 23.3 * w, y: 12 * h))
+        p.addLine(to: CGPoint(x: 14.8 * w, y: 21 * h))
+        p.addLine(to: CGPoint(x: 12.5 * w, y: 18.7 * h))
+        p.addLine(to: CGPoint(x: 18.9 * w, y: 12 * h))
+        p.addLine(to: CGPoint(x: 12.5 * w, y: 5.3 * h))
+        p.closeSubpath()
+        return p
+    }
+
+    /// Qoder：Q 字形，和 Claude 默认星芒明确区分。
+    private static func qoderPath(in rect: CGRect) -> Path {
+        let w = rect.width / 24.0
+        let h = rect.height / 24.0
+        var p = Path()
+        p.move(to: CGPoint(x: 12 * w, y: 1.5 * h))
+        p.addCurve(to: CGPoint(x: 22.5 * w, y: 12 * h),
+                   control1: CGPoint(x: 17.8 * w, y: 1.5 * h),
+                   control2: CGPoint(x: 22.5 * w, y: 6.2 * h))
+        p.addCurve(to: CGPoint(x: 19.7 * w, y: 19.2 * h),
+                   control1: CGPoint(x: 22.5 * w, y: 14.7 * h),
+                   control2: CGPoint(x: 21.4 * w, y: 17.3 * h))
+        p.addLine(to: CGPoint(x: 23.3 * w, y: 22.8 * h))
+        p.addLine(to: CGPoint(x: 20.1 * w, y: 24 * h))
+        p.addLine(to: CGPoint(x: 16.9 * w, y: 20.8 * h))
+        p.addCurve(to: CGPoint(x: 12 * w, y: 22.5 * h),
+                   control1: CGPoint(x: 15.4 * w, y: 21.9 * h),
+                   control2: CGPoint(x: 13.7 * w, y: 22.5 * h))
+        p.addCurve(to: CGPoint(x: 1.5 * w, y: 12 * h),
+                   control1: CGPoint(x: 6.2 * w, y: 22.5 * h),
+                   control2: CGPoint(x: 1.5 * w, y: 17.8 * h))
+        p.addCurve(to: CGPoint(x: 12 * w, y: 1.5 * h),
+                   control1: CGPoint(x: 1.5 * w, y: 6.2 * h),
+                   control2: CGPoint(x: 6.2 * w, y: 1.5 * h))
+        p.closeSubpath()
+        p.move(to: CGPoint(x: 12 * w, y: 6.2 * h))
+        p.addCurve(to: CGPoint(x: 17.8 * w, y: 12 * h),
+                   control1: CGPoint(x: 15.2 * w, y: 6.2 * h),
+                   control2: CGPoint(x: 17.8 * w, y: 8.8 * h))
+        p.addCurve(to: CGPoint(x: 16.6 * w, y: 15.5 * h),
+                   control1: CGPoint(x: 17.8 * w, y: 13.3 * h),
+                   control2: CGPoint(x: 17.4 * w, y: 14.5 * h))
+        p.addLine(to: CGPoint(x: 14.8 * w, y: 13.7 * h))
+        p.addLine(to: CGPoint(x: 11.6 * w, y: 14.9 * h))
+        p.addLine(to: CGPoint(x: 13.4 * w, y: 16.7 * h))
+        p.addCurve(to: CGPoint(x: 12 * w, y: 17.8 * h),
+                   control1: CGPoint(x: 13 * w, y: 17.4 * h),
+                   control2: CGPoint(x: 12.5 * w, y: 17.8 * h))
+        p.addCurve(to: CGPoint(x: 6.2 * w, y: 12 * h),
+                   control1: CGPoint(x: 8.8 * w, y: 17.8 * h),
+                   control2: CGPoint(x: 6.2 * w, y: 15.2 * h))
+        p.addCurve(to: CGPoint(x: 12 * w, y: 6.2 * h),
+                   control1: CGPoint(x: 6.2 * w, y: 8.8 * h),
+                   control2: CGPoint(x: 8.8 * w, y: 6.2 * h))
         p.closeSubpath()
         return p
     }

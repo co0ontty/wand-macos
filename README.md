@@ -96,7 +96,7 @@ macos/Wand/
 ├── MainShellView.swift        # 原生三栏主界面、会话列表、设置与网页版入口
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
-├── NewSessionView.swift       # Claude/Codex、会话类型、目录与权限模式
+├── NewSessionView.swift       # 五个 Provider、会话类型、目录与权限模式
 ├── GitQuickCommitView.swift   # 原生快捷提交面板
 ├── WandAPI.swift              # REST 客户端
 ├── WandSocket.swift           # WebSocket 订阅、重连与 resync

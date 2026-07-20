@@ -101,7 +101,16 @@ struct SessionGitStatusView: View {
         .background(Theme.background)
         .task { await reload() }
         .sheet(isPresented: $showQuickCommit) {
-            GitQuickCommitView(sessionId: sessionId, api: api)
+            GitQuickCommitView(
+                sessionId: sessionId,
+                api: api,
+                onCompleted: { _ in
+                    Task { await reload() }
+                },
+                onFailed: { _ in
+                    Task { await reload() }
+                }
+            )
         }
     }
 

@@ -32,6 +32,7 @@
 		A200000000000000000000C2 /* FileTreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D2 /* FileTreeView.swift */; };
 		A200000000000000000000C3 /* FilePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D3 /* FilePanelView.swift */; };
 		A200000000000000000000C4 /* TroubleshootingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D4 /* TroubleshootingView.swift */; };
+		A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D5 /* GitHubReleaseUpdater.swift */; };
 		A100000000000000000000C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -61,6 +62,7 @@
 		A200000000000000000000D2 /* FileTreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeView.swift; sourceTree = "<group>"; };
 		A200000000000000000000D3 /* FilePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePanelView.swift; sourceTree = "<group>"; };
 		A200000000000000000000D4 /* TroubleshootingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TroubleshootingView.swift; sourceTree = "<group>"; };
+		A200000000000000000000D5 /* GitHubReleaseUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubReleaseUpdater.swift; sourceTree = "<group>"; };
 		A100000000000000000000D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A100000000000000000000E1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A100000000000000000000E2 /* Wand.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Wand.entitlements; sourceTree = "<group>"; };
@@ -114,6 +116,7 @@
 				A200000000000000000000D2 /* FileTreeView.swift */,
 				A200000000000000000000D3 /* FilePanelView.swift */,
 				A200000000000000000000D4 /* TroubleshootingView.swift */,
+				A200000000000000000000D5 /* GitHubReleaseUpdater.swift */,
 				A100000000000000000000D1 /* Assets.xcassets */,
 				A100000000000000000000E1 /* Info.plist */,
 				A100000000000000000000E2 /* Wand.entitlements */,
@@ -224,6 +227,7 @@
 				A200000000000000000000C2 /* FileTreeView.swift in Sources */,
 				A200000000000000000000C3 /* FilePanelView.swift in Sources */,
 				A200000000000000000000C4 /* TroubleshootingView.swift in Sources */,
+				A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

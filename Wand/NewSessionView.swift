@@ -3,7 +3,7 @@ import SwiftUI
 /// 新建会话——布局对齐 Web 端「新对话」弹窗：区块头部(field-label) + 模式卡
 /// (Provider / 会话类型 / 模式) + 目录卡(输入 + 浏览 + 最近路径) + 底栏。
 /// 模式用五张选项卡(托管/全权限/自动编辑/标准/原生)替代 Picker 弹窗，跟 Web 的
-/// renderModeCards 一致；codex 锁定全权限（对齐 getSupportedModes）。
+/// renderModeCards 一致；Codex 锁定全权限（对齐 getSupportedModes）。
 struct NewSessionView: View {
     let api: WandAPI
     let onCreated: (SessionSnapshot) -> Void
@@ -18,7 +18,16 @@ struct NewSessionView: View {
     @State private var firstMessage = ""
     @State private var availableModels: [ModelInfo] = []
     @State private var codexModels: [ModelInfo] = []
-    @State private var serverDefaultModels = ProviderDefaultModels(claude: nil, codex: nil)
+    @State private var openCodeModels: [ModelInfo] = []
+    @State private var grokModels: [ModelInfo] = []
+    @State private var qoderModels: [ModelInfo] = []
+    @State private var serverDefaultModels = ProviderDefaultModels(
+        claude: nil,
+        codex: nil,
+        opencode: nil,
+        grok: nil,
+        qoder: nil
+    )
     @State private var selectedModel = ""
     @State private var thinkingEffort = "off"
     @State private var creating = false
@@ -33,27 +42,33 @@ struct NewSessionView: View {
     }
 
     enum Provider: String, CaseIterable, Identifiable {
-        case claude, codex, grok
+        case claude, codex, opencode, grok, qoder
         var id: String { rawValue }
         var label: String {
             switch self {
             case .claude: return "Claude"
             case .codex: return "Codex"
+            case .opencode: return "OpenCode"
             case .grok: return "Grok"
+            case .qoder: return "Qoder"
             }
         }
         var desc: String {
             switch self {
             case .claude: return "完整 Claude 会话能力"
             case .codex: return "结构化 JSONL 或 PTY 会话"
+            case .opencode: return "OpenCode 的流式或终端会话"
             case .grok: return "Grok Build 的流式或终端会话"
+            case .qoder: return "Qoder CLI 的流式或终端会话"
             }
         }
         var symbol: String {
             switch self {
             case .claude: return "sparkle"
             case .codex: return "command"
+            case .opencode: return "chevron.left.forwardslash.chevron.right"
             case .grok: return "g.circle"
+            case .qoder: return "q.circle"
             }
         }
     }
@@ -72,14 +87,22 @@ struct NewSessionView: View {
                 return "Codex JSONL 结构化聊天界面，支持多轮对话和工具调用展示。"
             case (.structured, .claude):
                 return "结构化聊天界面，支持多轮对话、流式输出和工具调用展示。"
+            case (.structured, .opencode):
+                return "OpenCode JSON 结构化聊天界面，支持多轮续聊和工具调用展示。"
             case (.structured, .grok):
                 return "Grok streaming-json 结构化聊天界面，支持多轮续聊与思考过程展示。"
+            case (.structured, .qoder):
+                return "Qoder stream-json 结构化聊天界面，支持多轮续聊和工具调用展示。"
             case (.pty, .codex):
                 return "Codex PTY 终端会话；terminal 是原始输出，chat 是解析后的阅读视图。"
             case (.pty, .claude):
                 return "原始 PTY 终端会话，支持持续交互、终端视图和权限流。"
+            case (.pty, .opencode):
+                return "OpenCode TUI 的原始 PTY 终端会话。"
             case (.pty, .grok):
                 return "Grok Build TUI 的原始 PTY 终端会话。"
+            case (.pty, .qoder):
+                return "Qoder CLI 的原始 PTY 终端会话。"
             }
         }
     }
@@ -135,10 +158,11 @@ struct NewSessionView: View {
             }
         }
 
-        /// 对齐 Web getSupportedModes：codex 只支持全权限。
+        /// 对齐 Web getSupportedModes：Codex 只支持全权限。
         static func supported(for tool: Provider) -> Set<Self> {
             if tool == .codex { return [.fullAccess] }
-            if tool == .grok { return [.managed, .fullAccess, .standard] }
+            if tool == .opencode || tool == .grok { return [.managed, .fullAccess, .standard] }
+            if tool == .qoder { return [.managed, .fullAccess, .autoEdit, .standard] }
             return Set(allCases)
         }
 
@@ -150,6 +174,21 @@ struct NewSessionView: View {
                 return self == .managed || self == .fullAccess
                     ? "Grok 将以 always-approve 运行；支持 TUI 与 streaming-json 结构化会话。"
                     : "Grok 使用自身权限确认；支持 TUI 与 streaming-json 结构化会话。"
+            }
+            if tool == .opencode {
+                return self == .managed || self == .fullAccess
+                    ? "OpenCode 将以自动确认模式运行；支持 TUI 与 JSON 结构化会话。"
+                    : "OpenCode 使用自身权限确认；支持 TUI 与 JSON 结构化会话。"
+            }
+            if tool == .qoder {
+                switch self {
+                case .managed, .fullAccess:
+                    return "Qoder 将以自动确认模式运行；支持 TUI 与 stream-json 结构化会话。"
+                case .autoEdit:
+                    return "Qoder 自动确认文件修改，其他操作保持 CLI 的权限流程。"
+                default:
+                    return "Qoder 使用自身权限确认；支持 TUI 与 stream-json 结构化会话。"
+                }
             }
             switch self {
             case .fullAccess:
@@ -170,7 +209,9 @@ struct NewSessionView: View {
         switch provider {
         case .claude: availableModels
         case .codex: codexModels
-        case .grok: []
+        case .opencode: openCodeModels
+        case .grok: grokModels
+        case .qoder: qoderModels
         }
     }
 
@@ -178,7 +219,7 @@ struct NewSessionView: View {
         thinkingEffortOptions(
             provider: provider.rawValue,
             selectedModel: selectedModel,
-            defaultModel: provider == .codex ? serverDefaultModels.codex : provider == .claude ? serverDefaultModels.claude : nil,
+            defaultModel: serverDefaultModels.model(for: provider.rawValue),
             models: providerModels
         )
     }
@@ -272,15 +313,12 @@ struct NewSessionView: View {
         .hideNativeTitleBar()
         .task { await loadInitial() }
         .onChange(of: provider) { newProvider in
-            // codex 切到仅支持全权限，当前 mode 不在支持集则回到 default。
+            // 切换到支持模式更少的 provider 时，回落到该 provider 的安全默认模式。
             if !supportedModes.contains(mode) {
                 mode = supportedModes.contains(.managed) ? .managed : (modeOptions.first ?? .fullAccess)
             }
-            // 切换 provider 后清空模型选择，让菜单显示新 provider 的选项。
-            if let first = providerModels.first {
-                selectedModel = ""
-                _ = first
-            }
+            // 切换 provider 后绝不复用上一个 provider 的模型 ID。
+            selectedModel = ""
         }
         .onChange(of: mode) { selected in
             if selected != .fullAccess { fullAccessAcknowledged = false }
@@ -363,7 +401,8 @@ struct NewSessionView: View {
     }
 
     private var providerCards: some View {
-        HStack(spacing: 10) {
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 5)
+        return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
             ForEach(Provider.allCases) { tool in
                 optionCard(
                     title: tool.label,
@@ -698,7 +737,9 @@ struct NewSessionView: View {
         let config = try? await api.serverConfig()
         switch config?.defaultProvider {
         case "codex": provider = .codex
+        case "opencode": provider = .opencode
         case "grok": provider = .grok
+        case "qoder": provider = .qoder
         default: provider = .claude
         }
         sessionType = config?.defaultSessionKind == "pty" ? .pty : .structured
@@ -711,14 +752,23 @@ struct NewSessionView: View {
         thinkingEffort = config?.defaultThinkingEffort ?? "off"
         serverDefaultModels = config?.defaultModels ?? ProviderDefaultModels(
             claude: config?.defaultModel,
-            codex: config?.defaultCodexModel
+            codex: config?.defaultCodexModel,
+            opencode: config?.defaultOpenCodeModel,
+            grok: config?.defaultGrokModel,
+            qoder: config?.defaultQoderModel
         )
         if let response = try? await api.models() {
             availableModels = response.models
             codexModels = response.codexModels
+            openCodeModels = response.opencodeModels ?? []
+            grokModels = response.grokModels ?? []
+            qoderModels = response.qoderModels ?? []
             serverDefaultModels = response.defaultModels ?? ProviderDefaultModels(
                 claude: response.defaultModel,
-                codex: response.defaultCodexModel
+                codex: response.defaultCodexModel,
+                opencode: response.defaultOpenCodeModel,
+                grok: response.defaultGrokModel,
+                qoder: response.defaultQoderModel
             )
         }
         recentPaths = (try? await api.recentPaths()) ?? []

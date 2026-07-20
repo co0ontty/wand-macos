@@ -14,6 +14,9 @@ struct WandApp: App {
         WindowGroup("Wand") {
             ContentView()
                 .environmentObject(store)
+                // 原生工具栏已经呈现 Wand 品牌；隐藏系统重复的窗口标题，
+                // 避免顶部同时出现两个 “Wand”。
+                .hideNativeWindowTitle()
                 .frame(
                     // 横屏布局:ideal 1440 × 880,最小 900 × 600;
                     // maxWidth / maxHeight 显式设 .infinity 让窗口可自由拖大/缩。
@@ -35,6 +38,9 @@ struct WandApp: App {
 }
 
 final class WandAppDelegate: NSObject, NSApplicationDelegate {
+    private let updateInstaller = DmgInstaller()
+    private var remindedVersion: String?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 等应用完成激活、主窗口可见后再触发；在 SwiftUI App.init 阶段访问网络时，
         // 系统权限 UI 还没有可靠的呈现上下文，新安装的 App 可能完全不弹框。
@@ -46,6 +52,19 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
         // 避免在启动过渡阶段误判临时窗口。
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             self.closeDuplicateMainWindows()
+        }
+
+        // 主窗口建立后后台查一次；24 小时内已查过会自动跳过。发现新版时以
+        // 原生提醒呈现，不依赖用户是否已连接某一台 Wand 服务。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            Task { @MainActor in
+                guard let self,
+                      let result = await GitHubReleaseUpdater.shared.checkOnLaunchIfNeeded(),
+                      case let .updateAvailable(update) = result else {
+                    return
+                }
+                self.presentUpdateReminder(for: update)
+            }
         }
     }
 
@@ -68,6 +87,54 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
             ?? mainWindows[0]
         for window in mainWindows where window !== retainedWindow {
             window.close()
+        }
+    }
+
+    private func presentUpdateReminder(for update: GitHubReleaseUpdater.Update) {
+        guard remindedVersion != update.latestVersion else { return }
+        remindedVersion = update.latestVersion
+
+        let alert = NSAlert()
+        alert.messageText = "发现 Wand 新版本 v\(update.latestVersion)"
+        alert.alertStyle = .informational
+
+        if let asset = update.dmgAsset {
+            let size = ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)
+            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n新版已发布到 GitHub Release（\(size)）。下载后会自动挂载 DMG，按提示将 Wand.app 拖入 Applications 即可。"
+            alert.addButton(withTitle: "下载并打开 DMG")
+            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: "稍后提醒")
+        } else {
+            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n该 GitHub Release 未包含 macOS DMG，请在 Release 页面手动下载。"
+            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: "稍后提醒")
+        }
+
+        let handleResponse: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self else { return }
+            if update.dmgAsset != nil {
+                switch response {
+                case .alertFirstButtonReturn:
+                    guard let asset = update.dmgAsset else { return }
+                    self.updateInstaller.downloadAndMount(
+                        urlString: asset.downloadURL.absoluteString,
+                        fileName: asset.name,
+                        presentingWindow: NSApp.keyWindow
+                    )
+                case .alertSecondButtonReturn:
+                    NSWorkspace.shared.open(update.releaseURL)
+                default:
+                    break
+                }
+            } else if response == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(update.releaseURL)
+            }
+        }
+
+        if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeKey }) {
+            alert.beginSheetModal(for: window, completionHandler: handleResponse)
+        } else {
+            handleResponse(alert.runModal())
         }
     }
 }

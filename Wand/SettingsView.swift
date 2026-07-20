@@ -16,9 +16,7 @@ struct SettingsView: View {
     @State private var selectedPane: SettingsPane = .connection
     @State private var showTroubleshooting = false
     @State private var permissionDenied: Bool?
-    @State private var updateInfo: MacUpdateInfo?
-    @State private var updateError: String?
-    @State private var checkingUpdate = false
+    @ObservedObject private var releaseUpdater = GitHubReleaseUpdater.shared
     private let dmgInstaller = DmgInstaller()
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
@@ -37,7 +35,6 @@ struct SettingsView: View {
         .task {
             serverVersion = (try? await api.serverConfig())?.currentVersion
             LocalNetworkPermission.probeDenied { permissionDenied = $0 }
-            await checkForUpdate()
         }
         .sheet(isPresented: $showTroubleshooting) {
             TroubleshootingView(
@@ -65,15 +62,22 @@ struct SettingsView: View {
 
     private var settingsHeader: some View {
         HStack(spacing: 12) {
+            WandBrandMark(size: 38)
             VStack(alignment: .leading, spacing: 2) {
-                Text("设置")
+                Text("系统设置")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
-                Text("此 Mac 上的 Wand")
+                Text("连接、设备和工作流偏好")
                     .font(.system(size: 11))
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer()
+            Text(appVersion)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(Theme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Theme.surface.opacity(0.75)))
             Button("完成") { dismiss() }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.brand)
@@ -111,6 +115,7 @@ struct SettingsView: View {
     private var detailPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                settingsOverview
                 detailHeader
                 switch selectedPane {
                 case .connection:
@@ -140,6 +145,39 @@ struct SettingsView: View {
                 .font(.system(size: 13))
                 .foregroundColor(Theme.textSecondary)
         }
+    }
+
+    /// 与 Android 的 SettingsOverview 对齐：任何设置子页都先能判断这台设备的状态。
+    private var settingsOverview: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(Theme.brand)
+                .frame(width: 36, height: 36)
+                .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.brand.opacity(0.13)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("此 Mac 上的 Wand")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Text(serverURL.host ?? serverURL.absoluteString)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 10)
+            settingsStatePill(token?.isEmpty == false ? "已安全连接" : "已连接", color: Theme.success)
+            settingsStatePill("macOS", color: Theme.brand)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .fill(Theme.surfaceElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                        .stroke(Theme.border.opacity(0.72), lineWidth: 0.75)
+                )
+        )
     }
 
     private var connectionContent: some View {
@@ -220,47 +258,88 @@ struct SettingsView: View {
 
     private var aboutContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-        settingsCard("Wand") {
-            HStack(spacing: 14) {
-                WandBrandMark(size: 48)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Wand")
-                        .font(.system(size: 17, weight: .semibold))
+            settingsCard("Wand") {
+                HStack(spacing: 14) {
+                    WandBrandMark(size: 48)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Wand")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(Theme.textPrimary)
+                        Text(appVersion)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                    Spacer()
+                }
+                rowDivider
+                Link(destination: URL(string: "https://github.com/co0ontty/wand")!) {
+                    Label("GitHub 仓库", systemImage: "link")
+                        .font(.system(size: 13))
+                }
+            }
+
+            updateControlDeck
+        }
+    }
+
+    /// 桌面端直接查询官方 GitHub Release，而不是依赖当前连接的 Wand 服务。
+    /// 这样即使服务离线或切换服务器，更新入口仍然可用。
+    private var updateControlDeck: some View {
+        settingsCard("保持在最新版本", description: "每天自动从 GitHub Release 检查；强制检查会忽略间隔立即请求。") {
+            HStack(spacing: 11) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.success)
+                    .frame(width: 36, height: 36)
+                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.success.opacity(0.13)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(releaseUpdater.isChecking ? "正在检查 GitHub Release" : "当前 \(appVersion)")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
-                    Text(appVersion)
-                        .font(.system(size: 12, design: .monospaced))
+                    Text(releaseUpdater.availableUpdate != nil
+                        ? "新版本已准备好下载"
+                        : "通过 GitHub Release 安装新版客户端")
+                        .font(.system(size: 11))
                         .foregroundColor(Theme.textSecondary)
                 }
                 Spacer()
             }
-            rowDivider
-            Link(destination: URL(string: "https://github.com/co0ontty/wand")!) {
-                Label("GitHub 仓库", systemImage: "link")
-                    .font(.system(size: 13))
-            }
-        }
-        settingsCard("软件更新", description: "直接从当前 Wand 服务检查并下载 macOS 客户端更新。") {
-            if checkingUpdate {
+            if releaseUpdater.isChecking {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在检查更新…") }
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
-            } else if let updateError {
-                Text(updateError).font(.system(size: 12)).foregroundColor(Theme.danger)
-            } else if let updateInfo, updateInfo.updateAvailable {
-                Text("发现 v\(updateInfo.latestVersion ?? "新版")")
+            } else if let update = releaseUpdater.availableUpdate {
+                Text("发现 v\(update.latestVersion)")
                     .font(.system(size: 13, weight: .semibold))
-                if let size = updateInfo.size {
-                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                if let asset = update.dmgAsset {
+                    Text("GitHub Release · \(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file))")
                         .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                } else {
+                    Text("该 Release 未附带 macOS DMG，可在 GitHub 页面手动下载。")
+                        .font(.system(size: 11)).foregroundColor(Theme.warning)
                 }
-                Button("下载并打开 DMG") { downloadUpdate(updateInfo) }
-                    .buttonStyle(.borderedProminent).tint(Theme.brand)
+                if let updateError = releaseUpdater.lastError {
+                    Text(updateError).font(.system(size: 12)).foregroundColor(Theme.danger)
+                }
+            } else if let updateError = releaseUpdater.lastError {
+                Text(updateError).font(.system(size: 12)).foregroundColor(Theme.danger)
             } else {
-                Text("当前已是最新版本")
+                Text(releaseUpdater.lastSuccessfulCheck == nil ? "将自动检查 GitHub Release" : "当前已是最新版本")
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
             }
-            Button("重新检查") { Task { await checkForUpdate() } }
-                .buttonStyle(.bordered)
-        }
+            HStack(spacing: 8) {
+                Button("强制检查更新") { Task { _ = await releaseUpdater.checkManually() } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.brand)
+                    .disabled(releaseUpdater.isChecking)
+                if let update = releaseUpdater.availableUpdate {
+                    if update.dmgAsset != nil {
+                        Button("下载并打开 DMG") { downloadUpdate(update) }
+                            .buttonStyle(.bordered)
+                    }
+                    Button("查看 Release") { NSWorkspace.shared.open(update.releaseURL) }
+                        .buttonStyle(.bordered)
+                }
+            }
         }
     }
 
@@ -277,26 +356,13 @@ struct SettingsView: View {
         return "macOS 不提供可直接读取的授权状态；连接异常时可用故障排查进一步检测。"
     }
 
-    private func checkForUpdate() async {
-        checkingUpdate = true
-        updateError = nil
-        do { updateInfo = try await api.macUpdate(currentVersion: rawAppVersion) }
-        catch { updateError = "检查更新失败：\(error.localizedDescription)" }
-        checkingUpdate = false
-    }
-
-    private func downloadUpdate(_ info: MacUpdateInfo) {
-        guard let url = info.downloadUrl else { return }
-        dmgInstaller.serverURL = serverURL
+    private func downloadUpdate(_ update: GitHubReleaseUpdater.Update) {
+        guard let asset = update.dmgAsset else { return }
         dmgInstaller.downloadAndMount(
-            urlString: url,
-            fileName: info.fileName ?? "wand-update.dmg",
+            urlString: asset.downloadURL.absoluteString,
+            fileName: asset.name,
             presentingWindow: NSApp.keyWindow
         )
-    }
-
-    private var rawAppVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }
 
     private var localNetworkDescription: String {
@@ -337,6 +403,19 @@ struct SettingsView: View {
                         .stroke(Theme.border.opacity(0.72), lineWidth: 0.75)
                 )
         )
+    }
+
+    private func settingsStatePill(_ label: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(label).lineLimit(1)
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundColor(Theme.textPrimary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(color.opacity(0.10)))
+        .overlay(Capsule().stroke(color.opacity(0.18), lineWidth: 0.6))
     }
 
     private var appVersion: String {

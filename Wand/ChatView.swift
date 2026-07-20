@@ -93,7 +93,21 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(isPresented: $showQuickCommit) {
-            GitQuickCommitView(sessionId: sessionId, api: api)
+            GitQuickCommitView(
+                sessionId: sessionId,
+                api: api,
+                onRunning: {
+                    store.toast = "正在提交 Git 改动…"
+                },
+                onCompleted: { message in
+                    store.toast = message
+                    refreshGitStatus()
+                },
+                onFailed: { message in
+                    store.toast = message
+                    refreshGitStatus()
+                }
+            )
         }
         .sheet(isPresented: $showTroubleshooting) {
             TroubleshootingView(
@@ -120,57 +134,12 @@ struct ChatView: View {
         }
         .onDisappear { store.shutdown() }
         .overlay(alignment: .top) {
-            VStack(spacing: 8) {
-                sessionStatusIsland
-                toastView
-            }
-            .padding(.top, 8)
+            toastView
+                .padding(.top, 8)
         }
     }
 
     // MARK: - 消息列表
-
-    @ViewBuilder private var sessionStatusIsland: some View {
-        if store.isResponding || store.permissionBlocked {
-            let permission = store.permissionBlocked
-            let tint = permission ? Color.orange : Theme.brand
-            HStack(spacing: 9) {
-                ZStack {
-                    Circle().fill(tint.opacity(0.18))
-                    if permission {
-                        Image(systemName: "lock.shield.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(tint)
-                    } else {
-                        ProgressView().controlSize(.mini).tint(tint)
-                    }
-                }
-                .frame(width: 22, height: 22)
-
-                Text(store.currentTaskTitle ?? (permission ? "需要你的确认" : "正在生成回复"))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .lineLimit(1)
-                    .frame(maxWidth: 320, alignment: .leading)
-
-                if !store.queuedMessages.isEmpty {
-                    Text("+\(store.queuedMessages.count)")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundColor(tint)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-            .background(Capsule().fill(Color.black.opacity(0.72)))
-            .overlay(Capsule().stroke(Color.white.opacity(0.13), lineWidth: 1))
-            .shadow(color: Color.black.opacity(0.22), radius: 14, y: 6)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(permission ? "等待授权" : "回复中")
-            .transition(.scale(scale: 0.94).combined(with: .opacity))
-            .animation(.interactiveSpring(response: 0.34, dampingFraction: 1), value: permission)
-        }
-    }
 
     private var messageList: some View {
         ScrollViewReader { proxy in

@@ -372,6 +372,7 @@ struct SessionSnapshot: Decodable, Identifiable {
         case "codex": return "Codex"
         case "grok": return "Grok"
         case "opencode": return "OpenCode"
+        case "qoder": return "Qoder"
         default: return "Claude"
         }
     }
@@ -617,21 +618,48 @@ struct ThinkingEffortSlider: View {
 struct ModelsResponse: Decodable {
     let models: [ModelInfo]
     let codexModels: [ModelInfo]
+    /// OpenCode / Grok / Qoder 是服务端扩展字段；旧服务端没有时仍可创建会话，
+    /// 仅在模型菜单中回落到“默认”。
+    let opencodeModels: [ModelInfo]?
+    let grokModels: [ModelInfo]?
+    let qoderModels: [ModelInfo]?
     let defaultModel: String?
     let defaultCodexModel: String?
+    let defaultOpenCodeModel: String?
+    let defaultGrokModel: String?
+    let defaultQoderModel: String?
     let defaultModels: ProviderDefaultModels?
 
     func defaultModelId(for provider: String) -> String {
-        if provider == "codex" {
-            return defaultModels?.codex ?? defaultCodexModel ?? ""
+        if let configured = defaultModels?.model(for: provider), !configured.isEmpty {
+            return configured
         }
-        return defaultModels?.claude ?? defaultModel ?? ""
+        switch provider {
+        case "codex": return defaultCodexModel ?? ""
+        case "opencode": return defaultOpenCodeModel ?? ""
+        case "grok": return defaultGrokModel ?? ""
+        case "qoder": return defaultQoderModel ?? ""
+        default: return defaultModel ?? ""
+        }
     }
 }
 
 struct ProviderDefaultModels: Decodable {
     let claude: String?
     let codex: String?
+    let opencode: String?
+    let grok: String?
+    let qoder: String?
+
+    func model(for provider: String) -> String? {
+        switch provider {
+        case "codex": return codex
+        case "opencode": return opencode
+        case "grok": return grok
+        case "qoder": return qoder
+        default: return claude
+        }
+    }
 }
 
 struct UploadedFile: Decodable {
@@ -671,6 +699,9 @@ struct ServerConfigInfo: Decodable {
     let defaultMode: String?
     let defaultModel: String?
     let defaultCodexModel: String?
+    let defaultOpenCodeModel: String?
+    let defaultGrokModel: String?
+    let defaultQoderModel: String?
     let defaultModels: ProviderDefaultModels?
     let defaultThinkingEffort: String?
     let currentVersion: String?

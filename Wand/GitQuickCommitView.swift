@@ -10,6 +10,9 @@ import SwiftUI
 struct GitQuickCommitView: View {
     let sessionId: String
     let api: WandAPI
+    let onRunning: () -> Void
+    let onCompleted: (String) -> Void
+    let onFailed: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -57,6 +60,20 @@ struct GitQuickCommitView: View {
         var submoduleCount: Int
     }
 
+    init(
+        sessionId: String,
+        api: WandAPI,
+        onRunning: @escaping () -> Void = {},
+        onCompleted: @escaping (String) -> Void = { _ in },
+        onFailed: @escaping (String) -> Void = { _ in }
+    ) {
+        self.sessionId = sessionId
+        self.api = api
+        self.onRunning = onRunning
+        self.onCompleted = onCompleted
+        self.onFailed = onFailed
+    }
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -78,7 +95,6 @@ struct GitQuickCommitView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(outcome == nil ? "取消" : "完成") { dismiss() }
                         .foregroundColor(Theme.textSecondary)
-                        .disabled(committing || pushing)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     if committing || pushing {
@@ -87,7 +103,6 @@ struct GitQuickCommitView: View {
                 }
             }
         }
-        .interactiveDismissDisabled(committing || pushing)
         .frame(minWidth: 720, minHeight: 680)
         .task { await loadStatus(force: true) }
     }
@@ -172,9 +187,11 @@ struct GitQuickCommitView: View {
     private var hasChanges: Bool { (status?.modifiedCount ?? 0) > 0 }
 
     @ViewBuilder private var formPanel: some View {
-        // "New" + AI 预生成按钮
+        commitWorkspaceLens
+
+        // 提交信息 + AI 预生成按钮
         HStack {
-            Text("New")
+            Text("提交信息")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Theme.textSecondary)
             Spacer()
@@ -198,6 +215,9 @@ struct GitQuickCommitView: View {
         // Commit：上一笔 → 新 message
         VStack(alignment: .leading, spacing: 6) {
             pairOldLine(label: "Commit", old: oldCommitLine)
+            Text("新的 Commit 信息")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Theme.textSecondary)
             TextField("留空由 AI 根据改动生成", text: $message)
                 .font(.system(size: 15))
                 .textFieldStyle(.plain)
@@ -213,6 +233,9 @@ struct GitQuickCommitView: View {
         // Tag：最新 tag → 新 tag
         VStack(alignment: .leading, spacing: 6) {
             pairOldLine(label: "Tag", old: status?.latestTag ?? "无 tag")
+            Text("Tag（可选）")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Theme.textSecondary)
             TextField("留空则 AI 生成（拖入 Tag 球时生效）", text: $tagName)
                 .font(.system(size: 14, design: .monospaced))
                 .textFieldStyle(.plain)
@@ -289,6 +312,47 @@ struct GitQuickCommitView: View {
         Self.joinedOr([status?.lastCommit?.shortHash, status?.lastCommit?.subject], fallback: "无 commit")
     }
 
+    /// 提交前先交代当前分支、改动和待推送状态，避免表单脱离工作区上下文。
+    private var commitWorkspaceLens: some View {
+        let changeCount = status?.modifiedCount ?? 0
+        let ahead = status?.ahead ?? 0
+        let hasPendingChanges = changeCount > 0
+        let tone: Color = hasPendingChanges ? Theme.brand : Theme.success
+        let stateText = hasPendingChanges
+            ? "\(changeCount) 个改动待处理"
+            : (ahead > 0 ? "\(ahead) 个 commit 待推送" : "工作区干净")
+
+        return HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(tone)
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(tone.opacity(0.13)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status?.branch ?? "未识别分支")
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(stateText)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer(minLength: 0)
+            if ahead > 0 && hasPendingChanges {
+                Text("↑\(ahead)")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(Theme.success)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Theme.success.opacity(0.12)))
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.surface))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(tone.opacity(0.30), lineWidth: 1))
+    }
+
     /// 拼接非空片段；全空时回退占位文案。
     private static func joinedOr(_ parts: [String?], fallback: String) -> String {
         let cleaned = parts.compactMap { $0 }.filter { !$0.isEmpty }
@@ -349,7 +413,6 @@ struct GitQuickCommitView: View {
                     Button("关闭") { dismiss() }
                         .font(.system(size: 13))
                         .foregroundColor(Theme.textSecondary)
-                        .disabled(pushing)
                     Spacer()
                     if r.pushed {
                         Label("已推送", systemImage: "icloud.and.arrow.up")
@@ -446,6 +509,7 @@ struct GitQuickCommitView: View {
         let before = status
 
         committing = true
+        onRunning()
         submoduleIntent = includeSubmodule
         autoGenerating = msg.isEmpty || (withTag && userTag.isEmpty)
         errorMessage = nil
@@ -472,15 +536,18 @@ struct GitQuickCommitView: View {
                     oldCommitSubject: before?.lastCommit?.subject ?? "",
                     submoduleCount: r.submoduleCommits?.count ?? 0
                 )
-                if push && o.pushError == nil {
-                    // 提交 + 推送一步到位：直接收面板。
+                if o.pushError == nil {
+                    onCompleted(summaryText(o) + (push ? "，已推送" : ""))
+                    // 请求继续在后台收尾；用户无需停在模态层等待网络往返。
                     dismiss()
                 } else {
                     outcome = o
+                    onFailed("推送失败：\(o.pushError ?? "未知错误")")
                     await loadStatus(force: true)
                 }
             } catch {
                 errorMessage = error.localizedDescription
+                onFailed(error.localizedDescription)
             }
             committing = false
             autoGenerating = false
@@ -503,12 +570,15 @@ struct GitQuickCommitView: View {
                 )
                 if let err = res.error, !err.isEmpty {
                     pushError = err
+                    onFailed("推送失败：\(err)")
                 } else {
                     outcome?.pushed = true
+                    onCompleted("已推送 commits")
                     dismiss()
                 }
             } catch {
                 pushError = error.localizedDescription
+                onFailed(error.localizedDescription)
             }
             pushing = false
         }
@@ -518,6 +588,7 @@ struct GitQuickCommitView: View {
     private func pushCommitsOnly() {
         guard !pushing else { return }
         pushing = true
+        onRunning()
         pushError = nil
         Task {
             do {
@@ -530,14 +601,24 @@ struct GitQuickCommitView: View {
                 )
                 if let err = res.error, !err.isEmpty {
                     pushError = err
+                    onFailed(err)
                 } else {
+                    onCompleted("已推送 commits")
                     dismiss()
                 }
             } catch {
                 pushError = error.localizedDescription
+                onFailed(error.localizedDescription)
             }
             pushing = false
         }
+    }
+
+    private func summaryText(_ outcome: CommitOutcome) -> String {
+        let subPrefix = outcome.submoduleCount > 0 ? "已先提交 \(outcome.submoduleCount) 个 submodule，" : ""
+        return subPrefix + "已提交"
+            + (outcome.commitHash.isEmpty ? "" : " \(outcome.commitHash)")
+            + (outcome.tagName.isEmpty ? "" : "，已打 Tag \(outcome.tagName)")
     }
 }
 

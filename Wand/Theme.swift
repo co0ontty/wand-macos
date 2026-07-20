@@ -53,6 +53,28 @@ enum Theme {
         light: rgb(0.290, 0.435, 0.647),
         dark: rgb(0.494, 0.612, 0.769)
     ) // #4A6FA5 / #7E9CC4
+    static let openCode = dynamic(
+        light: rgb(0.333, 0.408, 0.655),
+        dark: rgb(0.518, 0.584, 0.824)
+    )
+    static let grok = dynamic(
+        light: rgb(0.318, 0.337, 0.365),
+        dark: rgb(0.722, 0.737, 0.757)
+    )
+    static let qoder = dynamic(
+        light: rgb(0.365, 0.455, 0.400),
+        dark: rgb(0.529, 0.675, 0.576)
+    )
+
+    static func providerColor(_ provider: String?) -> Color {
+        switch provider {
+        case "codex": return codex
+        case "opencode": return openCode
+        case "grok": return grok
+        case "qoder": return qoder
+        default: return wandAccent
+        }
+    }
 
     // MARK: - 背景层(对齐 web --bg-*)
 
@@ -84,6 +106,11 @@ enum Theme {
         dark: rgb(0.239, 0.216, 0.188)
     ) // #D9D2C9 / #3D3730
     static let borderFocus = rgbA(0.773, 0.396, 0.239, 0.50)    // rgba(197,101,61,0.5)
+    /// 玻璃表面的受光边缘。只用于结构性面板，避免每个控件都抢视觉注意力。
+    static let glassHighlight = dynamic(
+        light: rgbA(1.0, 1.0, 1.0, 0.72),
+        dark: rgbA(1.0, 0.960, 0.910, 0.17)
+    )
 
     // MARK: - 文本(对齐 web --text-*)
 
@@ -154,7 +181,7 @@ enum Theme {
     /// 液态玻璃胶囊:顶栏 / 面板 / 会话头卡片背景。
     /// macOS 26+ 直接使用 SwiftUI Liquid Glass;老系统退化为半透明 surface。
     /// 视图层用 `View.wandGlass(...)` 直接挂即可。
-    enum Glass {
+    enum Glass: Equatable {
         case chrome           // 顶栏 / 工具条(高不透明,放在最顶)
         case panel            // 侧栏 / 输入栏(中等不透明)
 
@@ -171,7 +198,7 @@ enum Theme {
             case .chrome:
                 return .regular.tint(Theme.wandAccent.opacity(0.035))
             case .panel:
-                return .regular.tint(Theme.wandAccent.opacity(0.06))
+                return .regular.tint(Theme.wandAccent.opacity(0.045))
             }
         }
     }
@@ -209,21 +236,57 @@ extension View {
     func wandGlassCard(cornerRadius: CGFloat = 16) -> some View {
         modifier(WandGlassCardModifier(cornerRadius: cornerRadius))
     }
+
+    func wandSelectionSurface(
+        isSelected: Bool,
+        isHovered: Bool,
+        cornerRadius: CGFloat = 12
+    ) -> some View {
+        modifier(
+            WandSelectionSurfaceModifier(
+                isSelected: isSelected,
+                isHovered: isHovered,
+                cornerRadius: cornerRadius
+            )
+        )
+    }
 }
 
 struct WandAmbientBackground: View {
     var body: some View {
         GeometryReader { proxy in
+            let canvas = max(proxy.size.width, proxy.size.height)
             ZStack {
                 Theme.background
+                // 静态的环境光让玻璃层有可折射的“内容”，但不做环境呼吸动画：
+                // 这块背景会始终存在于高频生产力界面中，安静比显眼更重要。
                 Circle()
-                    .fill(Theme.wandAccent.opacity(0.034))
-                    .frame(width: max(proxy.size.width, proxy.size.height) * 0.84)
-                    .offset(x: -proxy.size.width * 0.38, y: -proxy.size.height * 0.38)
+                    .fill(
+                        RadialGradient(
+                            colors: [Theme.wandAccent.opacity(0.11), Theme.wandAccent.opacity(0)],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: canvas * 0.48
+                        )
+                    )
+                    .frame(width: canvas * 1.18, height: canvas * 1.18)
+                    .offset(x: -proxy.size.width * 0.37, y: -proxy.size.height * 0.46)
                 Circle()
-                    .fill(Theme.textMuted.opacity(0.024))
-                    .frame(width: max(proxy.size.width, proxy.size.height) * 0.60)
-                    .offset(x: proxy.size.width * 0.48, y: -proxy.size.height * 0.04)
+                    .fill(
+                        RadialGradient(
+                            colors: [Theme.codex.opacity(0.075), Theme.codex.opacity(0)],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: canvas * 0.37
+                        )
+                    )
+                    .frame(width: canvas * 0.90, height: canvas * 0.90)
+                    .offset(x: proxy.size.width * 0.43, y: -proxy.size.height * 0.12)
+                LinearGradient(
+                    colors: [Color.white.opacity(0.055), .clear, Color.black.opacity(0.025)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
         }
         .ignoresSafeArea()
@@ -299,11 +362,12 @@ private struct WandGlassModifier: ViewModifier {
                 .overlay(shape.stroke(Theme.border, lineWidth: highContrast ? 1.5 : 1))
         } else if #available(macOS 26.0, *) {
             content.glassEffect(kind.nativeEffect, in: shape)
+                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
         } else {
             content
                 .background(.ultraThinMaterial, in: shape)
-                .background(shape.fill(Theme.surface.opacity(0.56)))
-                .overlay(shape.stroke(Color.white.opacity(0.14), lineWidth: 0.5))
+                .background(shape.fill(Theme.surface.opacity(kind == .chrome ? 0.64 : 0.48)))
+                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
         }
     }
 }
@@ -316,13 +380,60 @@ private struct WandGlassCardModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let highContrast = contrast == .increased
+
+        if reduceTransparency || highContrast {
+            content
+                .background(shape.fill(Theme.surfaceElevated))
+                .overlay(shape.stroke(Theme.border, lineWidth: highContrast ? 1.5 : 1))
+        } else if #available(macOS 26.0, *) {
+            content
+                .glassEffect(.regular.tint(Theme.wandAccent.opacity(0.025)), in: shape)
+                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
+                .shadow(color: Theme.ShadowToken.md.color.opacity(0.56), radius: 12, y: 4)
+        } else {
+            content
+                .background(.thinMaterial, in: shape)
+                .background(shape.fill(Theme.surfaceElevated.opacity(0.56)))
+                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
+                .shadow(color: Theme.ShadowToken.md.color.opacity(0.52), radius: 12, y: 4)
+        }
+    }
+}
+
+/// 会话列表这类位于结构性玻璃面板内的高频行，不再嵌套一层玻璃。
+/// 只用色彩、描边与非常轻的阴影表达焦点，保持列表快速、易扫读。
+private struct WandSelectionSurfaceModifier: ViewModifier {
+    let isSelected: Bool
+    let isHovered: Bool
+    let cornerRadius: CGFloat
+
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let highContrast = contrast == .increased
+        let fill: Color = {
+            if isSelected { return Theme.wandAccent.opacity(highContrast ? 0.20 : 0.13) }
+            if isHovered { return Theme.surfaceElevated.opacity(reduceTransparency ? 1 : 0.76) }
+            return .clear
+        }()
+
         content
-            .background(shape.fill(Theme.surfaceElevated.opacity(reduceTransparency || contrast == .increased ? 1 : 0.92)))
+            .background(shape.fill(fill))
             .overlay(
                 shape.stroke(
-                    contrast == .increased ? Theme.textMuted : Theme.border,
-                    lineWidth: contrast == .increased ? 1.5 : 1
+                    isSelected
+                        ? Theme.wandAccent.opacity(highContrast ? 0.9 : 0.48)
+                        : Color(nsColor: Theme.borderSubtle).opacity(isHovered ? 1 : 0),
+                    lineWidth: isSelected || highContrast && isHovered ? 1 : 0.5
                 )
+            )
+            .shadow(
+                color: isSelected && !highContrast ? Theme.wandAccent.opacity(0.10) : .clear,
+                radius: 8,
+                y: 3
             )
     }
 }
@@ -358,6 +469,12 @@ extension View {
     /// 老 SDK 不支持 NSWindow.titlebarAppearsTransparent/titleVisibility 时静默降级。
     func hideNativeTitleBar() -> some View {
         background(NativeTitleBarHider())
+    }
+
+    /// 主窗口保留 traffic lights 与统一工具栏，只隐藏系统重复渲染的窗口标题。
+    /// 与 `hideNativeTitleBar()` 不同，这里不改变窗口拖拽策略，也不影响 sheet。
+    func hideNativeWindowTitle() -> some View {
+        background(NativeWindowTitleHider())
     }
 
     /// 挂载后整块 view 都变成可拖动区,拖动时通过 NSWindow.setFrameOrigin 移动窗口。
@@ -479,6 +596,30 @@ private final class SheetTitleBarNSView: NSView {
     }
 }
 
+/// 主窗口的标题可见性需要落到 AppKit；SwiftUI 的 WindowGroup 没有对应修饰符。
+private struct NativeWindowTitleHider: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        MainWindowTitleNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? MainWindowTitleNSView)?.applyToWindow()
+    }
+}
+
+private final class MainWindowTitleNSView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyToWindow()
+    }
+
+    func applyToWindow() {
+        guard let window, window.sheetParent == nil, window.styleMask.contains(.titled) else { return }
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+    }
+}
+
 // MARK: - 按钮样式
 
 /// 实心珊瑚色主按钮,禁用态自动变淡。
@@ -491,6 +632,13 @@ struct WandPrimaryButtonStyle: ButtonStyle {
     struct Body: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        private var pressAnimation: Animation? {
+            reduceMotion
+                ? nil
+                : .interactiveSpring(response: 0.22, dampingFraction: 0.88, blendDuration: 0.08)
+        }
 
         var body: some View {
             configuration.label
@@ -503,7 +651,14 @@ struct WandPrimaryButtonStyle: ButtonStyle {
                         .fill(isEnabled ? Theme.wandAccent : Theme.wandAccent.opacity(0.45))
                 )
                 .brightness(configuration.isPressed ? -0.06 : 0)
+                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
+                .shadow(
+                    color: isEnabled && !configuration.isPressed ? Theme.wandAccent.opacity(0.16) : .clear,
+                    radius: 8,
+                    y: 3
+                )
                 .contentShape(Rectangle())
+                .animation(pressAnimation, value: configuration.isPressed)
         }
     }
 }
@@ -518,6 +673,13 @@ struct WandSecondaryButtonStyle: ButtonStyle {
     struct Body: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        private var pressAnimation: Animation? {
+            reduceMotion
+                ? nil
+                : .interactiveSpring(response: 0.22, dampingFraction: 0.9, blendDuration: 0.08)
+        }
 
         var body: some View {
             configuration.label
@@ -533,8 +695,62 @@ struct WandSecondaryButtonStyle: ButtonStyle {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Theme.border, lineWidth: 1)
                 )
-                .opacity(configuration.isPressed ? 0.7 : 1)
+                .opacity(configuration.isPressed ? 0.78 : 1)
+                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
                 .contentShape(Rectangle())
+                .animation(pressAnimation, value: configuration.isPressed)
+        }
+    }
+}
+
+/// 工具栏和面板标题里的图标按钮。按下时压缩一丝并出现像玻璃受压后的暖色高光；
+/// 高频操作的反馈只发生在按住期间，不引入切换页或延迟。
+struct WandIconButtonStyle: ButtonStyle {
+    var isActive: Bool = false
+
+    @MainActor
+    func makeBody(configuration: Configuration) -> Body {
+        Body(configuration: configuration, isActive: isActive)
+    }
+
+    struct Body: View {
+        let configuration: ButtonStyleConfiguration
+        let isActive: Bool
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        private var pressAnimation: Animation? {
+            reduceMotion
+                ? nil
+                : .interactiveSpring(response: 0.20, dampingFraction: 0.86, blendDuration: 0.06)
+        }
+
+        var body: some View {
+            configuration.label
+                .foregroundColor(
+                    isActive
+                        ? Theme.wandAccent
+                        : (isEnabled ? Theme.textSecondary : Theme.textMuted)
+                )
+                .frame(width: 30, height: 30)
+                .background(
+                    Circle()
+                        .fill(
+                            configuration.isPressed
+                                ? Theme.wandAccent.opacity(0.17)
+                                : (isActive ? Theme.wandAccent.opacity(0.10) : .clear)
+                        )
+                )
+                .overlay(
+                    Circle()
+                        .stroke(
+                            configuration.isPressed ? Theme.wandAccent.opacity(0.36) : .clear,
+                            lineWidth: 0.7
+                        )
+                )
+                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.92 : 1)
+                .contentShape(Circle())
+                .animation(pressAnimation, value: configuration.isPressed)
         }
     }
 }
