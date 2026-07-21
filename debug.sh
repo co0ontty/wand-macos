@@ -25,12 +25,26 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 1
 fi
 
-for command in xcodebuild; do
-  if ! command -v "$command" >/dev/null 2>&1; then
-    echo "错误:找不到 $command,请先安装并选择 Xcode Command Line Tools。" >&2
-    exit 1
-  fi
-done
+# 某些开发机把全局 xcode-select 指向 Command Line Tools；它没有 macOS App
+# 构建所需的完整 SDK。优先尊重调用方显式传入的 DEVELOPER_DIR，再在不改全局
+# 设置的前提下寻找安装好的完整 Xcode。
+if ! xcodebuild -version >/dev/null 2>&1; then
+  for candidate in \
+    /Applications/Xcode.app/Contents/Developer \
+    /Applications/Xcode-beta.app/Contents/Developer
+  do
+    if [[ -x "$candidate/usr/bin/xcodebuild" ]]; then
+      export DEVELOPER_DIR="$candidate"
+      break
+    fi
+  done
+fi
+
+if ! xcodebuild -version >/dev/null 2>&1; then
+  echo "错误:需要完整 Xcode（当前 xcode-select 指向的 Command Line Tools 无法构建 macOS App）。" >&2
+  echo "      请安装 Xcode，或传入 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer。" >&2
+  exit 1
+fi
 
 cd "$(dirname "$0")"
 

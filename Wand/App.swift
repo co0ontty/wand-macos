@@ -24,7 +24,9 @@ struct WandApp: App {
                     minHeight: 600, idealHeight: 880, maxHeight: .infinity
                 )
         }
-        .windowToolbarStyle(.unifiedCompact)
+        // 常规 unified 工具栏给状态、文件与会话操作足够的呼吸空间；紧凑样式会把
+        // 这些不同层级的控件压进同一条窄带，降低扫描与点击效率。
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {

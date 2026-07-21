@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 import UniformTypeIdentifiers
@@ -17,7 +18,7 @@ struct ChatView: View {
     private let api: WandAPI
 
     @StateObject private var store: ChatStore
-    @StateObject private var speech = SpeechRecognizerService()
+    @StateObject private var attachments: ComposerAttachmentController
     @State private var draft = ""
     @State private var showQuickCommit = false
     @State private var followsLatest = true
@@ -25,15 +26,9 @@ struct ChatView: View {
     @State private var expandedCurrentReplyAbsoluteIndex = -1
     @State private var observedLastUserAbsoluteIndex = Int.min
     @State private var observedLatestAssistantAbsoluteIndex = Int.min
-    @State private var voicePressed = false
-    @State private var voiceCanceling = false
-    @State private var showFileImporter = false
     @State private var showModelThinkingPanel = false
     @State private var showSessionSettingsPanel = false
-    @State private var uploadingAttachments = false
     @State private var gitStatus: GitStatusResult?
-    /// 轻点 vs 按住的计时器：按满阈值才开始录音，阈值内松手按轻点处理。
-    @State private var voiceHoldWork: DispatchWorkItem?
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
     @State private var showTroubleshooting = false
@@ -43,6 +38,7 @@ struct ChatView: View {
         self.sessionId = sessionId
         self.api = api
         _store = StateObject(wrappedValue: ChatStore(sessionId: sessionId, api: api))
+        _attachments = StateObject(wrappedValue: ComposerAttachmentController(sessionId: sessionId, api: api))
     }
 
     var body: some View {
@@ -79,9 +75,6 @@ struct ChatView: View {
         .dismissKeyboardOnTap()
         .navigationTitle("")
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                navigationStatus
-            }
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 12) {
                     gitChangesButton
@@ -120,19 +113,23 @@ struct ChatView: View {
             )
         }
         .fileImporter(
-            isPresented: $showFileImporter,
+            isPresented: $attachments.showFileImporter,
             allowedContentTypes: [.item],
             allowsMultipleSelection: true,
-            onCompletion: handlePickedAttachments
+            onCompletion: attachments.handleFileSelection
         )
         .onAppear {
+            attachments.setToastHandler { store.toast = $0 }
             store.start()
             refreshGitStatus()
         }
         .onChange(of: showQuickCommit) { showing in
             if !showing { refreshGitStatus() }
         }
-        .onDisappear { store.shutdown() }
+        .onDisappear {
+            store.shutdown()
+            attachments.cancelPendingUploads()
+        }
         .overlay(alignment: .top) {
             toastView
                 .padding(.top, 8)
@@ -207,6 +204,7 @@ struct ChatView: View {
                 && absoluteIndex == absoluteLatestAssistantTurnIndex
             TurnView(
                 turn: turn,
+                baseURL: api.baseURL,
                 isLastTurn: index == store.messages.count - 1,
                 isResponding: store.isResponding,
                 currentReplyExpandedOverride: controlsCurrentReplyExpansion
@@ -294,15 +292,19 @@ struct ChatView: View {
     private var historyPreview: String {
         guard lastUserTurnIndex > 0 else { return "" }
         for turn in store.messages.prefix(lastUserTurnIndex).reversed() {
-            let text = turn.content.compactMap { block -> String? in
+            let raw = turn.content.compactMap { block -> String? in
                 guard case .text(let value, _) = block else { return nil }
                 return value
             }
-            .joined(separator: " ")
-            .components(separatedBy: .whitespacesAndNewlines)
+            .joined(separator: "\n")
+            let parsed = parseUserAttachmentMessage(raw)
+            let source = !parsed.body.isEmpty ? parsed.body : (parsed.paths.isEmpty ? raw : "\(parsed.paths.count) 个附件")
+            let text = source.components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-            if !text.isEmpty { return text }
+            if !text.isEmpty {
+                return text
+            }
         }
         return ""
     }
@@ -480,37 +482,6 @@ struct ChatView: View {
         thinkingLevels.first { $0.id == id }?.shortLabel ?? "关"
     }
 
-    private var navigationStatus: some View {
-        VStack(spacing: 0) {
-            Text(latestUserMessage)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Theme.textPrimary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 190)
-            if let cwd = store.snapshot?.cwd, !cwd.isEmpty {
-                WandPathRevealText(path: cwd, fontSize: 8, color: Theme.textMuted, staggerWindow: 0)
-                    .frame(width: 190)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private var latestUserMessage: String {
-        for turn in store.messages.reversed() where turn.role == "user" {
-            let text = turn.content.compactMap { block -> String? in
-                guard case .text(let value, _) = block else { return nil }
-                return value
-            }
-            .joined(separator: " ")
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-            if !text.isEmpty { return text }
-        }
-        return store.snapshot?.displayTitle ?? "对话详情"
-    }
-
     // MARK: - 底部栏（权限卡 + 队列 + 输入框）
 
     /// 输入栏上方悬浮的待办进度条数据：当前 turn 的 todos，全部完成后隐藏（对齐 Web）。
@@ -526,12 +497,6 @@ struct ChatView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
-            if voicePressed || speech.isRecording {
-                voiceBubble
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
-                    .transition(.opacity)
-            }
             if !visibleTodos.isEmpty {
                 TodoProgressBar(todos: visibleTodos)
                     .padding(.horizontal, 12)
@@ -609,12 +574,32 @@ struct ChatView: View {
     }
 
     private var composerInputContent: some View {
-        growingTextField
-            .focused($inputFocused)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-            .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 7) {
+            if !attachments.attachments.isEmpty {
+                PendingAttachmentsPreview(
+                    baseURL: api.baseURL,
+                    attachments: attachments.attachments,
+                    onRemove: attachments.remove
+                )
+            }
+            growingTextField
+                .focused($inputFocused)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .contentShape(Rectangle())
+                .accessibilityHint("可按 Command-V 粘贴剪贴板中的图片")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // macOS 12 尚没有可靠的 SwiftUI 图片粘贴回调。局部事件拦截器只在本输入框
+        // 聚焦时处理图片 / Finder 文件 URL，纯文本仍由系统 TextField 原样粘贴。
+        .background(
+            ComposerPasteInterceptor(
+                attachments: attachments,
+                isInputFocused: inputFocused
+            )
+            .frame(width: 0, height: 0)
+        )
     }
 
     @ViewBuilder private var trailingButtons: some View {
@@ -633,7 +618,6 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("停止任务")
         }
-        composerVoiceButton
         Button(action: sendDraft) {
             Image(systemName: "arrow.up")
                 .font(.system(size: 16, weight: .bold))
@@ -650,19 +634,6 @@ struct ChatView: View {
         .buttonStyle(.plain)
         .disabled(!canSend)
         .accessibilityLabel("发送")
-    }
-
-    private var composerVoiceButton: some View {
-        Image(systemName: voicePressed ? "waveform" : "mic")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundColor(voiceCanceling ? Theme.danger : (voicePressed ? Theme.brand : Theme.textSecondary))
-            .frame(width: ComposerMetrics.actionVisualSize, height: ComposerMetrics.actionVisualSize)
-            .background(Circle().fill(Theme.brand.opacity(0.10)))
-            .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
-            .contentShape(Circle())
-            .gesture(voiceTapOrHoldGesture(onTap: { inputFocused = true }))
-            .accessibilityLabel("语音输入")
-            .accessibilityValue(voicePressed ? "正在录音" : "长按录音")
     }
 
     private var modelThinkingChip: some View {
@@ -817,13 +788,24 @@ struct ChatView: View {
     private var composerActionsMenu: some View {
         Menu {
             Button {
-                showFileImporter = true
+                attachments.showFileImporter = true
             } label: {
-                Label("上传附件", systemImage: "paperclip")
+                Label("选择图片或文件…", systemImage: "paperclip")
             }
-            .disabled(uploadingAttachments)
+            .disabled(attachments.isUploading || attachments.isFull)
+
+            Button {
+                _ = attachments.importFromPasteboard(.general)
+            } label: {
+                Label("粘贴剪贴板中的图片", systemImage: "photo.on.rectangle")
+            }
+            .disabled(attachments.isUploading || attachments.isFull)
+
+            Divider()
+
+            Text("附件会先上传到当前 Wand 服务，点击发送后才会加入本条消息。")
         } label: {
-            if uploadingAttachments {
+            if attachments.isUploading {
                 ProgressView()
                     .controlSize(.small)
                     .tint(Theme.textSecondary)
@@ -845,27 +827,8 @@ struct ChatView: View {
         }
         .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
         .buttonStyle(.plain)
-        .accessibilityLabel("更多操作")
-    }
-
-    private func handlePickedAttachments(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result, !urls.isEmpty else {
-            if case .failure(let error) = result { store.toast = error.localizedDescription }
-            return
-        }
-        uploadingAttachments = true
-        Task {
-            defer { uploadingAttachments = false }
-            do {
-                let files = try await api.uploadAttachments(id: sessionId, urls: urls)
-                let paths = files.map(\.savedPath).joined(separator: "\n")
-                let prefix = "[附件已上传，请查看以下文件:\n\(paths)\n]\n\n"
-                draft = prefix + draft
-                store.toast = "已上传 \(files.count) 个附件"
-            } catch {
-                store.toast = error.localizedDescription
-            }
-        }
+        .accessibilityLabel("添加附件和更多操作")
+        .help("选择图片或文件；也可在输入框按 Command-V 粘贴图片")
     }
 
     /// iOS 16+ / macOS 13+ 用多行自增高输入框；旧系统退化为单行。
@@ -892,9 +855,6 @@ struct ChatView: View {
     }
 
     private var composerPlaceholder: String {
-        if voicePressed {
-            return voiceCanceling ? "松开手指，取消输入" : "松开结束 · 上滑取消"
-        }
         return "输入消息"
     }
 
@@ -909,133 +869,23 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !attachments.isUploading && (
+            !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !attachments.attachments.isEmpty
+        )
     }
 
     private func sendDraft() {
         guard canSend else { return }
         // 多行 TextField 触发的 onSubmit 可能在草稿末尾多带一个换行(回车字符先于 onSubmit
         // 提交落进 draft),trim 一下避免发出去的消息带尾换行。
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = buildAttachmentPrompt(attachments.attachments, body: draft)
         guard !text.isEmpty else { return }
         draft = ""
+        attachments.attachments.removeAll()
         followsLatest = true
         expandedCurrentReplyAbsoluteIndex = -1
         store.send(text: text)
-    }
-
-    // MARK: - 按住说话（端侧语音识别）
-
-    /// 上滑超过该距离进入「松开取消」态（对齐 Web 端 VOICE_CANCEL_THRESHOLD）。
-    private static let voiceCancelThreshold: CGFloat = 60
-
-    /// 轻点 vs 按住的分界：按住超过该时长进入录音，否则按轻点处理。
-    private static let voiceHoldThreshold: TimeInterval = 0.3
-
-    /// 轻点 / 按住二分手势：按满阈值 → 开始录音（移动驱动上滑取消、松手提交）；
-    /// 阈值内松手 → onTap()。
-    private func voiceTapOrHoldGesture(onTap: @escaping () -> Void) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if voiceHoldWork == nil && !voicePressed {
-                    // 手指刚按下：起计时，按满阈值才真正开始录音。
-                    let work = DispatchWorkItem {
-                        voiceHoldWork = nil
-                        startVoiceRecording()
-                    }
-                    voiceHoldWork = work
-                    DispatchQueue.main.asyncAfter(
-                        deadline: .now() + Self.voiceHoldThreshold, execute: work
-                    )
-                }
-                if voicePressed {
-                    voiceCanceling = value.translation.height < -Self.voiceCancelThreshold
-                }
-            }
-            .onEnded { _ in
-                if let work = voiceHoldWork {
-                    // 阈值内松手 → 轻点。
-                    work.cancel()
-                    voiceHoldWork = nil
-                    onTap()
-                    return
-                }
-                let cancelled = voiceCanceling
-                voicePressed = false
-                voiceCanceling = false
-                speech.stop(cancelled: cancelled) { text in
-                    appendTranscriptToDraft(text)
-                }
-            }
-    }
-
-    /// 按满阈值进入录音态（原「按下立即录音」交互的主体）。
-    private func startVoiceRecording() {
-        guard !voicePressed else { return }
-        voicePressed = true
-        voiceCanceling = false
-        speech.start { message in
-            store.toast = message
-            voicePressed = false
-            voiceCanceling = false
-        }
-    }
-
-    /// 识别文本追加进草稿（不覆盖已有内容，对齐 Web 端 commitVoiceTranscript）。
-    private func appendTranscriptToDraft(_ text: String) {
-        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return }
-        var existing = draft
-        while let last = existing.unicodeScalars.last,
-              CharacterSet.whitespacesAndNewlines.contains(last) {
-            existing.unicodeScalars.removeLast()
-        }
-        draft = existing.isEmpty ? clean : existing + " " + clean
-    }
-
-    /// 输入栏上方的实时转写气泡。
-    private var voiceBubble: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: voiceCanceling ? "xmark.circle.fill" : "waveform.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundColor(voiceCanceling ? Theme.danger : Theme.brand)
-                Text(voiceCanceling
-                     ? "松开手指，取消输入"
-                     : (speech.transcript.isEmpty ? "正在聆听…" : speech.transcript))
-                    .font(.system(size: 14))
-                    .foregroundColor(
-                        voiceCanceling
-                            ? Theme.danger
-                            : (speech.transcript.isEmpty ? Theme.textSecondary : Theme.textPrimary)
-                    )
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            if !voiceCanceling {
-                HStack(spacing: 6) {
-                    Text(speech.usingOnDevice ? "端侧识别" : "在线识别")
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Theme.brand.opacity(0.12)))
-                        .foregroundColor(Theme.brand)
-                    Text("松开填入输入框 · 上滑取消")
-                        .foregroundColor(Theme.textSecondary)
-                }
-                .font(.system(size: 11, weight: .medium))
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Theme.surface)
-                .shadow(color: Color.black.opacity(0.1), radius: 6, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(voiceCanceling ? Theme.danger.opacity(0.55) : Theme.border, lineWidth: 1)
-        )
     }
 
     // MARK: - Toast
@@ -1055,6 +905,455 @@ struct ChatView: View {
                         if store.toast == toast { store.toast = nil }
                     }
                 }
+        }
+    }
+}
+
+// MARK: - Composer attachments
+
+/// 与网页 / iOS 端一致：服务端保存附件后，客户端只在发送当前消息时把路径协议前缀
+/// 拼入 prompt。这样图片、文本和任意一般文件都能被当前会话访问，而不会把绝对路径
+/// 直接展示在输入框中。
+private func buildAttachmentPrompt(_ attachments: [UploadedFile], body: String) -> String {
+    let message = body.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !attachments.isEmpty else { return message }
+    let paths = attachments.map(\.savedPath).joined(separator: "\n")
+    let fallback = message.isEmpty ? "请查看附件。" : message
+    return "[附件已上传，请查看以下文件:\n\(paths)\n]\n\n\(fallback)"
+}
+
+private struct ParsedUserAttachmentMessage {
+    let paths: [String]
+    let body: String
+}
+
+/// 读取和网页 / iOS 同一份附件协议，避免把服务端绝对路径直接展示在用户气泡中。
+private func parseUserAttachmentMessage(_ text: String) -> ParsedUserAttachmentMessage {
+    let header = "[附件已上传，请查看以下文件:\n"
+    let leading = text.drop(while: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" })
+    guard leading.hasPrefix(header) else {
+        return ParsedUserAttachmentMessage(paths: [], body: text)
+    }
+    let afterHeader = leading.dropFirst(header.count)
+    guard let close = afterHeader.range(of: "]\n") else {
+        return ParsedUserAttachmentMessage(paths: [], body: text)
+    }
+    let paths = afterHeader[..<close.lowerBound]
+        .split(separator: "\n")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    let body = String(afterHeader[close.upperBound...])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return ParsedUserAttachmentMessage(paths: paths, body: body)
+}
+
+private let composerImageExtensions: Set<String> = [
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico", "heic", "heif",
+]
+
+private func isImageAttachment(_ file: UploadedFile) -> Bool {
+    if file.mimeType.lowercased().hasPrefix("image/") { return true }
+    let ext = (file.originalName as NSString).pathExtension.lowercased()
+    return composerImageExtensions.contains(ext)
+}
+
+private func isImageAttachmentPath(_ path: String) -> Bool {
+    let clean = path.split(whereSeparator: { $0 == "?" || $0 == "#" }).first.map(String.init) ?? path
+    return composerImageExtensions.contains((clean as NSString).pathExtension.lowercased())
+}
+
+private func attachmentDisplayName(_ file: UploadedFile) -> String {
+    let name = file.originalName.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !name.isEmpty { return name }
+    let fallback = (file.savedPath as NSString).lastPathComponent
+    return fallback.isEmpty ? "附件" : fallback
+}
+
+private func attachmentSizeLabel(_ bytes: Int) -> String {
+    ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+}
+
+private func pastedFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+    let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+    return (pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]) ?? []
+}
+
+private func pasteboardHasImportableAttachment(_ pasteboard: NSPasteboard) -> Bool {
+    !pastedFileURLs(from: pasteboard).isEmpty || NSImage(pasteboard: pasteboard) != nil
+}
+
+@MainActor
+private final class ComposerAttachmentController: ObservableObject {
+    static let maximumAttachments = 5
+
+    @Published var showFileImporter = false
+    @Published private(set) var isUploading = false
+    @Published var attachments: [UploadedFile] = []
+
+    private let sessionId: String
+    private let api: WandAPI
+    private var showToast: (String) -> Void = { _ in }
+    private var uploadTask: Task<Void, Never>?
+
+    init(sessionId: String, api: WandAPI) {
+        self.sessionId = sessionId
+        self.api = api
+    }
+
+    var isFull: Bool { attachments.count >= Self.maximumAttachments }
+
+    func setToastHandler(_ handler: @escaping (String) -> Void) {
+        showToast = handler
+    }
+
+    /// 这里只移出「即将发送的消息」。附件已上传到用户明确选择的 Wand 服务，
+    /// 但不会在之后的 prompt 中引用，也不会把本机文件路径暴露到输入框里。
+    func remove(_ file: UploadedFile) {
+        attachments.removeAll { $0.savedPath == file.savedPath }
+    }
+
+    func handleFileSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard !urls.isEmpty else { return }
+            upload(urls, cleanupAfterUpload: false)
+        case .failure(let error):
+            let nsError = error as NSError
+            // 用户按取消不是错误，不用用 toast 打断其输入。
+            guard nsError.code != NSUserCancelledError else { return }
+            showToast("无法选择附件：\(error.localizedDescription)")
+        }
+    }
+
+    @discardableResult
+    func importFromPasteboard(_ pasteboard: NSPasteboard) -> Bool {
+        guard !isUploading else {
+            showToast("正在上传附件，请稍候。")
+            return true
+        }
+        guard !isFull else {
+            showToast("每条消息最多添加 \(Self.maximumAttachments) 个附件。")
+            return true
+        }
+
+        let urls = pastedFileURLs(from: pasteboard)
+        if !urls.isEmpty {
+            upload(urls, cleanupAfterUpload: false)
+            return true
+        }
+
+        guard let image = NSImage(pasteboard: pasteboard) else {
+            showToast("剪贴板中没有可上传的图片或文件。")
+            return false
+        }
+        do {
+            let url = try writePastedImage(image)
+            upload([url], cleanupAfterUpload: true)
+        } catch {
+            showToast("无法读取剪贴板中的图片：\(error.localizedDescription)")
+        }
+        return true
+    }
+
+    func cancelPendingUploads() {
+        uploadTask?.cancel()
+        uploadTask = nil
+        isUploading = false
+    }
+
+    private func upload(_ rawURLs: [URL], cleanupAfterUpload: Bool) {
+        guard !rawURLs.isEmpty else { return }
+        guard !isUploading else {
+            showToast("正在上传附件，请稍候。")
+            return
+        }
+        let available = Self.maximumAttachments - attachments.count
+        guard available > 0 else {
+            showToast("每条消息最多添加 \(Self.maximumAttachments) 个附件。")
+            return
+        }
+
+        // Finder 可能因为别名 / 多选产生重复 URL；先去重再限额，避免无意义的上传。
+        var seen = Set<String>()
+        let urls = rawURLs.filter { seen.insert($0.standardizedFileURL.path).inserted }
+        let accepted = Array(urls.prefix(available))
+        guard !accepted.isEmpty else { return }
+        if urls.count > accepted.count {
+            showToast("每条消息最多添加 \(Self.maximumAttachments) 个附件，已添加前 \(accepted.count) 个。")
+        }
+
+        isUploading = true
+        let temporaryURLs = cleanupAfterUpload ? accepted : []
+        uploadTask = Task { @MainActor [weak self] in
+            defer {
+                for url in temporaryURLs {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                if let self {
+                    self.isUploading = false
+                    self.uploadTask = nil
+                }
+            }
+
+            guard let self else { return }
+            do {
+                let uploaded = try await self.api.uploadAttachments(id: self.sessionId, urls: accepted)
+                guard !Task.isCancelled else { return }
+                guard !uploaded.isEmpty else {
+                    self.showToast("未收到已上传的附件，请重试。")
+                    return
+                }
+                let room = Self.maximumAttachments - self.attachments.count
+                self.attachments.append(contentsOf: uploaded.prefix(room))
+                self.showToast("已添加 \(min(uploaded.count, room)) 个附件；发送后会随本条消息提供给会话。")
+            } catch is CancellationError {
+                // 视图离开时的主动取消不提示，避免后台页面弹出无关错误。
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.showToast("附件上传失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// 剪贴板图片先写入 app 的临时目录，上传结束（成功、失败或取消）立即删除。
+    /// 不会访问或扫描剪贴板以外的任何本机文件。
+    private func writePastedImage(_ image: NSImage) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wand-pasted-attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let id = UUID().uuidString.lowercased()
+        if let tiff = image.tiffRepresentation,
+           let bitmap = NSBitmapImageRep(data: tiff),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            let url = directory.appendingPathComponent("clipboard-\(id).png")
+            try png.write(to: url, options: .atomic)
+            return url
+        }
+        guard let tiff = image.tiffRepresentation else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let url = directory.appendingPathComponent("clipboard-\(id).tiff")
+        try tiff.write(to: url, options: .atomic)
+        return url
+    }
+}
+
+/// macOS 12 没有能稳定捕获图片粘贴的 SwiftUI API；这个零尺寸 NSView 只在
+/// composer 可见时注册本地键盘监听。它不会拦截纯文本，也不会监听全局键盘事件。
+private struct ComposerPasteInterceptor: NSViewRepresentable {
+    let attachments: ComposerAttachmentController
+    let isInputFocused: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.update(attachments: attachments, isInputFocused: isInputFocused)
+        context.coordinator.start()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.update(attachments: attachments, isInputFocused: isInputFocused)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator {
+        private weak var attachments: ComposerAttachmentController?
+        private var isInputFocused = false
+        private var monitor: Any?
+
+        func update(attachments: ComposerAttachmentController, isInputFocused: Bool) {
+            self.attachments = attachments
+            self.isInputFocused = isInputFocused
+        }
+
+        func start() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+                guard let self,
+                      self.isInputFocused,
+                      Self.isPasteShortcut(event),
+                      pasteboardHasImportableAttachment(.general) else {
+                    return event
+                }
+                // 拦截后立即消费图片 / file URL，防止系统把二进制内容或路径意外写进草稿。
+                let attachments = self.attachments
+                Task { @MainActor in
+                    _ = attachments?.importFromPasteboard(.general)
+                }
+                return nil
+            }
+        }
+
+        func stop() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+        }
+
+        deinit { stop() }
+
+        private static func isPasteShortcut(_ event: NSEvent) -> Bool {
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard flags.contains(.command), !flags.contains(.option), !flags.contains(.control),
+                  let characters = event.charactersIgnoringModifiers?.lowercased() else {
+                return false
+            }
+            return characters == "v"
+        }
+    }
+}
+
+private struct PendingAttachmentsPreview: View {
+    let baseURL: URL
+    let attachments: [UploadedFile]
+    let onRemove: (UploadedFile) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(attachments, id: \.savedPath) { file in
+                    attachmentItem(file)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 2)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("待发送附件，共 \(attachments.count) 个")
+    }
+
+    @ViewBuilder private func attachmentItem(_ file: UploadedFile) -> some View {
+        ZStack(alignment: .topTrailing) {
+            if isImageAttachment(file) {
+                ComposerAttachmentImage(baseURL: baseURL, path: file.savedPath)
+                    .frame(width: 96, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 1)
+                    )
+                    .accessibilityLabel("图片附件 \(attachmentDisplayName(file))")
+            } else {
+                HStack(spacing: 7) {
+                    Image(systemName: "doc")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(attachmentDisplayName(file))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(attachmentSizeLabel(file.size))
+                            .font(.system(size: 10))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: 210, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Theme.surface.opacity(0.72))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 1)
+                )
+            }
+
+            Button {
+                onRemove(file)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Theme.background.opacity(0.96)))
+                    .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("移除附件 \(attachmentDisplayName(file))")
+            .help("从本条消息移除")
+            .offset(x: 5, y: -5)
+        }
+    }
+}
+
+/// 加载服务端已保存的图片缩略图。必须复用 SelfSignedSession 才能带上登录 cookie
+/// 并兼容用户自签名的 Wand HTTPS 服务。
+private struct ComposerAttachmentImage: View {
+    let baseURL: URL
+    let path: String
+    var fill = true
+
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                if fill {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                }
+            } else if failed {
+                imagePlaceholder(icon: "photo")
+            } else {
+                ZStack {
+                    imagePlaceholder(icon: "photo")
+                    ProgressView().controlSize(.small)
+                }
+            }
+        }
+        .task(id: path) { await load() }
+    }
+
+    private func imagePlaceholder(icon: String) -> some View {
+        Rectangle()
+            .fill(Theme.surface)
+            .overlay(
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                    .foregroundColor(Theme.textSecondary.opacity(0.55))
+            )
+    }
+
+    private func load() async {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            failed = true
+            return
+        }
+        components.path = "/api/file-raw"
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = components.url else {
+            failed = true
+            return
+        }
+        do {
+            let (data, response) = try await SelfSignedSession.shared.session.data(for: URLRequest(url: url))
+            guard !Task.isCancelled,
+                  let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  let decoded = NSImage(data: data) else {
+                if !Task.isCancelled { failed = true }
+                return
+            }
+            image = decoded
+        } catch {
+            if !Task.isCancelled { failed = true }
         }
     }
 }
@@ -1838,6 +2137,7 @@ private func subagentTailRefreshToken(_ items: [DisplayItem]) -> Int {
 
 private struct TurnView: View {
     let turn: ConversationTurn
+    var baseURL: URL?
     var isLastTurn: Bool
     var isResponding: Bool
     var currentReplyExpandedOverride: Bool?
@@ -1857,6 +2157,7 @@ private struct TurnView: View {
 
     init(
         turn: ConversationTurn,
+        baseURL: URL? = nil,
         isLastTurn: Bool = false,
         isResponding: Bool = false,
         currentReplyExpandedOverride: Bool? = nil,
@@ -1872,6 +2173,7 @@ private struct TurnView: View {
         onAskSubmit: @escaping (String, String) -> Void = { _, _ in }
     ) {
         self.turn = turn
+        self.baseURL = baseURL
         self.isLastTurn = isLastTurn
         self.isResponding = isResponding
         self.currentReplyExpandedOverride = currentReplyExpandedOverride
@@ -1905,20 +2207,68 @@ private struct TurnView: View {
         return pieces.joined(separator: "\n")
     }
 
+    private var parsedUserMessage: ParsedUserAttachmentMessage {
+        parseUserAttachmentMessage(userText)
+    }
+
     private var userBubble: some View {
-        HStack {
-            Spacer(minLength: 48)
-            Text(userText)
-                .font(.system(size: 16))
-                .foregroundColor(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Theme.brand)
-                )
-                .textSelection(.enabled)
+        let parsed = parsedUserMessage
+        return VStack(alignment: .trailing, spacing: 6) {
+            if !parsed.paths.isEmpty {
+                userAttachmentPreviews(parsed.paths)
+            }
+            if !parsed.body.isEmpty {
+                HStack {
+                    Spacer(minLength: 48)
+                    Text(parsed.body)
+                        .font(.system(size: 16))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Theme.brand)
+                        )
+                        .textSelection(.enabled)
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    @ViewBuilder private func userAttachmentPreviews(_ paths: [String]) -> some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            ForEach(Array(paths.enumerated()), id: \.offset) { _, path in
+                if let baseURL, isImageAttachmentPath(path) {
+                    ComposerAttachmentImage(baseURL: baseURL, path: path, fill: false)
+                        .frame(maxWidth: 240, maxHeight: 180)
+                        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .stroke(Theme.border, lineWidth: 1)
+                        )
+                        .accessibilityLabel("图片附件 \((path as NSString).lastPathComponent)")
+                } else {
+                    HStack(spacing: 7) {
+                        Image(systemName: "doc")
+                            .font(.system(size: 13, weight: .medium))
+                        Text((path as NSString).lastPathComponent)
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Theme.brand.opacity(0.88))
+                    )
+                    .accessibilityLabel("文件附件 \((path as NSString).lastPathComponent)")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     private var defaultCollapsed: Bool {

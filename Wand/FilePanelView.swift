@@ -13,7 +13,11 @@ struct FilePanelView: View {
     var body: some View {
         switch tab {
         case .files:
-            FileTreeView(api: api)
+            FileTreeView(
+                api: api,
+                sessionId: sessionId,
+                rootPath: session?.cwd
+            )
         case .git:
             if let id = sessionId {
                 SessionGitStatusView(sessionId: id, api: api)

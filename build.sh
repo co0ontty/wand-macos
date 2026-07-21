@@ -16,6 +16,26 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 1
 fi
 
+# 不修改用户的全局 xcode-select 设置。若它仅指向 Command Line Tools，则在本次
+# 构建中选用已安装的完整 Xcode（正式版优先，beta 作为可用回退）。
+if ! xcodebuild -version >/dev/null 2>&1; then
+  for candidate in \
+    /Applications/Xcode.app/Contents/Developer \
+    /Applications/Xcode-beta.app/Contents/Developer
+  do
+    if [[ -x "$candidate/usr/bin/xcodebuild" ]]; then
+      export DEVELOPER_DIR="$candidate"
+      break
+    fi
+  done
+fi
+
+if ! xcodebuild -version >/dev/null 2>&1; then
+  echo "❌ 需要完整 Xcode（当前 xcode-select 指向的 Command Line Tools 无法构建 macOS App）。" >&2
+  echo "   请安装 Xcode，或传入 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer。" >&2
+  exit 1
+fi
+
 VERSION="${1:?usage: build.sh <version> (例如 1.16.0)}"
 BUILD_STAMP="${WAND_BUILD_STAMP:-}"
 if [[ -n "$BUILD_STAMP" && ! "$BUILD_STAMP" =~ ^[0-9]{12}$ ]]; then

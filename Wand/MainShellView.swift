@@ -64,7 +64,11 @@ struct MainShellView: View {
     var body: some View {
         Group {
             if showWebFallback {
-                WebFallbackContainer(serverURL: serverURL, token: token)
+                WebFallbackContainer(
+                    serverURL: serverURL,
+                    token: token,
+                    sessionId: selectedSessionId
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 nativeShell
@@ -150,61 +154,136 @@ struct MainShellView: View {
                 Button {
                     showWebFallback = false
                 } label: {
-                    Label("返回原生界面", systemImage: "chevron.left")
+                    Label("返回原生界面", systemImage: "chevron.backward")
                 }
+                .help("返回原生界面")
             } else {
-                HStack(spacing: 7) {
-                    WandBrandMark(size: 20)
-                    Text("Wand")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Theme.textPrimary)
-                    toolbarConnectionIndicator
-                }
-                .help("\(connectionHelp) · \(displayHost)")
+                toolbarIdentityMenu
             }
         }
+
         ToolbarItem(placement: .principal) {
             if showWebFallback {
-                Text("网页版")
+                Label("网页版", systemImage: "safari")
                     .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
             }
         }
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button {
-                withAnimation(structuralAnimation) {
-                    filePanelOpen.toggle()
-                }
-            } label: {
-                Image(systemName: filePanelOpen ? "sidebar.right" : "sidebar.squares.right")
-            }
-            .buttonStyle(WandIconButtonStyle(isActive: filePanelOpen))
-            .help(filePanelOpen ? "折叠文件面板" : "展开文件面板")
-            .opacity(showWebFallback ? 0 : 1)
-            .disabled(showWebFallback)
 
-            Menu {
-                Button("设置", systemImage: "gearshape") {
-                    presentSettings = true
-                }
-                if case .disconnected = connectionState {
-                    Button("故障排查", systemImage: "stethoscope") {
-                        showTroubleshooting = true
-                    }
-                }
-                Button("打开网页版", systemImage: "safari") {
-                    showWebFallback = true
-                }
-                Divider()
-                Button("切换服务器", systemImage: "server.rack") {
-                    NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .help("更多")
-            .opacity(showWebFallback ? 0 : 1)
-            .disabled(showWebFallback)
+        // 会话标题与 Git 操作由 ChatView 提供；这里不再放一个竞争性的 principal
+        // 项，避免窄窗口时标题、路径和全局操作彼此挤压。
+        ToolbarItemGroup(placement: .primaryAction) {
+            filePanelToolbarButton
+                .opacity(showWebFallback ? 0 : 1)
+                .disabled(showWebFallback)
+            applicationToolbarMenu
+                .opacity(showWebFallback ? 0 : 1)
+                .disabled(showWebFallback)
         }
+    }
+
+    /// 左侧只承载全局身份和连接状态。把服务器信息做成可点击的菜单，而非一个
+    /// 只能靠悬停理解的绿/红小点；既不抢会话标题的位置，也能直接抵达恢复动作。
+    private var toolbarIdentityMenu: some View {
+        Menu {
+            Section("服务器") {
+                Label(displayHost, systemImage: "server.rack")
+                Label(connectionMenuStatus, systemImage: connectionSystemImage)
+            }
+
+            Divider()
+
+            Button {
+                checkConnection()
+            } label: {
+                Label("重新连接", systemImage: "arrow.clockwise")
+            }
+
+            if case .disconnected = connectionState {
+                Button {
+                    showTroubleshooting = true
+                } label: {
+                    Label("故障排查", systemImage: "stethoscope")
+                }
+            }
+
+            Divider()
+
+            Button {
+                NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
+            } label: {
+                Label("切换服务器…", systemImage: "server.rack")
+            }
+        } label: {
+            HStack(spacing: 7) {
+                WandBrandMark(size: 18)
+                Text("Wand")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                toolbarConnectionBadge
+            }
+            .fixedSize()
+        }
+        .menuStyle(.borderlessButton)
+        .help("\(connectionHelp) · \(displayHost)")
+        .accessibilityLabel("Wand，\(connectionAccessibilityValue)")
+        .accessibilityHint("打开服务器状态与连接操作")
+    }
+
+    /// 文件栏是唯一的高频全局动作，保留在工具栏上并用文字明确它影响的区域。
+    private var filePanelToolbarButton: some View {
+        Button {
+            withAnimation(structuralAnimation) {
+                filePanelOpen.toggle()
+            }
+        } label: {
+            Label(
+                filePanelOpen ? "隐藏文件" : "显示文件",
+                systemImage: filePanelOpen ? "sidebar.right" : "sidebar.squares.right"
+            )
+        }
+        .buttonStyle(.borderless)
+        .help(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
+        .accessibilityLabel(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
+    }
+
+    /// 将低频应用级操作归入有语义的“设置与更多”，取代难以预测的省略号菜单。
+    private var applicationToolbarMenu: some View {
+        Menu {
+            Button {
+                presentSettings = true
+            } label: {
+                Label("设置…", systemImage: "gearshape")
+            }
+
+            Button {
+                showWebFallback = true
+            } label: {
+                Label("打开网页版", systemImage: "safari")
+            }
+        } label: {
+            Label("设置与更多", systemImage: "gearshape")
+        }
+        .menuStyle(.borderlessButton)
+        .help("设置与更多")
+        .accessibilityLabel("设置与更多")
+    }
+
+    private var toolbarConnectionBadge: some View {
+        HStack(spacing: 4) {
+            toolbarConnectionIndicator
+            Text(connectionShortLabel)
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundColor(connectionTint)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(connectionTint.opacity(0.12))
+        )
+        // Menu 已提供完整的、可朗读的状态；避免 VoiceOver 在同一控件里重复。
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -212,16 +291,48 @@ struct MainShellView: View {
         switch connectionState {
         case .connecting:
             ProgressView()
-                .controlSize(.small)
-        case .connected:
-            Circle()
-                .fill(Theme.success)
-                .frame(width: 7, height: 7)
-        case .disconnected:
-            Circle()
-                .fill(Theme.danger)
-                .frame(width: 7, height: 7)
+                .controlSize(.mini)
+                .tint(connectionTint)
+        case .connected, .disconnected:
+            Image(systemName: connectionSystemImage)
+                .font(.system(size: 10, weight: .semibold))
         }
+    }
+
+    private var connectionTint: Color {
+        switch connectionState {
+        case .connecting: return Theme.warning
+        case .connected: return Theme.success
+        case .disconnected: return Theme.danger
+        }
+    }
+
+    private var connectionSystemImage: String {
+        switch connectionState {
+        case .connecting: return "arrow.triangle.2.circlepath"
+        case .connected: return "checkmark.circle.fill"
+        case .disconnected: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var connectionShortLabel: String {
+        switch connectionState {
+        case .connecting: return "连接中"
+        case .connected: return "已连接"
+        case .disconnected: return "未连接"
+        }
+    }
+
+    private var connectionMenuStatus: String {
+        switch connectionState {
+        case .connecting: return "正在连接"
+        case .connected: return "已连接"
+        case .disconnected(let message): return "连接失败：\(message)"
+        }
+    }
+
+    private var connectionAccessibilityValue: String {
+        "\(connectionMenuStatus)，服务器 \(displayHost)"
     }
 
     private var displayHost: String {
@@ -471,6 +582,54 @@ struct SidebarColumn: View {
         private static let isoFormatter = ISO8601DateFormatter()
     }
 
+    /// 删除先进入待确认状态，避免菜单项或多选模式中的误触直接破坏会话记录。
+    private enum PendingDeletion: Identifiable {
+        case sessions([SessionSnapshot])
+        case history(HistorySession)
+
+        var id: String {
+            switch self {
+            case .sessions(let sessions):
+                return "sessions-\(sessions.map(\.id).sorted().joined(separator: ","))"
+            case .history(let history):
+                return "history-\(history.id)"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .sessions(let sessions):
+                return sessions.count > 1 ? "删除 \(sessions.count) 个会话？" : "删除此会话？"
+            case .history:
+                return "删除此历史会话？"
+            }
+        }
+
+        var message: String {
+            switch self {
+            case .sessions(let sessions):
+                if let session = sessions.first, sessions.count == 1 {
+                    return "将永久删除“\(session.displayTitle)”。此操作无法撤销。"
+                }
+                return "将永久删除 \(sessions.count) 个会话。此操作无法撤销。"
+            case .history(let history):
+                let title = history.firstUserMessage.isEmpty
+                    ? (history.cwd as NSString).lastPathComponent
+                    : history.firstUserMessage
+                return "将永久删除可恢复的历史会话“\(title.isEmpty ? "会话" : title)”。此操作无法撤销。"
+            }
+        }
+
+        var actionTitle: String {
+            switch self {
+            case .sessions(let sessions):
+                return sessions.count > 1 ? "删除 \(sessions.count) 个会话" : "删除会话"
+            case .history:
+                return "删除历史会话"
+            }
+        }
+    }
+
     let api: WandAPI
     @Binding var selectedSessionId: String?
     let onSessionSelected: (SessionSnapshot) -> Void
@@ -483,6 +642,9 @@ struct SidebarColumn: View {
     @State private var selectedSessionIds: Set<String> = []
     @State private var showNewSession = false
     @State private var historyActionInProgress = false
+    @State private var pendingDeletion: PendingDeletion?
+    @State private var deleteInProgress = false
+    @State private var deletionError: String?
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -504,6 +666,45 @@ struct SidebarColumn: View {
         .onReceive(refreshTimer) { _ in
             Task { await load(silent: true) }
         }
+        .confirmationDialog(
+            pendingDeletion?.title ?? "确认删除",
+            isPresented: deletionConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            if let pendingDeletion {
+                Button(pendingDeletion.actionTitle, role: .destructive) {
+                    confirmPendingDeletion()
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(pendingDeletion?.message ?? "")
+        }
+        .alert("删除未完成", isPresented: deletionErrorPresented) {
+            Button("好", role: .cancel) {
+                deletionError = nil
+            }
+        } message: {
+            Text(deletionError ?? "")
+        }
+    }
+
+    private var deletionConfirmationPresented: Binding<Bool> {
+        Binding(
+            get: { pendingDeletion != nil },
+            set: { isPresented in
+                if !isPresented { pendingDeletion = nil }
+            }
+        )
+    }
+
+    private var deletionErrorPresented: Binding<Bool> {
+        Binding(
+            get: { deletionError != nil },
+            set: { isPresented in
+                if !isPresented { deletionError = nil }
+            }
+        )
     }
 
     // MARK: - 头部
@@ -511,29 +712,32 @@ struct SidebarColumn: View {
     private var header: some View {
         HStack(spacing: 8) {
             if isSelecting {
-                Text("已选择 \(selectedSessionIds.count) 项")
+                Text(deleteInProgress ? "正在删除…" : "已选择 \(selectedSessionIds.count) 项")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                 Spacer()
                 Button(role: .destructive) {
-                    deleteSelectedSessions()
+                    requestSelectedSessionsDeletion()
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(selectedSessionIds.isEmpty ? Theme.textMuted : Theme.danger)
                 }
                 .buttonStyle(WandIconButtonStyle())
-                .disabled(selectedSessionIds.isEmpty)
-                .help("删除所选会话")
+                .disabled(selectedSessionIds.isEmpty || deleteInProgress)
+                .help("删除所选会话…")
+                .accessibilityLabel("删除所选会话")
                 Button {
                     isSelecting = false
                     selectedSessionIds.removeAll()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
-                        .foregroundColor(Theme.textSecondary)
+                    .foregroundColor(Theme.textSecondary)
                 }
                 .buttonStyle(WandIconButtonStyle())
+                .disabled(deleteInProgress)
+                .help("退出多选")
             } else {
                 Text("会话")
                     .font(.system(size: 13, weight: .semibold))
@@ -547,6 +751,7 @@ struct SidebarColumn: View {
                         .foregroundColor(Theme.textSecondary)
                 }
                 .buttonStyle(WandIconButtonStyle())
+                .disabled(deleteInProgress)
                 .help("多选")
                 Button {
                     showNewSession = true
@@ -556,6 +761,7 @@ struct SidebarColumn: View {
                         .foregroundColor(Theme.wandAccent)
                 }
                 .buttonStyle(WandIconButtonStyle())
+                .disabled(deleteInProgress)
                 .help("新建会话")
             }
         }
@@ -621,20 +827,30 @@ struct SidebarColumn: View {
     }
 
     private func managedSessionTile(_ session: SessionSnapshot) -> some View {
-        SessionTile(
-            session: session,
-            isSelected: selectedSessionId == session.id,
-            isSelecting: isSelecting,
-            checked: selectedSessionIds.contains(session.id)
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
+        Button {
             if isSelecting {
                 toggleSelection(session.id)
             } else {
                 onSessionSelected(session)
             }
+        } label: {
+            SessionTile(
+                session: session,
+                isSelected: selectedSessionId == session.id,
+                isSelecting: isSelecting,
+                checked: selectedSessionIds.contains(session.id)
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .buttonStyle(.plain)
+        .disabled(deleteInProgress)
+        .accessibilityLabel(session.displayTitle)
+        .accessibilityValue(managedSessionAccessibilityValue(session))
+        .accessibilityHint(
+            isSelecting
+                ? (selectedSessionIds.contains(session.id) ? "取消选择会话" : "选择会话")
+                : "打开会话"
+        )
         .contextMenu {
             Button {
                 isSelecting = true
@@ -643,27 +859,34 @@ struct SidebarColumn: View {
                 Label("多选", systemImage: "checkmark.circle")
             }
             Button(role: .destructive) {
-                deleteSession(session)
+                requestSessionDeletion(session)
             } label: {
                 Label("删除", systemImage: "trash")
             }
+            .disabled(deleteInProgress)
         }
     }
 
     private func recoverableSessionTile(_ session: HistorySession) -> some View {
-        HistoryTile(history: session)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if !isSelecting { resume(session) }
+        Button {
+            resume(session)
+        } label: {
+            HistoryTile(history: session)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(historyAccessibilityLabel(session))
+        .accessibilityValue("可恢复历史会话")
+        .accessibilityHint("恢复为新会话")
+        .disabled(isSelecting || historyActionInProgress || deleteInProgress)
+        .contextMenu {
+            Button(role: .destructive) {
+                requestHistoryDeletion(session)
+            } label: {
+                Label("删除", systemImage: "trash")
             }
-            .disabled(historyActionInProgress)
-            .contextMenu {
-                Button(role: .destructive) {
-                    deleteHistory(session)
-                } label: {
-                    Label("删除", systemImage: "trash")
-                }
-            }
+            .disabled(deleteInProgress)
+        }
     }
 
     // MARK: - 数据
@@ -688,7 +911,8 @@ struct SidebarColumn: View {
             .sorted { $0.sortTimestamp > $1.sortTimestamp }
     }
 
-    private func load(silent: Bool = false) async {
+    @discardableResult
+    private func load(silent: Bool = false) async -> Bool {
         if !silent { loading = true }
         do {
             let s = try await api.listSessions()
@@ -705,10 +929,13 @@ struct SidebarColumn: View {
             let (c, x) = try await (claudeHistory, codexHistory)
             historySessions = c + x
             loadError = nil
+            loading = false
+            return true
         } catch {
             if !silent { loadError = error.localizedDescription }
+            loading = false
+            return false
         }
-        loading = false
     }
 
     private func toggleSelection(_ id: String) {
@@ -719,41 +946,121 @@ struct SidebarColumn: View {
         }
     }
 
-    private func deleteSelectedSessions() {
-        let ids = selectedSessionIds
-        guard !ids.isEmpty else { return }
-        sessions.removeAll { ids.contains($0.id) }
-        if let selectedSessionId, ids.contains(selectedSessionId) {
-            self.selectedSessionId = nil
-        }
-        selectedSessionIds.removeAll()
-        isSelecting = false
-        Task {
-            for id in ids {
-                try? await api.deleteSession(id: id)
-            }
+    // MARK: - 删除
+
+    private func requestSelectedSessionsDeletion() {
+        let selected = sessions.filter { selectedSessionIds.contains($0.id) }
+        guard !selected.isEmpty, !deleteInProgress else { return }
+        pendingDeletion = .sessions(selected)
+    }
+
+    private func requestSessionDeletion(_ session: SessionSnapshot) {
+        guard !deleteInProgress else { return }
+        pendingDeletion = .sessions([session])
+    }
+
+    private func requestHistoryDeletion(_ history: HistorySession) {
+        guard !deleteInProgress else { return }
+        pendingDeletion = .history(history)
+    }
+
+    private func confirmPendingDeletion() {
+        guard let pendingDeletion, !deleteInProgress else { return }
+        self.pendingDeletion = nil
+
+        switch pendingDeletion {
+        case .sessions(let sessions):
+            deleteSessions(sessions)
+        case .history(let history):
+            deleteHistory(history)
         }
     }
 
-    private func deleteSession(_ session: SessionSnapshot) {
+    /// 不做乐观删除：仅在请求成功后移除本地项目。批量请求逐个执行并收集失败项，
+    /// 这样局部失败不会让用户误以为所有会话都已删除。
+    private func deleteSessions(_ targets: [SessionSnapshot]) {
+        guard !targets.isEmpty, !deleteInProgress else { return }
+        deleteInProgress = true
+
         Task {
-            try? await api.deleteSession(id: session.id)
-            sessions.removeAll { $0.id == session.id }
-            if selectedSessionId == session.id {
-                selectedSessionId = nil
+            var deletedIds = Set<String>()
+            var failures: [String] = []
+
+            for session in targets {
+                do {
+                    try await api.deleteSession(id: session.id)
+                    deletedIds.insert(session.id)
+                } catch {
+                    failures.append("\(session.displayTitle)：\(error.localizedDescription)")
+                }
             }
+
+            if !deletedIds.isEmpty {
+                sessions.removeAll { deletedIds.contains($0.id) }
+                if let selectedSessionId, deletedIds.contains(selectedSessionId) {
+                    self.selectedSessionId = nil
+                }
+                selectedSessionIds.subtract(deletedIds)
+            }
+
+            let refreshed = await load(silent: true)
+            if !failures.isEmpty {
+                let successPrefix = deletedIds.isEmpty ? "" : "已删除 \(deletedIds.count) 个会话；"
+                let failureSummary = failures.prefix(2).joined(separator: "\n")
+                let extraCount = max(0, failures.count - 2)
+                let extra = extraCount > 0 ? "\n另有 \(extraCount) 个会话未删除。" : ""
+                let refreshSuffix = refreshed ? "" : "\n列表未能刷新，请稍后重试。"
+                deletionError = "\(successPrefix)以下会话未删除：\n\(failureSummary)\(extra)\(refreshSuffix)"
+            } else if !refreshed {
+                deletionError = "会话已删除，但列表未能刷新。请稍后重试刷新。"
+            }
+
+            if selectedSessionIds.isEmpty {
+                isSelecting = false
+            }
+            deleteInProgress = false
         }
     }
 
     private func deleteHistory(_ history: HistorySession) {
+        guard !deleteInProgress else { return }
+        deleteInProgress = true
+
         Task {
-            try? await api.deleteHistory(history)
-            historySessions.removeAll { $0.id == history.id }
+            var deleteFailure: String?
+            do {
+                try await api.deleteHistory(history)
+                historySessions.removeAll { $0.id == history.id }
+            } catch {
+                deleteFailure = error.localizedDescription
+            }
+
+            let refreshed = await load(silent: true)
+            if let deleteFailure {
+                let refreshSuffix = refreshed ? "" : "\n列表也未能刷新，请稍后重试。"
+                deletionError = "无法删除历史会话：\(deleteFailure)\(refreshSuffix)"
+            } else if !refreshed {
+                deletionError = "历史会话已删除，但列表未能刷新。请稍后重试刷新。"
+            }
+            deleteInProgress = false
         }
     }
 
+    private func managedSessionAccessibilityValue(_ session: SessionSnapshot) -> String {
+        let selection = isSelecting
+            ? (selectedSessionIds.contains(session.id) ? "已选择，" : "未选择，")
+            : ""
+        return "\(selection)\(session.isStructured ? "聊天模式" : "终端模式")，\(session.status ?? "空闲")"
+    }
+
+    private func historyAccessibilityLabel(_ history: HistorySession) -> String {
+        if !history.firstUserMessage.isEmpty { return history.firstUserMessage }
+        let name = (history.cwd as NSString).lastPathComponent
+        return name.isEmpty ? "可恢复历史会话" : name
+    }
+
     private func resume(_ history: HistorySession) {
-        guard !historyActionInProgress else { return }
+        guard !historyActionInProgress, !deleteInProgress else { return }
         historyActionInProgress = true
         Task {
             do {
@@ -931,8 +1238,6 @@ struct SessionTile: View {
         }
         .wandSelectionSurface(isSelected: isSelected && !isSelecting, isHovered: hovering, cornerRadius: 12)
         .onHover { hovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityValue("\(session.isStructured ? "聊天模式" : "终端模式")，\(statusLabel)")
     }
 }
 
@@ -988,8 +1293,6 @@ struct HistoryTile: View {
         .padding(.vertical, 8)
         .wandSelectionSurface(isSelected: false, isHovered: hovering, cornerRadius: 12)
         .onHover { hovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityValue("聊天模式，可恢复")
     }
 }
 
@@ -1021,22 +1324,30 @@ struct MainColumn: View {
     let session: SessionSnapshot?
 
     var body: some View {
-        // 阶段 4 临时方案:直接嵌入现有 ChatView(消息 + 输入栏整体)。
-        // 现有 macOS ChatView 自带 navigationTitle/toolbar 渲染依赖 NavigationView
-        // 容器,在中栏裸放时 toolbar 不渲染,只剩消息流 + safeAreaInset 输入栏,
-        // 视觉上等价于「header(我们自己加) / list(ChatView) / input(ChatView)」三段。
-        VStack(spacing: 0) {
-            SessionHeaderView(
-                provider: provider,
-                title: session?.displayTitle,
-                workingDirectory: session?.cwd
+        if session?.isStructured == false {
+            // PTY 是完整终端交互，不应被原生 ChatView 当作普通消息流模拟；直接深链
+            // 到服务端已有的网页终端，保留键盘、光标和终端控制语义。
+            WebContainerView(
+                serverURL: api.baseURL,
+                token: api.token,
+                sessionId: sessionId
             )
-            // 必须按 sessionId 绑定身份:MainShellView 在 if let selectedSessionId 分支内
-            // 复用 MainColumn 节点,只换参数。SwiftUI 默认保留子视图的 @StateObject,
-            // 切换会话时 ChatStore 仍指向上一个会话(socket 不重连、快照不重拉),
-            // 表现为「切了会话,内容不变」。.id(sessionId) 强制整个子树按新身份重建。
-            ChatView(sessionId: sessionId, api: api)
-                .id(sessionId)
+            .id(sessionId)
+        } else {
+            // 结构化会话继续使用原生消息与输入体验。
+            VStack(spacing: 0) {
+                SessionHeaderView(
+                    provider: provider,
+                    title: session?.displayTitle,
+                    workingDirectory: session?.cwd
+                )
+                // 必须按 sessionId 绑定身份:MainShellView 在 if let selectedSessionId 分支内
+                // 复用 MainColumn 节点,只换参数。SwiftUI 默认保留子视图的 @StateObject,
+                // 切换会话时 ChatStore 仍指向上一个会话(socket 不重连、快照不重拉),
+                // 表现为「切了会话,内容不变」。.id(sessionId) 强制整个子树按新身份重建。
+                ChatView(sessionId: sessionId, api: api)
+                    .id(sessionId)
+            }
         }
     }
 }
@@ -1129,9 +1440,10 @@ struct SessionHeaderView: View {
 struct WebFallbackContainer: View {
     let serverURL: URL
     let token: String?
+    var sessionId: String? = nil
 
     var body: some View {
-        WebContainerView(serverURL: serverURL, token: token)
+        WebContainerView(serverURL: serverURL, token: token, sessionId: sessionId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
     }

@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 private extension Data {
     mutating func append(_ string: String) {
@@ -65,12 +66,12 @@ final class WandAPI {
         }
     }
 
-    /// 带 401 自动重登的请求入口。
-    private func requestData(method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> Data {
-        let req = try makeRequest(method: method, path: path, body: body, timeout: timeout)
+    /// 上传等非 JSON 请求也必须走和普通 REST 调用相同的鉴权恢复流程。
+    /// 这点尤其重要：用户可能在停留聊天页期间 session cookie 过期，附件不应成为
+    /// 唯一一个要求用户手动重新连接的操作。
+    private func performAuthenticated(_ req: URLRequest) async throws -> Data {
         var (data, http) = try await perform(req)
         if http.statusCode == 401, let token, !token.isEmpty {
-            // session cookie 过期：用 appToken 重新登录一次，cookie 注入共享存储后重试。
             let relogged = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
                 WandAuth.loginWithToken(serverURL: baseURL, appToken: token) { result in
                     if case .success = result { cont.resume(returning: true) }
@@ -90,6 +91,12 @@ final class WandAPI {
             throw APIError.server(status: http.statusCode, message: message)
         }
         return data
+    }
+
+    /// 带 401 自动重登的请求入口。
+    private func requestData(method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> Data {
+        let req = try makeRequest(method: method, path: path, body: body, timeout: timeout)
+        return try await performAuthenticated(req)
     }
 
     private func request<T: Decodable>(_ type: T.Type, method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> T {
@@ -149,18 +156,22 @@ final class WandAPI {
     }
 
     func uploadAttachments(id: String, urls: [URL]) async throws -> [UploadedFile] {
+        guard !urls.isEmpty else {
+            throw APIError.network("未选择附件")
+        }
+        guard urls.count <= 5 else {
+            throw APIError.network("每次最多上传 5 个附件")
+        }
         let boundary = "WandBoundary-\(UUID().uuidString)"
         var body = Data()
-        for url in urls.prefix(5) {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let data = try Data(contentsOf: url)
-            guard data.count <= 10 * 1024 * 1024 else {
-                throw APIError.network("\(url.lastPathComponent) 超过 10 MB")
-            }
+        for url in urls {
+            let data = try readAttachmentData(from: url)
+            let filename = multipartFilename(url.lastPathComponent)
+            let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                ?? "application/octet-stream"
             body.append("--\(boundary)\r\n")
-            body.append("Content-Disposition: form-data; name=\"files\"; filename=\"\(url.lastPathComponent)\"\r\n")
-            body.append("Content-Type: application/octet-stream\r\n\r\n")
+            body.append("Content-Disposition: form-data; name=\"files\"; filename=\"\(filename)\"\r\n")
+            body.append("Content-Type: \(mimeType)\r\n\r\n")
             body.append(data)
             body.append("\r\n")
         }
@@ -174,11 +185,40 @@ final class WandAPI {
         req.timeoutInterval = 60
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        let (data, http) = try await perform(req)
-        guard (200...299).contains(http.statusCode) else {
-            throw APIError.server(status: http.statusCode, message: "附件上传失败")
+        let data = try await performAuthenticated(req)
+        do {
+            return try JSONDecoder().decode(UploadResponse.self, from: data).files
+        } catch {
+            throw APIError.network("附件上传响应解析失败：\(error.localizedDescription)")
         }
-        return try JSONDecoder().decode(UploadResponse.self, from: data).files
+    }
+
+    /// `fileImporter` 返回的 URL 在 sandbox 下通常带 security scope；把 scope 的寿命
+    /// 严格限制在单个同步读取中，避免长期持有用户授予的文件访问权限。
+    private func readAttachmentData(from url: URL) throws -> Data {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url, options: .mappedIfSafe)
+            guard data.count <= 10 * 1024 * 1024 else {
+                throw APIError.network("\(url.lastPathComponent) 超过 10 MB")
+            }
+            return data
+        } catch let error as APIError {
+            throw error
+        } catch {
+            throw APIError.network("无法读取 \(url.lastPathComponent)：\(error.localizedDescription)")
+        }
+    }
+
+    /// multipart header 不能直接拼未可信文件名，避免换行或引号改变请求结构。
+    private func multipartFilename(_ raw: String) -> String {
+        let cleaned = raw
+            .replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: "\"", with: "_")
+            .replacingOccurrences(of: "\r", with: "_")
+            .replacingOccurrences(of: "\n", with: "_")
+        return cleaned.isEmpty ? "attachment" : cleaned
     }
 
     @discardableResult

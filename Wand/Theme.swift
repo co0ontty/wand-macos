@@ -616,7 +616,9 @@ private final class MainWindowTitleNSView: NSView {
     func applyToWindow() {
         guard let window, window.sheetParent == nil, window.styleMask.contains(.titled) else { return }
         window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
+        // 标题文字可以隐藏，但工具栏不应随之透明：保留系统 material 才能让顶栏
+        // 与工作区、侧栏清晰分层，并自动适配“减少透明度”和高对比度设置。
+        window.titlebarAppearsTransparent = false
     }
 }
 
