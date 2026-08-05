@@ -16,6 +16,7 @@ struct ChatView: View {
 
     private let sessionId: String
     private let api: WandAPI
+    @ObservedObject private var gitStatusStore: GitStatusStore
 
     @StateObject private var store: ChatStore
     @StateObject private var attachments: ComposerAttachmentController
@@ -28,15 +29,15 @@ struct ChatView: View {
     @State private var observedLatestAssistantAbsoluteIndex = Int.min
     @State private var showModelThinkingPanel = false
     @State private var showSessionSettingsPanel = false
-    @State private var gitStatus: GitStatusResult?
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
     @State private var showTroubleshooting = false
     @FocusState private var inputFocused: Bool
 
-    init(sessionId: String, api: WandAPI) {
+    init(sessionId: String, api: WandAPI, gitStatusStore: GitStatusStore) {
         self.sessionId = sessionId
         self.api = api
+        self.gitStatusStore = gitStatusStore
         _store = StateObject(wrappedValue: ChatStore(sessionId: sessionId, api: api))
         _attachments = StateObject(wrappedValue: ComposerAttachmentController(sessionId: sessionId, api: api))
     }
@@ -766,7 +767,7 @@ struct ChatView: View {
 
     private var gitChangeCounts: (modified: Int, deleted: Int, added: Int) {
         var counts = (modified: 0, deleted: 0, added: 0)
-        for file in gitStatus?.files ?? [] {
+        for file in gitStatusStore.status(for: sessionId)?.files ?? [] {
             let status = file.status.uppercased()
             if status.contains("?") || status.contains("A") {
                 counts.added += 1
@@ -781,7 +782,7 @@ struct ChatView: View {
 
     private func refreshGitStatus() {
         Task {
-            gitStatus = try? await api.gitStatus(sessionId: sessionId)
+            await gitStatusStore.refresh(sessionId: sessionId, api: api)
         }
     }
 

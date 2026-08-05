@@ -40,6 +40,7 @@ struct GitQuickCommitView: View {
     @State private var autoGenerating = false
     @State private var submoduleIntent = false
     @State private var errorMessage: String?
+    @State private var showMagneticComposer = false
 
     // 结果
     @State private var outcome: CommitOutcome?
@@ -75,7 +76,9 @@ struct GitQuickCommitView: View {
     }
 
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            sheetHeader
+            Divider().opacity(0.35)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     headerSubtitle
@@ -90,21 +93,40 @@ struct GitQuickCommitView: View {
             }
             .background { WandAmbientBackground() }
             .dismissKeyboardOnTap()
-            .navigationTitle("快捷提交")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(outcome == nil ? "取消" : "完成") { dismiss() }
-                        .foregroundColor(Theme.textSecondary)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    if committing || pushing {
-                        ProgressView()
-                    }
-                }
-            }
         }
         .frame(minWidth: 720, minHeight: 680)
         .task { await loadStatus(force: true) }
+    }
+
+    /// `NavigationView` 在 macOS 会自动采用分栏导航，把整张提交表单挤进窄侧栏。
+    /// 快捷提交是单页任务，用固定的 sheet chrome 保持内容宽度和操作层级稳定。
+    private var sheetHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.triangle.branch.circle.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(Theme.brand)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("快捷提交")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("检查改动，确认提交信息与后续操作")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            Spacer()
+            if committing || pushing {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(committing ? "正在提交" : "正在推送")
+            }
+            Button(outcome == nil ? "取消" : "完成") { dismiss() }
+                .buttonStyle(.bordered)
+                .tint(outcome == nil ? Theme.textSecondary : Theme.brand)
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .wandGlass(.chrome)
     }
 
     // MARK: - 头部与状态
@@ -255,7 +277,7 @@ struct GitQuickCommitView: View {
                 .foregroundColor(Theme.danger)
         }
 
-        // 磁吸 dock（提交中替换为 busy 面板）
+        // 常规路径保持线性可预测；磁吸组合降为可选的效率工具。
         if committing {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
@@ -269,19 +291,26 @@ struct GitQuickCommitView: View {
             .background(RoundedRectangle(cornerRadius: 14).fill(Theme.surface))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
         } else {
-            MagneticDockView(
-                hasChanges: hasChanges,
-                hasSubmodule: status?.hasSubmodule == true,
-                onAction: { action, sub in submit(action: action, includeSubmodule: sub) }
-            )
-            .frame(height: 170)
+            standardCommitActions
 
-            Text(hasChanges
-                ? "拖动磁吸组合 · 丢进提交区执行 · 单击直接执行该项"
-                    + (status?.hasSubmodule == true ? "\nSub 球可选，纳入后递归处理 submodule" : "")
-                : "工作区干净，无可提交")
-                .font(.system(size: 11))
-                .foregroundColor(Theme.textSecondary.opacity(0.8))
+            DisclosureGroup(isExpanded: $showMagneticComposer) {
+                MagneticDockView(
+                    hasChanges: hasChanges,
+                    hasSubmodule: status?.hasSubmodule == true,
+                    onAction: { action, sub in submit(action: action, includeSubmodule: sub) }
+                )
+                .frame(height: 170)
+                .padding(.top, 8)
+
+                Text("拖动组合后丢进提交区；单击气泡可直接执行对应动作。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary.opacity(0.8))
+            } label: {
+                Label("磁吸组合（可选）", systemImage: "circle.grid.cross")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            .tint(Theme.textSecondary)
         }
 
         // 工作区干净但本地领先远端：dock 无事可做，给一个「仅推送」直达按钮。
@@ -306,6 +335,59 @@ struct GitQuickCommitView: View {
 
     private var busyLabel: String {
         (autoGenerating ? "AI 生成 + 提交中…" : "执行中…") + (submoduleIntent ? "（含 submodule）" : "")
+    }
+
+    private var standardCommitActions: some View {
+        HStack(spacing: 10) {
+            Button {
+                submit(action: "commit", includeSubmodule: false)
+            } label: {
+                Label("提交", systemImage: "arrow.up.circle.fill")
+                    .frame(minWidth: 92)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.brand)
+            .disabled(!hasChanges || committing)
+
+            Menu {
+                Button("提交并创建 Tag") {
+                    submit(action: "commit-tag", includeSubmodule: false)
+                }
+                Button("提交并推送") {
+                    submit(action: "commit-push", includeSubmodule: false)
+                }
+                Button("提交、创建 Tag 并推送") {
+                    submit(action: "commit-tag-push", includeSubmodule: false)
+                }
+                if status?.hasSubmodule == true {
+                    Divider()
+                    Button("包含 Submodule 并提交") {
+                        submit(action: "commit", includeSubmodule: true)
+                    }
+                    Button("包含 Submodule、Tag 并推送") {
+                        submit(action: "commit-tag-push", includeSubmodule: true)
+                    }
+                }
+            } label: {
+                Label("更多提交方式", systemImage: "chevron.down.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(!hasChanges || committing)
+
+            Spacer()
+            Text(hasChanges ? "执行前会使用上方提交信息" : "工作区干净")
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textMuted)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.75)
+                )
+        )
     }
 
     private var oldCommitLine: String {

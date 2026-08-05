@@ -2,7 +2,8 @@ import Combine
 import SwiftUI
 
 /// 横屏 native 应用主壳:原生窗口工具栏 + 三栏(左会话 / 中聊天 / 右文件)。
-/// 窗口 < 1100 时自动折叠右栏,只留左 + 中;窗口 < 800 时建议横屏。
+/// 窗口不足以同时保证聊天正文和两侧栏可读时，右栏改为临时 Inspector，
+/// 不再挤压主工作区；宽窗口才使用常驻三栏。
 ///
 /// 三栏宽度常量对齐 web 端 token(`.sidebar-width: 300px`, `.file-panel-width: 320px`),
 /// 顶部操作统一放进 macOS 原生 toolbar，内容区不再额外绘制应用顶栏。
@@ -21,6 +22,12 @@ struct MainShellView: View {
     /// 连接状态(给顶栏的 connection dot 用)。
     @State private var connectionState: ConnectionState = .connecting
     @State private var showTroubleshooting = false
+    @State private var showMissions = false
+    @StateObject private var gitStatusStore = GitStatusStore()
+
+    /// 300 会话栏 + 560 可读聊天区 + 320 Inspector + 间距与边距。
+    /// 低于该值时右栏覆盖在内容之上，保持主任务宽度稳定。
+    private let persistentRightPanelMinimumWidth: CGFloat = 1_220
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
@@ -98,6 +105,13 @@ struct MainShellView: View {
                 onRetry: checkConnection
             )
         }
+        .sheet(isPresented: $showMissions) {
+            MissionsView(
+                api: api,
+                onOpenSession: openSessionFromMissions,
+                onDismiss: { showMissions = false }
+            )
+        }
         .task {
             await checkConnectionAsync()
         }
@@ -110,7 +124,7 @@ struct MainShellView: View {
 
     private var nativeShell: some View {
         GeometryReader { geo in
-            content
+            content(width: geo.size.width)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(WandAmbientBackground())
             .frame(minWidth: 900, minHeight: 600)
@@ -130,15 +144,15 @@ struct MainShellView: View {
                 }
             }
             .onChange(of: geo.size.width) { newWidth in
-                // < 1100 自动折叠右栏,避免中栏被压扁
-                if newWidth < 1100 && filePanelOpen {
+                // 从常驻三栏进入紧凑布局时主动收起；用户随后仍可按需打开临时 Inspector。
+                if newWidth < persistentRightPanelMinimumWidth && filePanelOpen {
                     withAnimation(structuralAnimation) {
                         filePanelOpen = false
                     }
                 }
             }
             .onAppear {
-                if geo.size.width < 1100 {
+                if geo.size.width < persistentRightPanelMinimumWidth {
                     filePanelOpen = false
                 }
             }
@@ -173,6 +187,9 @@ struct MainShellView: View {
         // 会话标题与 Git 操作由 ChatView 提供；这里不再放一个竞争性的 principal
         // 项，避免窄窗口时标题、路径和全局操作彼此挤压。
         ToolbarItemGroup(placement: .primaryAction) {
+            agentInboxToolbarButton
+                .opacity(showWebFallback ? 0 : 1)
+                .disabled(showWebFallback)
             filePanelToolbarButton
                 .opacity(showWebFallback ? 0 : 1)
                 .disabled(showWebFallback)
@@ -180,6 +197,18 @@ struct MainShellView: View {
                 .opacity(showWebFallback ? 0 : 1)
                 .disabled(showWebFallback)
         }
+    }
+
+    private var agentInboxToolbarButton: some View {
+        Button {
+            showMissions = true
+        } label: {
+            Label("Agent Inbox", systemImage: "tray.full")
+        }
+        .buttonStyle(.borderless)
+        .keyboardShortcut("2", modifiers: .command)
+        .help("打开 Agent Inbox 与并行任务")
+        .accessibilityLabel("打开 Agent Inbox 与并行任务")
     }
 
     /// 左侧只承载全局身份和连接状态。把服务器信息做成可点击的菜单，而非一个
@@ -368,6 +397,20 @@ struct MainShellView: View {
         }
     }
 
+    private func openSessionFromMissions(_ sessionId: String) {
+        Task {
+            do {
+                let session = try await api.getSession(id: sessionId)
+                selectedSessionId = session.id
+                selectedSessionProvider = session.provider ?? "claude"
+                selectedSession = session
+                connectionState = .connected
+            } catch {
+                connectionState = .disconnected(error.localizedDescription)
+            }
+        }
+    }
+
     // MARK: - 状态
 
     @State private var showWebFallback: Bool = false
@@ -375,33 +418,49 @@ struct MainShellView: View {
 
     // MARK: - 三栏
 
-    @ViewBuilder
-    private var content: some View {
-        HStack(spacing: 10) {
-            sidebarColumn
-                .frame(width: Theme.LayoutMetrics.sidebarWidth)
-                .wandGlass(.panel)
-            mainColumn
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                        .fill(Theme.surfaceElevated.opacity(0.72))
-                )
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
-            if filePanelOpen {
-                rightColumn
-                    .frame(width: Theme.LayoutMetrics.filePanelWidth)
+    private func content(width: CGFloat) -> some View {
+        let usesPersistentRightPanel = width >= persistentRightPanelMinimumWidth
+        let compactPanelWidth = min(380, max(320, width * 0.42))
+
+        return ZStack(alignment: .trailing) {
+            HStack(spacing: 10) {
+                sidebarColumn
+                    .frame(width: Theme.LayoutMetrics.sidebarWidth)
                     .wandGlass(.panel)
-                    .transition(
-                        .asymmetric(
-                            insertion: .offset(x: 24).combined(with: .opacity),
-                            removal: .opacity
-                        )
+                mainColumn
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                            .fill(Theme.surfaceElevated.opacity(0.72))
                     )
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+                if filePanelOpen && usesPersistentRightPanel {
+                    rightColumn
+                        .frame(width: Theme.LayoutMetrics.filePanelWidth)
+                        .wandGlass(.panel)
+                        .transition(rightPanelTransition)
+                }
+            }
+            .padding(10)
+
+            if filePanelOpen && !usesPersistentRightPanel {
+                rightColumn
+                    .frame(width: compactPanelWidth)
+                    .wandGlass(.panel)
+                    .shadow(color: Color.black.opacity(0.28), radius: 24, x: -8, y: 8)
+                    .padding(10)
+                    .transition(rightPanelTransition)
+                    .zIndex(2)
             }
         }
-        .padding(10)
         .animation(structuralAnimation, value: filePanelOpen)
+    }
+
+    private var rightPanelTransition: AnyTransition {
+        .asymmetric(
+            insertion: .offset(x: 24).combined(with: .opacity),
+            removal: .opacity
+        )
     }
 
     private var sidebarColumn: some View {
@@ -429,7 +488,8 @@ struct MainShellView: View {
                 api: api,
                 sessionId: sessionId,
                 provider: selectedSessionProvider,
-                session: selectedSession
+                session: selectedSession,
+                gitStatusStore: gitStatusStore
             )
         } else {
             EmptyMainColumn(api: api)
@@ -503,6 +563,7 @@ struct MainShellView: View {
             sessionId: selectedSessionId,
             api: api,
             session: selectedSession,
+            gitStatusStore: gitStatusStore,
             tab: $rightPanelTab
         )
     }
@@ -1322,6 +1383,7 @@ struct MainColumn: View {
     let sessionId: String
     let provider: String
     let session: SessionSnapshot?
+    @ObservedObject var gitStatusStore: GitStatusStore
 
     var body: some View {
         if session?.isStructured == false {
@@ -1345,7 +1407,7 @@ struct MainColumn: View {
                 // 复用 MainColumn 节点,只换参数。SwiftUI 默认保留子视图的 @StateObject,
                 // 切换会话时 ChatStore 仍指向上一个会话(socket 不重连、快照不重拉),
                 // 表现为「切了会话,内容不变」。.id(sessionId) 强制整个子树按新身份重建。
-                ChatView(sessionId: sessionId, api: api)
+                ChatView(sessionId: sessionId, api: api, gitStatusStore: gitStatusStore)
                     .id(sessionId)
             }
         }

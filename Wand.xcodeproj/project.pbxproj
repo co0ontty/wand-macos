@@ -34,6 +34,8 @@
 		A200000000000000000000C4 /* TroubleshootingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D4 /* TroubleshootingView.swift */; };
 		A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D5 /* GitHubReleaseUpdater.swift */; };
 		A100000000000000000000C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* Assets.xcassets */; };
+		D4000000000000000000AC01 /* MissionsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC01 /* MissionsModels.swift */; };
+		D4000000000000000000AC02 /* MissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC02 /* MissionsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -67,6 +69,8 @@
 		A100000000000000000000E1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A100000000000000000000E2 /* Wand.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Wand.entitlements; sourceTree = "<group>"; };
 		A100000000000000000000F1 /* Wand.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Wand.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D4000000000000000000BC01 /* MissionsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsModels.swift; sourceTree = "<group>"; };
+		D4000000000000000000BC02 /* MissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +121,8 @@
 				A200000000000000000000D3 /* FilePanelView.swift */,
 				A200000000000000000000D4 /* TroubleshootingView.swift */,
 				A200000000000000000000D5 /* GitHubReleaseUpdater.swift */,
+				D4000000000000000000BC01 /* MissionsModels.swift */,
+				D4000000000000000000BC02 /* MissionsView.swift */,
 				A100000000000000000000D1 /* Assets.xcassets */,
 				A100000000000000000000E1 /* Info.plist */,
 				A100000000000000000000E2 /* Wand.entitlements */,
@@ -228,6 +234,8 @@
 				A200000000000000000000C3 /* FilePanelView.swift in Sources */,
 				A200000000000000000000C4 /* TroubleshootingView.swift in Sources */,
 				A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */,
+				D4000000000000000000AC01 /* MissionsModels.swift in Sources */,
+				D4000000000000000000AC02 /* MissionsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

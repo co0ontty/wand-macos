@@ -678,6 +678,37 @@ struct DirectoryListing: Decodable {
     let truncated: Bool?
 }
 
+enum FilePreviewKind: String, Decodable {
+    case text, image, pdf, video, audio, binary
+}
+
+struct FilePreviewResponse: Decodable {
+    let kind: FilePreviewKind
+    let path: String
+    let name: String
+    let ext: String
+    let size: Int
+    let mime: String?
+    let lang: String?
+    let content: String?
+}
+
+struct FileSearchResult: Decodable, Identifiable {
+    let path: String
+    let name: String
+    let type: String
+    let matchScore: Int
+
+    var id: String { path }
+    var isDirectory: Bool { type == "dir" }
+}
+
+struct FileSearchResponse: Decodable {
+    let results: [FileSearchResult]
+    let query: String
+    let cwd: String
+}
+
 struct RecentPath: Decodable, Identifiable {
     let path: String
     let name: String?

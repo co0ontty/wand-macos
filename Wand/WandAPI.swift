@@ -109,7 +109,10 @@ final class WandAPI {
     }
 
     private func percentEncode(_ value: String) -> String {
-        value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+        // 同时用于 query value 与单个 path component；只保留 RFC 3986 unreserved，
+        // 避免文件名中的 &, +, ?, / 改变请求结构。
+        let unreserved = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
     }
 
     // MARK: - 会话
@@ -439,10 +442,121 @@ final class WandAPI {
         )
     }
 
+    // MARK: - Agent Inbox / Missions
+
+    func missionInbox() async throws -> [AgentActivityItem] {
+        let response = try await request(MissionInboxResponse.self, method: "GET", path: "/api/inbox")
+        return response.items
+    }
+
+    func markMissionInboxRead(sessionId: String? = nil) async throws {
+        let body: [String: Any] = sessionId.map { ["sessionId": $0] } ?? [:]
+        _ = try await request(MissionOKResponse.self, method: "POST", path: "/api/inbox/read", body: body)
+    }
+
+    func missions() async throws -> [MissionInfo] {
+        let response = try await request(MissionListResponse.self, method: "GET", path: "/api/missions")
+        return response.missions
+    }
+
+    func createMission(
+        title: String?,
+        prompt: String,
+        cwd: String,
+        providers: [String],
+        baseRef: String?,
+        sharedDirectories: [String],
+        copyPaths: [String]
+    ) async throws -> MissionInfo {
+        var body: [String: Any] = [
+            "prompt": prompt,
+            "cwd": cwd,
+            "providers": providers,
+            "sharedDirectories": sharedDirectories,
+            "copyPaths": copyPaths,
+        ]
+        if let title, !title.isEmpty { body["title"] = title }
+        if let baseRef, !baseRef.isEmpty { body["baseRef"] = baseRef }
+        return try await request(MissionInfo.self, method: "POST", path: "/api/missions", body: body)
+    }
+
+    func missionDiff(missionId: String, attemptId: String) async throws -> MissionDiff {
+        let mission = percentEncode(missionId)
+        let attempt = percentEncode(attemptId)
+        return try await request(
+            MissionDiff.self,
+            method: "GET",
+            path: "/api/missions/\(mission)/attempts/\(attempt)/diff"
+        )
+    }
+
+    func addMissionReviewComment(
+        missionId: String,
+        attemptId: String,
+        filePath: String,
+        line: Int?,
+        side: String,
+        body: String
+    ) async throws -> MissionReviewComment {
+        var requestBody: [String: Any] = ["filePath": filePath, "side": side, "body": body]
+        if let line { requestBody["line"] = line }
+        let mission = percentEncode(missionId)
+        let attempt = percentEncode(attemptId)
+        return try await request(
+            MissionReviewComment.self,
+            method: "POST",
+            path: "/api/missions/\(mission)/attempts/\(attempt)/comments",
+            body: requestBody
+        )
+    }
+
+    func sendMissionReview(missionId: String, attemptId: String) async throws -> [MissionReviewComment] {
+        let mission = percentEncode(missionId)
+        let attempt = percentEncode(attemptId)
+        let response = try await request(
+            MissionReviewResponse.self,
+            method: "POST",
+            path: "/api/missions/\(mission)/attempts/\(attempt)/review/send",
+            body: [:]
+        )
+        return response.comments
+    }
+
+    func archiveMission(id: String) async throws -> MissionInfo {
+        try await request(
+            MissionInfo.self,
+            method: "POST",
+            path: "/api/missions/\(percentEncode(id))/archive",
+            body: [:]
+        )
+    }
+
     // MARK: - 目录与配置
 
     func listDirectory(_ query: String) async throws -> DirectoryListing {
         try await request(DirectoryListing.self, method: "GET", path: "/api/directory?q=\(percentEncode(query))")
+    }
+
+    func searchFiles(query: String, cwd: String) async throws -> FileSearchResponse {
+        try await request(
+            FileSearchResponse.self,
+            method: "GET",
+            path: "/api/file-search?q=\(percentEncode(query))&cwd=\(percentEncode(cwd))&depth=6&limit=80"
+        )
+    }
+
+    func filePreview(path: String) async throws -> FilePreviewResponse {
+        try await request(
+            FilePreviewResponse.self,
+            method: "GET",
+            path: "/api/file-preview?path=\(percentEncode(path))"
+        )
+    }
+
+    /// 图片和 PDF 需要原始二进制；沿用 REST 请求的 cookie 与 401 自动重登逻辑，
+    /// 避免把连接码拼进 URL 或交给系统外部应用。
+    func rawFile(path: String) async throws -> Data {
+        try await requestData(method: "GET", path: "/api/file-raw?path=\(percentEncode(path))")
     }
 
     func recentPaths() async throws -> [RecentPath] {

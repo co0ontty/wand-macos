@@ -1,4 +1,40 @@
+import Combine
 import SwiftUI
+
+/// 会话级 Git 状态的单一数据源。顶栏徽标、右侧 Git 面板和快捷提交回调都通过
+/// 同一个 store 刷新，避免各自请求后长期显示互相矛盾的计数。
+@MainActor
+final class GitStatusStore: ObservableObject {
+    @Published private(set) var statuses: [String: GitStatusResult] = [:]
+    @Published private(set) var loadingSessions: Set<String> = []
+    @Published private(set) var errors: [String: String] = [:]
+
+    private var generations: [String: Int] = [:]
+
+    func status(for sessionId: String) -> GitStatusResult? { statuses[sessionId] }
+    func isLoading(_ sessionId: String) -> Bool { loadingSessions.contains(sessionId) }
+    func error(for sessionId: String) -> String? { errors[sessionId] }
+
+    func refresh(sessionId: String, api: WandAPI) async {
+        let generation = (generations[sessionId] ?? 0) + 1
+        generations[sessionId] = generation
+        loadingSessions.insert(sessionId)
+        defer {
+            if generations[sessionId] == generation {
+                loadingSessions.remove(sessionId)
+            }
+        }
+        do {
+            let next = try await api.gitStatus(sessionId: sessionId)
+            guard generations[sessionId] == generation else { return }
+            statuses[sessionId] = next
+            errors[sessionId] = nil
+        } catch {
+            guard generations[sessionId] == generation else { return }
+            errors[sessionId] = error.localizedDescription
+        }
+    }
+}
 
 /// 横屏 native 右栏容器:三 tab(文件 / Git / 详情),每个 tab 一个独立视图。
 /// 文件 tab 走 FileTreeView;Git tab 走 SessionGitStatusView;详情 tab 走 SessionDetailsView。
@@ -8,6 +44,7 @@ struct FilePanelView: View {
     let sessionId: String?
     let api: WandAPI
     let session: SessionSnapshot?
+    @ObservedObject var gitStatusStore: GitStatusStore
     @Binding var tab: MainShellView.RightPanelTab
 
     var body: some View {
@@ -20,7 +57,7 @@ struct FilePanelView: View {
             )
         case .git:
             if let id = sessionId {
-                SessionGitStatusView(sessionId: id, api: api)
+                SessionGitStatusView(sessionId: id, api: api, gitStatusStore: gitStatusStore)
             } else {
                 EmptyTabState(systemImage: "arrow.triangle.branch", label: "选择一个会话以查看 Git 状态")
             }
@@ -60,11 +97,12 @@ struct EmptyTabState: View {
 struct SessionGitStatusView: View {
     let sessionId: String
     let api: WandAPI
-
-    @State private var status: GitStatusResult?
-    @State private var loading = false
-    @State private var loadError: String?
+    @ObservedObject var gitStatusStore: GitStatusStore
     @State private var showQuickCommit = false
+
+    private var status: GitStatusResult? { gitStatusStore.status(for: sessionId) }
+    private var loading: Bool { gitStatusStore.isLoading(sessionId) }
+    private var loadError: String? { gitStatusStore.error(for: sessionId) }
 
     // MARK: - 聚合计数(从 files 数组按 status 字符统计)
 
@@ -103,16 +141,16 @@ struct SessionGitStatusView: View {
             content
         }
         .background(Theme.background)
-        .task { await reload() }
+        .task(id: sessionId) { await gitStatusStore.refresh(sessionId: sessionId, api: api) }
         .sheet(isPresented: $showQuickCommit) {
             GitQuickCommitView(
                 sessionId: sessionId,
                 api: api,
                 onCompleted: { _ in
-                    Task { await reload() }
+                    Task { await gitStatusStore.refresh(sessionId: sessionId, api: api) }
                 },
                 onFailed: { _ in
-                    Task { await reload() }
+                    Task { await gitStatusStore.refresh(sessionId: sessionId, api: api) }
                 }
             )
         }
@@ -135,7 +173,7 @@ struct SessionGitStatusView: View {
                 .buttonStyle(.plain)
             }
             Button {
-                Task { await reload() }
+                Task { await gitStatusStore.refresh(sessionId: sessionId, api: api) }
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11, weight: .medium))
@@ -228,16 +266,6 @@ struct SessionGitStatusView: View {
         }
     }
 
-    private func reload() async {
-        loading = true
-        defer { loading = false }
-        do {
-            status = try await api.gitStatus(sessionId: sessionId)
-            loadError = nil
-        } catch {
-            loadError = error.localizedDescription
-        }
-    }
 }
 
 // MARK: - 详情 tab

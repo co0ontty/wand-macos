@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import SwiftUI
 
 /// 原生文件浏览器:把 web 端的 `.file-panel`(.file-tree)搬到 SwiftUI。
@@ -22,16 +23,25 @@ struct FileTreeView: View {
     @State private var rootGeneration = 0
     @State private var activeListingRequest = UUID()
     @State private var selectedFile: FileTreeRow.RowItem?
+    @State private var searchQuery = ""
+    @State private var searchResults: [FileSearchResult] = []
+    @State private var searchLoading = false
+    @State private var searchError: String?
 
     var body: some View {
         VStack(spacing: 0) {
-            breadcrumb
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+            VStack(spacing: 8) {
+                breadcrumb
+                searchField
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             Divider().opacity(0.3)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if let loadError {
+                    if !trimmedSearchQuery.isEmpty {
+                        searchContent
+                    } else if let loadError {
                         errorState(loadError)
                     } else if loading && items.isEmpty {
                         loadingState
@@ -58,8 +68,9 @@ struct FileTreeView: View {
         }
         .background(Theme.background)
         .task(id: rootLoadKey) { await reload() }
+        .task(id: searchTaskKey) { await runSearch() }
         .sheet(item: $selectedFile) { file in
-            FileInfoSheet(file: file)
+            FilePreviewSheet(file: file, api: api)
         }
     }
 
@@ -90,12 +101,135 @@ struct FileTreeView: View {
         }
     }
 
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.textMuted)
+            TextField("搜索此工作目录", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+            if searchLoading {
+                ProgressView().controlSize(.small).scaleEffect(0.65)
+            } else if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(Theme.textMuted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除文件搜索")
+            }
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Theme.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Theme.border.opacity(0.8), lineWidth: 0.75)
+                )
+        )
+    }
+
+    @ViewBuilder
+    private var searchContent: some View {
+        if let searchError {
+            VStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 20))
+                    .foregroundColor(Theme.warning)
+                Text(searchError)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                Button("重新搜索") { Task { await runSearch() } }
+                    .buttonStyle(WandSecondaryButtonStyle())
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 24)
+        } else if searchLoading && searchResults.isEmpty {
+            loadingState
+        } else if searchResults.isEmpty {
+            VStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 18))
+                    .foregroundColor(Theme.textMuted)
+                Text("没有找到匹配文件")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+        } else {
+            ForEach(searchResults) { result in
+                searchResultRow(result)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func searchResultRow(_ result: FileSearchResult) -> some View {
+        let label = HStack(spacing: 7) {
+            Image(systemName: result.isDirectory ? "folder" : "doc")
+                .font(.system(size: 12))
+                .foregroundColor(result.isDirectory ? Theme.wandAccent : Theme.textSecondary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(result.name)
+                    .font(.system(size: 12, design: result.isDirectory ? .default : .monospaced))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(relativeSearchPath(result.path))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(Theme.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+
+        if result.isDirectory {
+            label
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(result.name)，文件夹")
+        } else {
+            Button {
+                selectedFile = FileTreeRow.RowItem(searchResult: result)
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("预览文件 \(result.name)")
+        }
+    }
+
     private var displayPath: String {
         effectiveRootPath.isEmpty ? "服务器默认目录" : effectiveRootPath
     }
 
     private var effectiveRootPath: String {
         rootPath ?? ""
+    }
+
+    private var trimmedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var searchTaskKey: FileSearchTaskKey {
+        FileSearchTaskKey(root: effectiveRootPath, query: trimmedSearchQuery)
+    }
+
+    private func relativeSearchPath(_ path: String) -> String {
+        guard !effectiveRootPath.isEmpty, path.hasPrefix(effectiveRootPath) else { return path }
+        let suffix = String(path.dropFirst(effectiveRootPath.count))
+        return suffix.hasPrefix("/") ? String(suffix.dropFirst()) : suffix
     }
 
     private var emptyState: some View {
@@ -218,6 +352,33 @@ struct FileTreeView: View {
         childLoading.remove(path)
     }
 
+    private func runSearch() async {
+        let query = trimmedSearchQuery
+        guard !query.isEmpty else {
+            searchResults = []
+            searchError = nil
+            searchLoading = false
+            return
+        }
+        searchLoading = true
+        searchError = nil
+        // 输入期间让频繁任务自然取消；结果只会落到最新 query 对应的 task。
+        try? await Task.sleep(nanoseconds: 220_000_000)
+        guard !Task.isCancelled else { return }
+        do {
+            let response = try await api.searchFiles(query: query, cwd: effectiveRootPath)
+            guard !Task.isCancelled, trimmedSearchQuery == query else { return }
+            searchResults = response.results
+            searchError = nil
+        } catch {
+            guard !Task.isCancelled, trimmedSearchQuery == query else { return }
+            searchResults = []
+            searchError = error.localizedDescription
+        }
+        guard !Task.isCancelled, trimmedSearchQuery == query else { return }
+        searchLoading = false
+    }
+
     private var rootLoadKey: FileTreeRootKey {
         FileTreeRootKey(sessionId: sessionId, rootPath: effectiveRootPath)
     }
@@ -241,6 +402,11 @@ struct FileTreeView: View {
 private struct FileTreeRootKey: Hashable {
     let sessionId: String?
     let rootPath: String
+}
+
+private struct FileSearchTaskKey: Hashable {
+    let root: String
+    let query: String
 }
 
 // MARK: - 递归行(支持任意深度嵌套)
@@ -363,73 +529,224 @@ struct FileTreeRow: View {
             self.name = item.name
             self.isDirectory = item.isDirectory
         }
+
+        init(searchResult: FileSearchResult) {
+            self.path = searchResult.path
+            self.name = searchResult.name
+            self.isDirectory = searchResult.isDirectory
+        }
     }
 }
 
-private struct FileInfoSheet: View {
+private struct FilePreviewSheet: View {
     let file: FileTreeRow.RowItem
+    let api: WandAPI
 
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var preview: FilePreviewResponse?
+    @State private var rawData: Data?
+    @State private var loading = true
+    @State private var loadError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Label("文件信息", systemImage: "doc")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Spacer()
-                Button("完成") { dismiss() }
-                    .buttonStyle(.plain)
-                    .foregroundColor(Theme.wandAccent)
-                    .keyboardShortcut(.defaultAction)
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                detailRow(label: "名称", value: file.name, monospaced: false)
-                detailRow(label: "类型", value: "文件", monospaced: false)
-                detailRow(label: "服务器路径", value: file.path, monospaced: true)
-            }
-
-            Text("文件位于服务器端；这里不会在本机打开或下载它。")
-                .font(.system(size: 12))
-                .foregroundColor(Theme.textSecondary)
-
-            HStack {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: previewIcon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(Theme.brand)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.name)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
+                    Text(file.path)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Spacer()
                 Button {
                     copyServerPath()
                 } label: {
-                    Label(
-                        copied ? "已复制服务器路径" : "复制服务器路径",
-                        systemImage: copied ? "checkmark" : "doc.on.doc"
-                    )
+                    Label(copied ? "已复制" : "复制路径", systemImage: copied ? "checkmark" : "doc.on.doc")
                 }
-                .buttonStyle(WandPrimaryButtonStyle())
+                .buttonStyle(.bordered)
                 .accessibilityHint("将服务器上的完整文件路径复制到剪贴板")
+                Button("完成") { dismiss() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .wandGlass(.chrome)
+
+            Divider().opacity(0.35)
+
+            previewBody
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let preview {
+                HStack(spacing: 12) {
+                    Label(previewKindLabel(preview.kind), systemImage: previewIcon)
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(preview.size), countStyle: .file))
+                    if let lang = preview.lang, !lang.isEmpty { Text(lang) }
+                    Spacer()
+                }
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(Theme.textMuted)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Theme.surface)
             }
         }
-        .padding(20)
-        .frame(minWidth: 460)
+        .frame(minWidth: 720, idealWidth: 840, minHeight: 540, idealHeight: 640)
         .background(Theme.background)
+        .task(id: file.path) { await loadPreview() }
     }
 
-    private func detailRow(label: String, value: String, monospaced: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(Theme.textMuted)
-            Text(value)
-                .font(.system(size: 12, design: monospaced ? .monospaced : .default))
-                .foregroundColor(Theme.textPrimary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder
+    private var previewBody: some View {
+        if loading {
+            VStack(spacing: 9) {
+                ProgressView().controlSize(.small)
+                Text("正在加载预览…")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+        } else if let loadError {
+            VStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 24))
+                    .foregroundColor(Theme.warning)
+                Text(loadError)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+                Button("重试") { Task { await loadPreview() } }
+                    .buttonStyle(.bordered)
+            }
+            .padding(32)
+        } else if let preview {
+            switch preview.kind {
+            case .text:
+                ScrollView([.horizontal, .vertical]) {
+                    Text(preview.content ?? "")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(Theme.textPrimary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(18)
+                }
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.26))
+            case .image:
+                if let rawData, let image = NSImage(data: rawData) {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .padding(18)
+                    }
+                } else {
+                    unsupportedPreview("无法解码此图片格式")
+                }
+            case .pdf:
+                if let rawData, PDFDocument(data: rawData) != nil {
+                    PDFDocumentView(data: rawData)
+                } else {
+                    unsupportedPreview("无法读取 PDF 内容")
+                }
+            case .video:
+                unsupportedPreview("视频可在网页版中预览")
+            case .audio:
+                unsupportedPreview("音频可在网页版中预览")
+            case .binary:
+                unsupportedPreview("此文件不支持文本预览")
+            }
+        } else {
+            unsupportedPreview("没有可用预览")
         }
+    }
+
+    private func unsupportedPreview(_ message: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: previewIcon)
+                .font(.system(size: 30))
+                .foregroundColor(Theme.textMuted)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+        }
+        .padding(32)
+    }
+
+    private var previewIcon: String {
+        switch preview?.kind {
+        case .text: return "doc.text"
+        case .image: return "photo"
+        case .pdf: return "doc.richtext"
+        case .video: return "film"
+        case .audio: return "waveform"
+        case .binary: return "doc"
+        case nil: return "doc"
+        }
+    }
+
+    private func previewKindLabel(_ kind: FilePreviewKind) -> String {
+        switch kind {
+        case .text: return "文本"
+        case .image: return "图片"
+        case .pdf: return "PDF"
+        case .video: return "视频"
+        case .audio: return "音频"
+        case .binary: return "二进制"
+        }
+    }
+
+    private func loadPreview() async {
+        loading = true
+        loadError = nil
+        rawData = nil
+        do {
+            let next = try await api.filePreview(path: file.path)
+            guard !Task.isCancelled else { return }
+            preview = next
+            if next.kind == .image || next.kind == .pdf {
+                rawData = try await api.rawFile(path: file.path)
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            preview = nil
+            loadError = error.localizedDescription
+        }
+        guard !Task.isCancelled else { return }
+        loading = false
     }
 
     private func copyServerPath() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(file.path, forType: .string)
         copied = true
+    }
+}
+
+private struct PDFDocumentView: NSViewRepresentable {
+    let data: Data
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.displaysPageBreaks = true
+        view.document = PDFDocument(data: data)
+        return view
+    }
+
+    func updateNSView(_ nsView: PDFView, context: Context) {
+        if nsView.document?.dataRepresentation() != data {
+            nsView.document = PDFDocument(data: data)
+        }
     }
 }
