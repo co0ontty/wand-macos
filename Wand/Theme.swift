@@ -294,54 +294,22 @@ struct WandAmbientBackground: View {
     }
 }
 
-private struct WandPathWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-struct WandPathRevealText: View {
+struct WandPathText: View {
     let path: String
     var fontSize: CGFloat = 10
     var color: Color = Theme.textMuted
-    var initialDelay: Double = 1.8
-    var staggerWindow: Double = 1.2
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var textWidth: CGFloat = 0
-    @State private var revealed = false
 
     var body: some View {
-        GeometryReader { proxy in
-            let overflow = max(0, textWidth - proxy.size.width)
-            Text(path.replacingOccurrences(of: "\\", with: "/"))
-                .font(.system(size: fontSize, weight: .regular, design: .monospaced))
-                .foregroundColor(color)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .background(
-                    GeometryReader { textProxy in
-                        Color.clear.preference(key: WandPathWidthKey.self, value: textProxy.size.width)
-                    }
-                )
-                .offset(x: (reduceMotion || revealed) ? -overflow : 0)
-                .accessibilityLabel(path)
-                .task(id: "\(path)-\(Int(proxy.size.width))-\(Int(textWidth))") {
-                    revealed = reduceMotion
-                    guard !reduceMotion, overflow > 0 else { return }
-                    let hash = UInt64(bitPattern: Int64(path.hashValue))
-                    let stagger = staggerWindow > 0 ? Double(hash % 1_000) / 1_000 * staggerWindow : 0
-                    try? await Task.sleep(nanoseconds: UInt64((initialDelay + stagger) * 1_000_000_000))
-                    guard !Task.isCancelled else { return }
-                    withAnimation(.linear(duration: min(8, max(1.2, Double(overflow / 28))))) {
-                        revealed = true
-                    }
-                }
-        }
-        .clipped()
-        .frame(height: ceil(fontSize * 1.45))
-        .onPreferenceChange(WandPathWidthKey.self) { textWidth = $0 }
+        let normalizedPath = path.replacingOccurrences(of: "\\", with: "/")
+        Text(normalizedPath)
+            .font(.system(size: fontSize, weight: .regular, design: .monospaced))
+            .foregroundColor(color)
+            .lineLimit(1)
+            .truncationMode(.head)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(normalizedPath)
+            .accessibilityLabel(path)
+            .frame(height: ceil(fontSize * 1.45))
     }
 }
 
@@ -634,13 +602,6 @@ struct WandPrimaryButtonStyle: ButtonStyle {
     struct Body: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-        private var pressAnimation: Animation? {
-            reduceMotion
-                ? nil
-                : .interactiveSpring(response: 0.22, dampingFraction: 0.88, blendDuration: 0.08)
-        }
 
         var body: some View {
             configuration.label
@@ -653,14 +614,12 @@ struct WandPrimaryButtonStyle: ButtonStyle {
                         .fill(isEnabled ? Theme.wandAccent : Theme.wandAccent.opacity(0.45))
                 )
                 .brightness(configuration.isPressed ? -0.06 : 0)
-                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
                 .shadow(
                     color: isEnabled && !configuration.isPressed ? Theme.wandAccent.opacity(0.16) : .clear,
                     radius: 8,
                     y: 3
                 )
                 .contentShape(Rectangle())
-                .animation(pressAnimation, value: configuration.isPressed)
         }
     }
 }
@@ -675,13 +634,6 @@ struct WandSecondaryButtonStyle: ButtonStyle {
     struct Body: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-        private var pressAnimation: Animation? {
-            reduceMotion
-                ? nil
-                : .interactiveSpring(response: 0.22, dampingFraction: 0.9, blendDuration: 0.08)
-        }
 
         var body: some View {
             configuration.label
@@ -698,14 +650,12 @@ struct WandSecondaryButtonStyle: ButtonStyle {
                         .stroke(Theme.border, lineWidth: 1)
                 )
                 .opacity(configuration.isPressed ? 0.78 : 1)
-                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
                 .contentShape(Rectangle())
-                .animation(pressAnimation, value: configuration.isPressed)
         }
     }
 }
 
-/// 工具栏和面板标题里的图标按钮。按下时压缩一丝并出现像玻璃受压后的暖色高光；
+/// 工具栏和面板标题里的图标按钮。按下时立即出现像玻璃受压后的暖色高光；
 /// 高频操作的反馈只发生在按住期间，不引入切换页或延迟。
 struct WandIconButtonStyle: ButtonStyle {
     var isActive: Bool = false
@@ -719,13 +669,6 @@ struct WandIconButtonStyle: ButtonStyle {
         let configuration: ButtonStyleConfiguration
         let isActive: Bool
         @Environment(\.isEnabled) private var isEnabled
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-        private var pressAnimation: Animation? {
-            reduceMotion
-                ? nil
-                : .interactiveSpring(response: 0.20, dampingFraction: 0.86, blendDuration: 0.06)
-        }
 
         var body: some View {
             configuration.label
@@ -750,9 +693,7 @@ struct WandIconButtonStyle: ButtonStyle {
                             lineWidth: 0.7
                         )
                 )
-                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.92 : 1)
                 .contentShape(Circle())
-                .animation(pressAnimation, value: configuration.isPressed)
         }
     }
 }

@@ -60,12 +60,12 @@ struct MainShellView: View {
         }
     }
 
-    /// 面板属于偶发的空间变化，使用无过冲的短弹簧让打开/关闭有连续性。
+    /// 面板属于偶发的空间变化，只保留短促、无回弹的空间提示。
     /// 会话切换、标签点击等高频路径不复用这个动画，保持即时。
     private var structuralAnimation: Animation? {
         reduceMotion
             ? nil
-            : .interactiveSpring(response: 0.32, dampingFraction: 0.94, blendDuration: 0.08)
+            : .easeOut(duration: 0.16)
     }
 
     var body: some View {
@@ -453,14 +453,10 @@ struct MainShellView: View {
                     .zIndex(2)
             }
         }
-        .animation(structuralAnimation, value: filePanelOpen)
     }
 
     private var rightPanelTransition: AnyTransition {
-        .asymmetric(
-            insertion: .offset(x: 24).combined(with: .opacity),
-            removal: .opacity
-        )
+        .offset(x: 10).combined(with: .opacity)
     }
 
     private var sidebarColumn: some View {
@@ -1518,7 +1514,7 @@ struct SessionTile: View {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                     }
                     if let cwd = session.cwd, !cwd.isEmpty {
-                        WandPathRevealText(path: cwd, fontSize: 9.5, color: Theme.textMuted)
+                        WandPathText(path: cwd, fontSize: 9.5, color: Theme.textMuted)
                             .frame(maxWidth: .infinity)
                     } else {
                         Text(status)
@@ -1586,7 +1582,7 @@ struct HistoryTile: View {
                     .foregroundColor(Theme.textSecondary)
                 if !history.cwd.isEmpty {
                     Text("·").foregroundColor(Theme.textMuted.opacity(0.55))
-                    WandPathRevealText(path: history.cwd, fontSize: 9.5, color: Theme.textMuted)
+                    WandPathText(path: history.cwd, fontSize: 9.5, color: Theme.textMuted)
                         .frame(maxWidth: .infinity)
                 }
             }

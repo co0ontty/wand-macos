@@ -714,6 +714,8 @@ private struct MagneticDockView: View {
     let hasSubmodule: Bool
     let onAction: (String, Bool) -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private static let actionOrder = ["commit", "tag", "push"]
     private var allIds: [String] { hasSubmodule ? Self.actionOrder + ["sub"] : Self.actionOrder }
 
@@ -820,7 +822,6 @@ private struct MagneticDockView: View {
             }
         )
         .opacity(!placed ? 0 : (hasChanges ? 1 : 0.45))
-        .scaleEffect(active ? 1.06 : 1)
         .offset(x: pos.x, y: pos.y)
         .zIndex(active ? 3 : 2)
         .allowsHitTesting(hasChanges)
@@ -890,8 +891,8 @@ private struct MagneticDockView: View {
     private func placeHome(animated: Bool) {
         let homes = homePositions()
         guard !homes.isEmpty, allIds.allSatisfy({ chipSizes[$0] != nil }) else { return }
-        if animated {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.62)) { chipPos = homes }
+        if animated && !reduceMotion {
+            withAnimation(.spring(response: 0.24, dampingFraction: 1)) { chipPos = homes }
         } else {
             chipPos = homes
         }

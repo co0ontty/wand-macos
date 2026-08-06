@@ -13,6 +13,7 @@ private enum ComposerMetrics {
 /// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let sessionId: String
     private let api: WandAPI
@@ -327,7 +328,6 @@ struct ChatView: View {
         .accessibilityLabel("回到最新消息并继续跟随")
         .padding(.trailing, 16)
         .padding(.bottom, 12)
-        .transition(.scale(scale: 0.85).combined(with: .opacity))
     }
 
     private func toggleHistory(_ proxy: ScrollViewProxy) {
@@ -386,7 +386,7 @@ struct ChatView: View {
     /// 打开会话时把列表钉到底部。LazyVStack 首帧尚未完成布局，单次 scrollTo
     /// 常停在半中间——立即滚一次，再按递增延迟补几次，直到布局稳定。
     private func pinToBottom(_ proxy: ScrollViewProxy, animated: Bool = false) {
-        if animated {
+        if animated && !reduceMotion {
             withAnimation(.easeOut(duration: 0.22)) {
                 proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
@@ -511,7 +511,6 @@ struct ChatView: View {
                 )
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if !store.queuedMessages.isEmpty {
                 QueueBar(store: store)
@@ -525,7 +524,6 @@ struct ChatView: View {
                 .opacity(0.97)
                 .ignoresSafeArea(edges: .bottom)
         )
-        .animation(.easeInOut(duration: 0.2), value: store.pendingEscalation)
     }
 
     private var inputBar: some View {
@@ -900,7 +898,6 @@ struct ChatView: View {
                 .padding(.vertical, 10)
                 .background(Capsule().fill(Color.black.opacity(0.78)))
                 .padding(.top, 8)
-                .transition(.move(edge: .top).combined(with: .opacity))
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
                         if store.toast == toast { store.toast = nil }
@@ -2318,7 +2315,6 @@ private struct TurnView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.easeInOut(duration: 0.16), value: collapsed)
         .onChange(of: historyBoundary) { _ in
             if currentReplyExpandedOverride == nil {
                 localCollapsed = defaultCollapsed
@@ -2846,7 +2842,7 @@ private struct ExplorationGroupCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                expanded.toggle()
             } label: {
                 HStack(spacing: 11) {
                     ZStack {
@@ -3037,7 +3033,7 @@ private struct ToolUseCard: View {
     private var header: some View {
         Button {
             guard hasBody else { return }
-            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            expanded.toggle()
         } label: {
             HStack(spacing: 11) {
                 if running {
@@ -3161,7 +3157,7 @@ private struct CollapsibleSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                expanded.toggle()
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: icon).font(.system(size: 12))
@@ -3329,13 +3325,13 @@ private struct AskUserQuestionCard: View {
         .onAppear { expanded = !isAnswered }
         .onChange(of: isAnswered) { answered in
             // 回答送达后自动折叠（对齐 Web 已答默认折叠）。
-            if answered { withAnimation(.easeInOut(duration: 0.15)) { expanded = false } }
+            if answered { expanded = false }
         }
     }
 
     private var headerView: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            expanded.toggle()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: isAnswered ? "checkmark.circle.fill" : "questionmark.circle.fill")
@@ -3580,13 +3576,13 @@ private struct DiffCard: View {
         }
         .onChange(of: result != nil) { hasResult in
             // 结果到达后自动收起（对齐 Android / Web 行为；手动点开不受影响）。
-            if hasResult { withAnimation(.easeInOut(duration: 0.15)) { expanded = false } }
+            if hasResult { expanded = false }
         }
     }
 
     private var header: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            expanded.toggle()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "doc.text")
@@ -3697,7 +3693,7 @@ private struct TerminalCard: View {
 
     private var header: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            expanded.toggle()
         } label: {
             HStack(spacing: 8) {
                 if running {
@@ -3752,7 +3748,7 @@ struct TodoProgressBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
                     progressRing
@@ -3839,7 +3835,7 @@ private struct QueueBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
+                expanded.toggle()
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "tray.full")
@@ -3893,7 +3889,6 @@ private struct QueueBar: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Theme.border, lineWidth: 1)
         )
-        .animation(.easeInOut(duration: 0.16), value: expanded)
     }
 }
 
