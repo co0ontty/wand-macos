@@ -720,7 +720,7 @@ private struct MissionReviewComposer: View {
     let onSubmit: (String) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
-    @State private var body = ""
+    @State private var reviewText = ""
     @State private var submitting = false
 
     var body: some View {
@@ -738,7 +738,7 @@ private struct MissionReviewComposer: View {
                 Button { dismiss() } label: { Image(systemName: "xmark") }
                     .buttonStyle(WandIconButtonStyle())
             }
-            TextEditor(text: $body)
+            TextEditor(text: $reviewText)
                 .font(.system(size: 13))
                 .frame(minHeight: 170)
                 .padding(6)
@@ -750,12 +750,12 @@ private struct MissionReviewComposer: View {
                 Button("保存") {
                     Task {
                         submitting = true
-                        if await onSubmit(body.trimmingCharacters(in: .whitespacesAndNewlines)) { dismiss() }
+                        if await onSubmit(reviewText.trimmingCharacters(in: .whitespacesAndNewlines)) { dismiss() }
                         submitting = false
                     }
                 }
                 .buttonStyle(WandPrimaryButtonStyle())
-                .disabled(body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || submitting)
+                .disabled(reviewText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || submitting)
             }
         }
         .padding(20)
