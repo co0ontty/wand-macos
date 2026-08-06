@@ -6,11 +6,12 @@ import SwiftUI
 /// renderModeCards 一致；Codex 锁定全权限（对齐 getSupportedModes）。
 struct NewSessionView: View {
     let api: WandAPI
+    let initialCwd: String?
     let onCreated: (SessionSnapshot) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var cwd = ""
+    @State private var cwd: String
     @State private var recentPaths: [RecentPath] = []
     @State private var provider: Provider = .claude
     @State private var sessionType: SessionType = .structured
@@ -35,6 +36,17 @@ struct NewSessionView: View {
     @State private var errorMessage: String?
     @State private var showBrowser = false
     @FocusState private var focusedInput: NewSessionInput?
+
+    init(
+        api: WandAPI,
+        initialCwd: String? = nil,
+        onCreated: @escaping (SessionSnapshot) -> Void
+    ) {
+        self.api = api
+        self.initialCwd = initialCwd
+        self.onCreated = onCreated
+        _cwd = State(initialValue: initialCwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+    }
 
     private enum NewSessionInput: Hashable {
         case cwd

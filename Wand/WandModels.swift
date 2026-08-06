@@ -414,6 +414,44 @@ struct HistorySession: Decodable, Identifiable {
     var id: String { claudeSessionId }
 }
 
+// MARK: - 会话目录树
+
+struct SessionDirectoryEntry: Decodable, Identifiable {
+    let type: String
+    let key: String
+    let sortTimestamp: Double
+    let session: SessionSnapshot?
+    let history: HistorySession?
+
+    var id: String { key }
+}
+
+struct SessionDirectoryNode: Decodable, Identifiable {
+    let path: String
+    let name: String
+    let synthetic: Bool
+    let directCount: Int
+    let totalCount: Int
+    let latestTimestamp: Double
+    let entries: [SessionDirectoryEntry]
+    let children: [SessionDirectoryNode]
+
+    var id: String { path.isEmpty ? "unknown-\(name)" : path }
+
+    func containsSession(_ sessionId: String?) -> Bool {
+        guard let sessionId else { return false }
+        return entries.contains { $0.session?.id == sessionId }
+            || children.contains { $0.containsSession(sessionId) }
+    }
+}
+
+struct SessionDirectoryTreeResponse: Decodable {
+    let roots: [SessionDirectoryNode]
+    let totalSessions: Int
+    let directoryCount: Int
+    let revision: String
+}
+
 // MARK: - WebSocket 消息
 
 /// /ws 推送的统一包络。data 的形状随 type 不同，这里用「超集 struct」承接：

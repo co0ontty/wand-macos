@@ -121,6 +121,10 @@ final class WandAPI {
         try await request([SessionSnapshot].self, method: "GET", path: "/api/sessions")
     }
 
+    func sessionDirectories() async throws -> SessionDirectoryTreeResponse {
+        try await request(SessionDirectoryTreeResponse.self, method: "GET", path: "/api/session-directories")
+    }
+
     func getSession(id: String) async throws -> SessionSnapshot {
         try await request(SessionSnapshot.self, method: "GET", path: "/api/sessions/\(id)?format=chat")
     }
@@ -280,7 +284,9 @@ final class WandAPI {
 
     @discardableResult
     func resumeHistory(_ history: HistorySession) async throws -> SessionSnapshot {
-        let provider = history.provider == "codex" ? "codex" : "claude"
+        let provider = ["codex", "opencode", "qoder"].contains(history.provider ?? "")
+            ? history.provider!
+            : "claude"
         return try await request(
             SessionSnapshot.self,
             method: "POST",
@@ -290,7 +296,9 @@ final class WandAPI {
     }
 
     func deleteHistory(_ history: HistorySession) async throws {
-        let provider = history.provider == "codex" ? "codex" : "claude"
+        let provider = ["codex", "opencode", "qoder"].contains(history.provider ?? "")
+            ? history.provider!
+            : "claude"
         _ = try await requestData(
             method: "DELETE",
             path: "/api/\(provider)-history/\(percentEncode(history.claudeSessionId))"

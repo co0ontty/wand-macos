@@ -609,6 +609,11 @@ private struct ConnectionFailureView: View {
 // MARK: - 侧栏容器
 
 struct SidebarColumn: View {
+    private enum SidebarViewMode: String {
+        case sessions
+        case directories
+    }
+
     private enum ListEntry: Identifiable {
         case session(SessionSnapshot)
         case recoverable(HistorySession)
@@ -702,6 +707,10 @@ struct SidebarColumn: View {
     @State private var isSelecting = false
     @State private var selectedSessionIds: Set<String> = []
     @State private var showNewSession = false
+    @State private var newSessionInitialCwd: String?
+    @State private var directoryTree: SessionDirectoryTreeResponse?
+    @State private var directoryLoadError: String?
+    @AppStorage("wand.sidebar.view-mode") private var sidebarViewModeRaw = SidebarViewMode.sessions.rawValue
     @State private var historyActionInProgress = false
     @State private var pendingDeletion: PendingDeletion?
     @State private var deleteInProgress = false
@@ -716,11 +725,14 @@ struct SidebarColumn: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color.clear)
-        .sheet(isPresented: $showNewSession) {
-            NewSessionView(api: api) { newSession in
+        .sheet(isPresented: $showNewSession, onDismiss: {
+            newSessionInitialCwd = nil
+        }) {
+            NewSessionView(api: api, initialCwd: newSessionInitialCwd) { newSession in
                 showNewSession = false
                 sessions.insert(newSession, at: 0)
                 onSessionSelected(newSession)
+                Task { await load(silent: true) }
             }
         }
         .task { await load() }
@@ -770,6 +782,17 @@ struct SidebarColumn: View {
 
     // MARK: - 头部
 
+    private var sidebarViewMode: SidebarViewMode {
+        get { SidebarViewMode(rawValue: sidebarViewModeRaw) ?? .sessions }
+        nonmutating set {
+            sidebarViewModeRaw = newValue.rawValue
+            if newValue == .directories {
+                isSelecting = false
+                selectedSessionIds.removeAll()
+            }
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 8) {
             if isSelecting {
@@ -800,21 +823,31 @@ struct SidebarColumn: View {
                 .disabled(deleteInProgress)
                 .help("退出多选")
             } else {
-                Text("会话")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Spacer()
-                Button {
-                    isSelecting = true
-                } label: {
-                    Image(systemName: "checkmark.circle")
-                        .font(.system(size: 16))
-                        .foregroundColor(Theme.textSecondary)
+                Picker("侧栏展示方式", selection: Binding(
+                    get: { sidebarViewMode },
+                    set: { sidebarViewMode = $0 }
+                )) {
+                    Text("会话").tag(SidebarViewMode.sessions)
+                    Text("目录").tag(SidebarViewMode.directories)
                 }
-                .buttonStyle(WandIconButtonStyle())
-                .disabled(deleteInProgress)
-                .help("多选")
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 126)
+                Spacer()
+                if sidebarViewMode == .sessions {
+                    Button {
+                        isSelecting = true
+                    } label: {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 16))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                    .buttonStyle(WandIconButtonStyle())
+                    .disabled(deleteInProgress)
+                    .help("多选")
+                }
                 Button {
+                    newSessionInitialCwd = nil
                     showNewSession = true
                 } label: {
                     Image(systemName: "plus.circle.fill")
@@ -834,7 +867,9 @@ struct SidebarColumn: View {
 
     @ViewBuilder
     private var list: some View {
-        if loading && sessions.isEmpty && historySessions.isEmpty {
+        if sidebarViewMode == .directories {
+            directoryList
+        } else if loading && sessions.isEmpty && historySessions.isEmpty {
             VStack {
                 Spacer()
                 ProgressView().tint(Theme.wandAccent)
@@ -862,7 +897,10 @@ struct SidebarColumn: View {
                 Text("还没有会话")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
-                Button { showNewSession = true } label: {
+                Button {
+                    newSessionInitialCwd = nil
+                    showNewSession = true
+                } label: {
                     Text("新建会话")
                         .frame(maxWidth: 200)
                 }
@@ -883,6 +921,70 @@ struct SidebarColumn: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var directoryList: some View {
+        if loading && directoryTree == nil {
+            VStack {
+                Spacer()
+                ProgressView().tint(Theme.wandAccent)
+                Spacer()
+            }
+        } else if let directoryLoadError, directoryTree == nil {
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "folder.badge.questionmark")
+                    .font(.system(size: 28))
+                    .foregroundColor(Theme.textSecondary)
+                Text(directoryLoadError)
+                    .font(.footnote)
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                Button("重试") { Task { await load() } }
+                    .buttonStyle(WandSecondaryButtonStyle())
+                Spacer()
+            }
+            .padding(20)
+        } else if let tree = directoryTree, !tree.roots.isEmpty {
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(tree.roots) { node in
+                        SessionDirectoryNodeView(
+                            node: node,
+                            depth: 0,
+                            selectedSessionId: selectedSessionId,
+                            onOpenSession: onSessionSelected,
+                            onResumeHistory: resume,
+                            onNewSession: { path in
+                                newSessionInitialCwd = path
+                                showNewSession = true
+                            }
+                        )
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+            }
+        } else {
+            VStack(spacing: 14) {
+                Spacer()
+                Image(systemName: "folder")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                Text("还没有会话目录")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                Button {
+                    newSessionInitialCwd = nil
+                    showNewSession = true
+                } label: {
+                    Text("新建会话").frame(maxWidth: 200)
+                }
+                .buttonStyle(WandPrimaryButtonStyle())
+                Spacer()
             }
         }
     }
@@ -976,6 +1078,7 @@ struct SidebarColumn: View {
     private func load(silent: Bool = false) async -> Bool {
         if !silent { loading = true }
         do {
+            async let directoryRequest = try? api.sessionDirectories()
             let s = try await api.listSessions()
             sessions = s
             if let selectedSessionId,
@@ -989,6 +1092,8 @@ struct SidebarColumn: View {
             async let codexHistory = api.listCodexHistory()
             let (c, x) = try await (claudeHistory, codexHistory)
             historySessions = c + x
+            directoryTree = await directoryRequest
+            directoryLoadError = directoryTree == nil ? "无法加载会话目录" : nil
             loadError = nil
             loading = false
             return true
@@ -1137,6 +1242,142 @@ struct SidebarColumn: View {
         }
     }
 
+}
+
+private struct SessionDirectoryNodeView: View {
+    let node: SessionDirectoryNode
+    let depth: Int
+    let selectedSessionId: String?
+    let onOpenSession: (SessionSnapshot) -> Void
+    let onResumeHistory: (HistorySession) -> Void
+    let onNewSession: (String) -> Void
+
+    @State private var expanded: Bool
+    @State private var hovering = false
+
+    init(
+        node: SessionDirectoryNode,
+        depth: Int,
+        selectedSessionId: String?,
+        onOpenSession: @escaping (SessionSnapshot) -> Void,
+        onResumeHistory: @escaping (HistorySession) -> Void,
+        onNewSession: @escaping (String) -> Void
+    ) {
+        self.node = node
+        self.depth = depth
+        self.selectedSessionId = selectedSessionId
+        self.onOpenSession = onOpenSession
+        self.onResumeHistory = onResumeHistory
+        self.onNewSession = onNewSession
+        _expanded = State(initialValue: depth == 0 || node.containsSession(selectedSessionId))
+    }
+
+    private var activePath: Bool { node.containsSession(selectedSessionId) }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 2) {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(Theme.textMuted)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                        Image(systemName: "folder")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(activePath ? Theme.wandAccent : Theme.textSecondary)
+                        Text(node.name)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("\(node.totalCount)")
+                            .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                            .foregroundColor(Theme.textMuted)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Theme.surfaceElevated.opacity(0.82))
+                            )
+                    }
+                    .padding(.leading, 7)
+                    .padding(.trailing, 4)
+                    .frame(minHeight: 36)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(node.path.isEmpty ? node.name : node.path)
+
+                if !node.synthetic && !node.path.isEmpty {
+                    Button {
+                        onNewSession(node.path)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Theme.wandAccent)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(WandIconButtonStyle())
+                    .opacity(hovering ? 1 : 0.68)
+                    .help("在 \(node.path) 新建会话")
+                    .accessibilityLabel("在 \(node.path) 新建会话")
+                }
+            }
+            .padding(.leading, CGFloat(min(depth, 6)) * 11)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(activePath ? Theme.wandAccent.opacity(0.08) : (hovering ? Theme.surface.opacity(0.55) : .clear))
+            )
+            .onHover { hovering = $0 }
+
+            if expanded {
+                ForEach(node.entries) { entry in
+                    if let session = entry.session {
+                        Button {
+                            onOpenSession(session)
+                        } label: {
+                            SessionTile(
+                                session: session,
+                                isSelected: selectedSessionId == session.id,
+                                isSelecting: false,
+                                checked: false
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, CGFloat(min(depth + 1, 6)) * 9 + 8)
+                    } else if let history = entry.history {
+                        Button {
+                            onResumeHistory(history)
+                        } label: {
+                            HistoryTile(history: history)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, CGFloat(min(depth + 1, 6)) * 9 + 8)
+                    }
+                }
+                ForEach(node.children) { child in
+                    SessionDirectoryNodeView(
+                        node: child,
+                        depth: depth + 1,
+                        selectedSessionId: selectedSessionId,
+                        onOpenSession: onOpenSession,
+                        onResumeHistory: onResumeHistory,
+                        onNewSession: onNewSession
+                    )
+                }
+            }
+        }
+        .onChange(of: selectedSessionId) { _ in
+            if activePath { expanded = true }
+        }
+    }
 }
 
 // MARK: - 会话 tile
