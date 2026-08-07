@@ -17,7 +17,6 @@ struct SettingsView: View {
     @State private var showTroubleshooting = false
     @State private var permissionDenied: Bool?
     @ObservedObject private var releaseUpdater = GitHubReleaseUpdater.shared
-    private let dmgInstaller = DmgInstaller()
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
@@ -285,7 +284,7 @@ struct SettingsView: View {
     /// 桌面端直接查询官方 GitHub Release，而不是依赖当前连接的 Wand 服务。
     /// 这样即使服务离线或切换服务器，更新入口仍然可用。
     private var updateControlDeck: some View {
-        settingsCard("保持在最新版本", description: "每天自动从 GitHub Release 检查；强制检查会忽略间隔立即请求。") {
+        settingsCard("保持在最新版本", description: "自动从 GitHub Release 检查；下载后原位替换，重启即可完成更新。") {
             HStack(spacing: 11) {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 17, weight: .semibold))
@@ -297,8 +296,8 @@ struct SettingsView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
                     Text(releaseUpdater.availableUpdate != nil
-                        ? "新版本已准备好下载"
-                        : "通过 GitHub Release 安装新版客户端")
+                        ? "新版本可以自动更新"
+                        : "通过 GitHub Release 保持最新")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textSecondary)
                 }
@@ -310,11 +309,16 @@ struct SettingsView: View {
             } else if let update = releaseUpdater.availableUpdate {
                 Text("发现 v\(update.latestVersion)")
                     .font(.system(size: 13, weight: .semibold))
-                if let asset = update.dmgAsset {
-                    Text("GitHub Release · \(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file))")
+                if let asset = update.preferredAsset {
+                    let format = asset.name.lowercased().hasSuffix(".zip") ? "ZIP" : "DMG"
+                    Text("GitHub Release · \(format) · \(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file))")
                         .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                    if let reason = UpdateInstaller.installBlockReason {
+                        Text(reason)
+                            .font(.system(size: 11)).foregroundColor(Theme.warning)
+                    }
                 } else {
-                    Text("该 Release 未附带 macOS DMG，可在 GitHub 页面手动下载。")
+                    Text("该 Release 未附带 macOS ZIP 或 DMG，可在 GitHub 页面手动下载。")
                         .font(.system(size: 11)).foregroundColor(Theme.warning)
                 }
                 if let updateError = releaseUpdater.lastError {
@@ -332,8 +336,8 @@ struct SettingsView: View {
                     .tint(Theme.brand)
                     .disabled(releaseUpdater.isChecking)
                 if let update = releaseUpdater.availableUpdate {
-                    if update.dmgAsset != nil {
-                        Button("下载并打开 DMG") { downloadUpdate(update) }
+                    if update.preferredAsset != nil, UpdateInstaller.canInstallInPlace {
+                        Button("立即更新") { installUpdate(update) }
                             .buttonStyle(.bordered)
                     }
                     Button("查看 Release") { NSWorkspace.shared.open(update.releaseURL) }
@@ -356,13 +360,8 @@ struct SettingsView: View {
         return "macOS 不提供可直接读取的授权状态；连接异常时可用故障排查进一步检测。"
     }
 
-    private func downloadUpdate(_ update: GitHubReleaseUpdater.Update) {
-        guard let asset = update.dmgAsset else { return }
-        dmgInstaller.downloadAndMount(
-            urlString: asset.downloadURL.absoluteString,
-            fileName: asset.name,
-            presentingWindow: NSApp.keyWindow
-        )
+    private func installUpdate(_ update: GitHubReleaseUpdater.Update) {
+        UpdateFlowController.shared.start(update: update)
     }
 
     private var localNetworkDescription: String {

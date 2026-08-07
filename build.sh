@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # 在 macOS 上构建 Wand.app（Universal Binary, arm64+x86_64），ad-hoc 签名，
-# 然后用 hdiutil 打成 wand-v<VERSION>.dmg。
+# 然后生成自动更新用 ZIP 与首次安装用 DMG。
 #
 # 用法：
 #   ./build.sh <version>            # 例如：./build.sh 1.16.0
 #
 # 输出：
 #   build/Wand.app
+#   dist/wand-v<version>.zip
 #   dist/wand-v<version>.dmg
 
 set -euo pipefail
@@ -97,6 +98,10 @@ codesign --sign - --force --deep --options runtime \
          "$APP_DST"
 codesign --verify --strict --verbose=2 "$APP_DST"
 
+echo "==> ditto 制作自动更新 ZIP"
+ZIP_OUT="$DIST_DIR/wand-v${VERSION}.zip"
+/usr/bin/ditto -c -k --keepParent "$APP_DST" "$ZIP_OUT"
+
 echo "==> hdiutil 制作 DMG"
 STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
@@ -120,4 +125,5 @@ hdiutil create \
 echo ""
 echo "✅ 完成"
 echo "   .app: $APP_DST"
+echo "   ZIP : $ZIP_OUT"
 echo "   DMG : $DMG_OUT"

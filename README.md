@@ -24,7 +24,7 @@ WKWebView 渲染，侧栏、会话头和输入栏保持原生，另保留完整�
 
 ```bash
 ./build.sh 1.16.0
-# 产物：build/Wand.app + dist/wand-v1.16.0.dmg
+# 产物：build/Wand.app + dist/wand-v1.16.0.zip + dist/wand-v1.16.0.dmg
 ```
 
 要求：
@@ -86,8 +86,15 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 
 ## 更新
 
-客户端不在启动或打开网页版时主动弹出更新窗口。用户可在网页版完整设置中查看更新并下载 DMG；
-下载完成后由系统挂载，用户拖拽 Wand.app 到 Applications 完成升级。
+客户端启动时会按间隔检查官方 GitHub Release，也可在原生设置中强制检查。发现新版本后：
+
+1. 优先下载同版本 ZIP；旧 Release 没有 ZIP 时回退到 DMG。
+2. 解包后校验 bundle id、`CFBundleShortVersionString`、主可执行文件与代码签名。
+3. 用户确认重启后，由外部 helper 备份并原位替换当前 `Wand.app`，随后自动打开新版。
+4. 复制或启动失败时 helper 会恢复旧应用；诊断日志写入 `~/Library/Logs/Wand/update.log`。
+
+因此日常更新不再需要重新挂载 DMG 或拖拽安装。当前 app 所在目录必须可写；若从只读 DMG
+直接运行，先将 `Wand.app` 拖到 Applications。Release 同时保留 DMG，供首次安装或自动更新失败时兜底。
 
 ## 工程结构
 
@@ -99,6 +106,8 @@ macos/Wand/
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
 ├── NewSessionView.swift       # 五个 Provider、会话类型、目录与权限模式
 ├── GitQuickCommitView.swift   # 原生快捷提交面板
+├── GitHubReleaseUpdater.swift # GitHub Release 检查与 ZIP/DMG 资产选择
+├── UpdateInstaller.swift      # 下载、校验、原位替换、失败回滚与自动重启
 ├── WandAPI.swift              # REST 客户端
 ├── WandSocket.swift           # WebSocket 订阅、重连与 resync
 ├── WandModels.swift           # 服务端协议 Codable 模型

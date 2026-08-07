@@ -33,6 +33,7 @@
 		A200000000000000000000C3 /* FilePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D3 /* FilePanelView.swift */; };
 		A200000000000000000000C4 /* TroubleshootingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D4 /* TroubleshootingView.swift */; };
 		A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D5 /* GitHubReleaseUpdater.swift */; };
+		A200000000000000000000C6 /* UpdateInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D6 /* UpdateInstaller.swift */; };
 		A100000000000000000000C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* Assets.xcassets */; };
 		D4000000000000000000AC01 /* MissionsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC01 /* MissionsModels.swift */; };
 		D4000000000000000000AC02 /* MissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC02 /* MissionsView.swift */; };
@@ -65,6 +66,7 @@
 		A200000000000000000000D3 /* FilePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePanelView.swift; sourceTree = "<group>"; };
 		A200000000000000000000D4 /* TroubleshootingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TroubleshootingView.swift; sourceTree = "<group>"; };
 		A200000000000000000000D5 /* GitHubReleaseUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubReleaseUpdater.swift; sourceTree = "<group>"; };
+		A200000000000000000000D6 /* UpdateInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateInstaller.swift; sourceTree = "<group>"; };
 		A100000000000000000000D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A100000000000000000000E1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A100000000000000000000E2 /* Wand.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Wand.entitlements; sourceTree = "<group>"; };
@@ -121,6 +123,7 @@
 				A200000000000000000000D3 /* FilePanelView.swift */,
 				A200000000000000000000D4 /* TroubleshootingView.swift */,
 				A200000000000000000000D5 /* GitHubReleaseUpdater.swift */,
+				A200000000000000000000D6 /* UpdateInstaller.swift */,
 				D4000000000000000000BC01 /* MissionsModels.swift */,
 				D4000000000000000000BC02 /* MissionsView.swift */,
 				A100000000000000000000D1 /* Assets.xcassets */,
@@ -234,6 +237,7 @@
 				A200000000000000000000C3 /* FilePanelView.swift in Sources */,
 				A200000000000000000000C4 /* TroubleshootingView.swift in Sources */,
 				A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */,
+				A200000000000000000000C6 /* UpdateInstaller.swift in Sources */,
 				D4000000000000000000AC01 /* MissionsModels.swift in Sources */,
 				D4000000000000000000AC02 /* MissionsView.swift in Sources */,
 			);

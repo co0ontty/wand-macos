@@ -40,7 +40,6 @@ struct WandApp: App {
 }
 
 final class WandAppDelegate: NSObject, NSApplicationDelegate {
-    private let updateInstaller = DmgInstaller()
     private var remindedVersion: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -56,7 +55,7 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
             self.closeDuplicateMainWindows()
         }
 
-        // 主窗口建立后后台查一次；24 小时内已查过会自动跳过。发现新版时以
+        // 主窗口建立后后台查一次；30 分钟内已查过会自动跳过。发现新版时以
         // 原生提醒呈现，不依赖用户是否已连接某一台 Wand 服务。
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             Task { @MainActor in
@@ -100,29 +99,29 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = "发现 Wand 新版本 v\(update.latestVersion)"
         alert.alertStyle = .informational
 
-        if let asset = update.dmgAsset {
+        let canAutoUpdate = update.preferredAsset != nil && UpdateInstaller.canInstallInPlace
+        if let asset = update.preferredAsset, canAutoUpdate {
             let size = ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)
-            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n新版已发布到 GitHub Release（\(size)）。下载后会自动挂载 DMG，按提示将 Wand.app 拖入 Applications 即可。"
-            alert.addButton(withTitle: "下载并打开 DMG")
+            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n新版已发布到 GitHub Release（\(size)）。Wand 会自动下载并替换当前应用，重启后即可完成更新，无需重新安装。"
+            alert.addButton(withTitle: "立即更新")
             alert.addButton(withTitle: "查看 Release")
             alert.addButton(withTitle: "稍后提醒")
         } else {
-            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n该 GitHub Release 未包含 macOS DMG，请在 Release 页面手动下载。"
+            let reason = update.preferredAsset == nil
+                ? "该 GitHub Release 未包含 macOS ZIP 或 DMG。"
+                : (UpdateInstaller.installBlockReason ?? "当前 Wand.app 无法原位更新。")
+            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n\(reason)请在 Release 页面手动下载。"
             alert.addButton(withTitle: "查看 Release")
             alert.addButton(withTitle: "稍后提醒")
         }
 
-        let handleResponse: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard let self else { return }
-            if update.dmgAsset != nil {
+        let handleResponse: (NSApplication.ModalResponse) -> Void = { response in
+            if canAutoUpdate {
                 switch response {
                 case .alertFirstButtonReturn:
-                    guard let asset = update.dmgAsset else { return }
-                    self.updateInstaller.downloadAndMount(
-                        urlString: asset.downloadURL.absoluteString,
-                        fileName: asset.name,
-                        presentingWindow: NSApp.keyWindow
-                    )
+                    Task { @MainActor in
+                        UpdateFlowController.shared.start(update: update)
+                    }
                 case .alertSecondButtonReturn:
                     NSWorkspace.shared.open(update.releaseURL)
                 default:

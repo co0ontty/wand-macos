@@ -20,7 +20,11 @@ final class GitHubReleaseUpdater: ObservableObject {
         let latestVersion: String
         let releaseURL: URL
         let releaseNotes: String?
+        let zipAsset: Asset?
         let dmgAsset: Asset?
+
+        /// ZIP 解包不需要挂载磁盘镜像，自动更新优先使用；旧 Release 可回退到 DMG。
+        var preferredAsset: Asset? { zipAsset ?? dmgAsset }
     }
 
     enum CheckResult: Equatable {
@@ -147,16 +151,8 @@ final class GitHubReleaseUpdater: ObservableObject {
                 return .upToDate(currentVersion: currentVersion)
             }
 
-            let dmg = release.assets
-                .filter { $0.name.lowercased().hasSuffix(".dmg") }
-                .sorted { lhs, rhs in
-                    let lhsLooksLikeWand = lhs.name.lowercased().contains("wand")
-                    let rhsLooksLikeWand = rhs.name.lowercased().contains("wand")
-                    if lhsLooksLikeWand != rhsLooksLikeWand { return lhsLooksLikeWand }
-                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-                }
-                .first
-                .map { Update.Asset(name: $0.name, downloadURL: $0.browserDownloadURL, size: $0.size) }
+            let zip = Self.preferredAsset(in: release.assets, withExtension: "zip")
+            let dmg = Self.preferredAsset(in: release.assets, withExtension: "dmg")
 
             return .updateAvailable(
                 Update(
@@ -164,6 +160,7 @@ final class GitHubReleaseUpdater: ObservableObject {
                     latestVersion: latestVersion,
                     releaseURL: release.htmlURL,
                     releaseNotes: release.body?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    zipAsset: zip,
                     dmgAsset: dmg
                 )
             )
@@ -223,6 +220,22 @@ final class GitHubReleaseUpdater: ObservableObject {
             }
         }
         return candidate.count > baseline.count
+    }
+
+    private static func preferredAsset(
+        in assets: [GitHubRelease.Asset],
+        withExtension fileExtension: String
+    ) -> Update.Asset? {
+        assets
+            .filter { $0.name.lowercased().hasSuffix(".\(fileExtension)") }
+            .sorted { lhs, rhs in
+                let lhsLooksLikeWand = lhs.name.lowercased().contains("wand")
+                let rhsLooksLikeWand = rhs.name.lowercased().contains("wand")
+                if lhsLooksLikeWand != rhsLooksLikeWand { return lhsLooksLikeWand }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+            .first
+            .map { Update.Asset(name: $0.name, downloadURL: $0.browserDownloadURL, size: $0.size) }
     }
 }
 
