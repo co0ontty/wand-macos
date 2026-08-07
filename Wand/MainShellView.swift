@@ -1624,14 +1624,18 @@ struct MainColumn: View {
 
     var body: some View {
         if session?.isStructured == false {
-            // PTY 是完整终端交互，不应被原生 ChatView 当作普通消息流模拟；直接深链
-            // 到服务端已有的网页终端，保留键盘、光标和终端控制语义。
-            WebContainerView(
-                serverURL: api.baseURL,
-                token: api.token,
-                sessionId: sessionId
-            )
-            .id(sessionId)
+            // PTY 保留 Web 终端渲染器的键盘、光标和 ANSI/TUI 语义，
+            // 但只嵌入终端工作区；侧栏和会话头继续由原生主壳呈现。
+            VStack(spacing: 0) {
+                SessionHeaderView(
+                    provider: provider,
+                    title: session?.displayTitle,
+                    workingDirectory: session?.cwd
+                )
+                PtySessionView(sessionId: sessionId, api: api)
+                .id(sessionId)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
             // 结构化会话继续使用原生消息与输入体验。
             VStack(spacing: 0) {

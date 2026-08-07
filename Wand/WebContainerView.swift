@@ -26,8 +26,13 @@ final class WebViewModel: ObservableObject {
 struct WebContainerView: View {
     let serverURL: URL
     let token: String?
-    /// 指定后直接深链到对应会话（`?session=<id>`），PTY 会话从原生列表进入网页版用。
+    /// 指定后直接深链到对应会话（`?session=<id>`）。
     var sessionId: String? = nil
+    /// 嵌入终端模式：URL 带 `embed=terminal`，网页隐藏自己的应用壳，
+    /// 会话侧栏和顶栏继续由 macOS 原生主壳呈现。
+    var embedTerminal: Bool = false
+    /// 原生 PTY 输入栏启用时追加 `nativeInput=1`，网页只负责终端画布。
+    var embedNativeInput: Bool = false
     /// 「返回原生界面」回调；非 nil 时注入 `__wandBackToNative`，网页侧边栏显示「返回App」。
     var onRequestClose: (() -> Void)? = nil
 
@@ -49,6 +54,8 @@ struct WebContainerView: View {
                 serverURL: serverURL,
                 token: token,
                 sessionId: sessionId,
+                embedTerminal: embedTerminal,
+                embedNativeInput: embedNativeInput,
                 injectsBackToNative: onRequestClose != nil,
                 model: model
             )
@@ -156,6 +163,8 @@ struct WebViewRepresentable: NSViewRepresentable {
     let serverURL: URL
     let token: String?
     var sessionId: String? = nil
+    var embedTerminal: Bool = false
+    var embedNativeInput: Bool = false
     /// 是否注入「返回原生界面」入口：注入后新版网页会在侧边栏渲染「返回App」按钮，
     /// 点击 → backToNative 消息 → model.requestClose。网页版主入口不注入（无处可返回）。
     var injectsBackToNative: Bool = false
@@ -238,15 +247,22 @@ struct WebViewRepresentable: NSViewRepresentable {
 
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 
-    /// 带 sessionId 时在主页 URL 上追加 `?session=<id>`，前端据此直接打开对应会话（同 iOS）。
+    /// 带 sessionId 时在主页 URL 上追加 `?session=<id>`；PTY 嵌入模式
+    /// 额外追加 `embed=terminal`，让前端隐藏自己的应用壳。
     private func sessionURL() -> URL {
         guard let sessionId, !sessionId.isEmpty,
               var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false) else {
             return serverURL
         }
         var items = components.queryItems ?? []
-        items.removeAll { $0.name == "session" }
+        items.removeAll { $0.name == "session" || $0.name == "embed" || $0.name == "nativeInput" }
         items.append(URLQueryItem(name: "session", value: sessionId))
+        if embedTerminal {
+            items.append(URLQueryItem(name: "embed", value: "terminal"))
+            if embedNativeInput {
+                items.append(URLQueryItem(name: "nativeInput", value: "1"))
+            }
+        }
         components.queryItems = items
         return components.url ?? serverURL
     }

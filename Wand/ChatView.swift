@@ -33,6 +33,8 @@ struct ChatView: View {
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
     @State private var showTroubleshooting = false
+    @State private var composerInputHeight: CGFloat = 36
+    @State private var composerIsComposing = false
     @FocusState private var inputFocused: Bool
 
     init(sessionId: String, api: WandAPI, gitStatusStore: GitStatusStore) {
@@ -582,7 +584,6 @@ struct ChatView: View {
                 )
             }
             growingTextField
-                .focused($inputFocused)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 5)
                 .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
@@ -830,45 +831,31 @@ struct ChatView: View {
         .help("选择图片或文件；也可在输入框按 Command-V 粘贴图片")
     }
 
-    /// iOS 16+ / macOS 13+ 用多行自增高输入框；旧系统退化为单行。
-    /// Enter 发送(走 onSubmit),Shift+Enter 走 multi-line newline 行为(由 TextField axis
-    /// 默认处理:macOS 14+ 区分 Enter 提交 / Shift+Enter 换行,这里再显式做一次修饰键判定,
-    /// 避免老系统回车直接清空草稿但没发出去)。
-    @ViewBuilder private var growingTextField: some View {
-        if #available(iOS 16.0, macOS 13.0, *) {
-            TextField(composerPlaceholder, text: $draft, axis: .vertical)
-                .lineLimit(1...5)
-                .font(.system(size: 16))
-                .textFieldStyle(.plain)
-                .foregroundColor(Theme.textPrimary)
-                .tint(Theme.wandAccent)
-                .onSubmit { handleReturnKey(shift: false) }
-        } else {
-            TextField(composerPlaceholder, text: $draft)
-                .font(.system(size: 16))
-                .textFieldStyle(.plain)
-                .foregroundColor(Theme.textPrimary)
-                .tint(Theme.wandAccent)
-                .onSubmit { handleReturnKey(shift: false) }
-        }
+    /// AppKit 原生多行输入器。Return 命令先经过 NSTextInputContext / markedText，
+    /// 所以中文输入法确认候选不会落进发送回调；普通 Enter 发送，Shift+Enter 换行。
+    private var growingTextField: some View {
+        IMEAwareComposerTextView(
+            text: $draft,
+            placeholder: composerPlaceholder,
+            isFocused: inputFocused,
+            onFocusChange: { inputFocused = $0 },
+            onCompositionChange: { composerIsComposing = $0 },
+            onSubmit: handleReturnKey,
+            onHeightChange: { composerInputHeight = $0 }
+        )
+        .frame(height: composerInputHeight)
     }
 
     private var composerPlaceholder: String {
         return "输入消息"
     }
 
-    /// 拦截回车:无修饰键 → 发送;带 Shift → 插入换行(老系统回退路径)。
-    /// 用 NSApp.currentEvent 读 modifier,因为 onSubmit 回调里没有直接拿到事件。
-    private func handleReturnKey(shift: Bool) {
-        if shift {
-            // Shift+Enter 期望换行;TextField 在多行模式下默认会插入,这里不进 sendDraft。
-            return
-        }
+    private func handleReturnKey() {
         sendDraft()
     }
 
     private var canSend: Bool {
-        !attachments.isUploading && (
+        !composerIsComposing && !attachments.isUploading && (
             !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.attachments.isEmpty
         )
@@ -897,6 +884,291 @@ struct ChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(Capsule().fill(Color.black.opacity(0.78)))
+                .padding(.top, 8)
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
+                        if store.toast == toast { store.toast = nil }
+                    }
+                }
+        }
+    }
+}
+
+/// PTY 会话使用原生 macOS chrome 与 composer；WKWebView 只承担终端画布，
+/// 保留 ANSI、光标和全屏 TUI 语义，同时避免把整套网页应用再次嵌进原生三栏。
+struct PtySessionView: View {
+    let sessionId: String
+    let api: WandAPI
+
+    @Environment(\.colorSchemeContrast) private var contrast
+    @StateObject private var store: ChatStore
+    @StateObject private var attachments: ComposerAttachmentController
+    @State private var draft = ""
+    @State private var composerInputHeight: CGFloat = 36
+    @State private var composerIsComposing = false
+    @State private var isSending = false
+    @State private var showStopConfirm = false
+    @FocusState private var inputFocused: Bool
+
+    init(sessionId: String, api: WandAPI) {
+        self.sessionId = sessionId
+        self.api = api
+        _store = StateObject(wrappedValue: ChatStore(sessionId: sessionId, api: api))
+        _attachments = StateObject(
+            wrappedValue: ComposerAttachmentController(sessionId: sessionId, api: api)
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WebContainerView(
+                serverURL: api.baseURL,
+                token: api.token,
+                sessionId: sessionId,
+                embedTerminal: true,
+                embedNativeInput: true
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if store.pendingEscalation != nil || store.legacyPermissionPrompt != nil {
+                PermissionCard(
+                    escalation: store.pendingEscalation,
+                    legacy: store.legacyPermissionPrompt,
+                    onResolve: { store.resolvePermission($0) }
+                )
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            }
+
+            nativeComposer
+        }
+        .background(Color(red: 0.090, green: 0.071, blue: 0.059))
+        .fileImporter(
+            isPresented: $attachments.showFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true,
+            onCompletion: attachments.handleFileSelection
+        )
+        .onAppear {
+            attachments.setToastHandler { store.toast = $0 }
+            store.start()
+        }
+        .onDisappear {
+            attachments.cancelPendingUploads()
+            store.shutdown()
+        }
+        .overlay(alignment: .top) { toastView }
+        .confirmationDialog(
+            "确定要停止当前终端任务吗？",
+            isPresented: $showStopConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("停止", role: .destructive) { stopPtyInput() }
+            Button("取消", role: .cancel) {}
+        }
+    }
+
+    private var nativeComposer: some View {
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 7) {
+                if !attachments.attachments.isEmpty {
+                    PendingAttachmentsPreview(
+                        baseURL: api.baseURL,
+                        attachments: attachments.attachments,
+                        onRemove: attachments.remove
+                    )
+                }
+                IMEAwareComposerTextView(
+                    text: $draft,
+                    placeholder: "输入终端消息",
+                    isFocused: inputFocused,
+                    onFocusChange: { inputFocused = $0 },
+                    onCompositionChange: { composerIsComposing = $0 },
+                    onSubmit: sendDraft,
+                    onHeightChange: { composerInputHeight = $0 }
+                )
+                .frame(height: composerInputHeight)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .background(
+                    ComposerPasteInterceptor(
+                        attachments: attachments,
+                        isInputFocused: inputFocused
+                    )
+                    .frame(width: 0, height: 0)
+                )
+            }
+            HStack(spacing: ComposerMetrics.actionSpacing) {
+                attachmentsMenu
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("终端")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundColor(Theme.textSecondary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(Capsule().fill(Theme.textSecondary.opacity(0.10)))
+                .overlay(Capsule().stroke(Theme.textSecondary.opacity(0.22), lineWidth: 1))
+                Spacer(minLength: 0)
+                trailingButtons
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .wandGlass(.panel)
+        .overlay(
+            shape.stroke(
+                inputFocused ? Theme.wandAccent.opacity(contrast == .increased ? 1 : 0.62) : Theme.border,
+                lineWidth: contrast == .increased ? 2 : (inputFocused ? 1.35 : 1)
+            )
+        )
+        .padding(.horizontal, 12)
+        .padding(.top, 7)
+        .padding(.bottom, 8)
+        .background(Theme.background.opacity(0.97))
+    }
+
+    private var attachmentsMenu: some View {
+        Menu {
+            Button {
+                attachments.showFileImporter = true
+            } label: {
+                Label("选择图片或文件…", systemImage: "paperclip")
+            }
+            .disabled(attachments.isUploading || attachments.isFull)
+
+            Button {
+                _ = attachments.importFromPasteboard(.general)
+            } label: {
+                Label("粘贴剪贴板中的图片", systemImage: "photo.on.rectangle")
+            }
+            .disabled(attachments.isUploading || attachments.isFull)
+        } label: {
+            if attachments.isUploading {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(
+                        width: ComposerMetrics.actionVisualSize,
+                        height: ComposerMetrics.actionVisualSize
+                    )
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(
+                        width: ComposerMetrics.actionVisualSize,
+                        height: ComposerMetrics.actionVisualSize
+                    )
+                    .background(Circle().fill(Theme.surface))
+                    .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+            }
+        }
+        .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
+        .buttonStyle(.plain)
+        .accessibilityLabel("添加附件和更多操作")
+    }
+
+    private var trailingButtons: some View {
+        HStack(spacing: ComposerMetrics.actionSpacing) {
+            if !store.loading && store.status == "running" {
+                Button { showStopConfirm = true } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(
+                            width: ComposerMetrics.actionVisualSize,
+                            height: ComposerMetrics.actionVisualSize
+                        )
+                        .background(Circle().fill(Theme.danger))
+                }
+                .frame(
+                    width: ComposerMetrics.actionTouchSize,
+                    height: ComposerMetrics.actionTouchSize
+                )
+                .buttonStyle(.plain)
+                .accessibilityLabel("停止任务")
+            }
+            Button(action: sendDraft) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(canSend ? Theme.surface : Theme.textSecondary.opacity(0.55))
+                    .frame(
+                        width: ComposerMetrics.actionVisualSize,
+                        height: ComposerMetrics.actionVisualSize
+                    )
+                    .background(
+                        Circle().fill(canSend ? Theme.textPrimary : Theme.textSecondary.opacity(0.16))
+                    )
+            }
+            .frame(
+                width: ComposerMetrics.actionTouchSize,
+                height: ComposerMetrics.actionTouchSize
+            )
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+            .accessibilityLabel("发送")
+        }
+    }
+
+    private var canSend: Bool {
+        !store.loading && !composerIsComposing && !isSending && !attachments.isUploading && (
+            !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !attachments.attachments.isEmpty
+        )
+    }
+
+    private func sendDraft() {
+        guard canSend else { return }
+        let text = buildAttachmentPrompt(attachments.attachments, body: draft)
+        guard !text.isEmpty else { return }
+        let restoreDraft = draft
+        let restoreAttachments = attachments.attachments
+        draft = ""
+        attachments.attachments.removeAll()
+        isSending = true
+        inputFocused = true
+        Task {
+            defer { isSending = false }
+            do {
+                try await store.sendPtyTerminalInput(text)
+            } catch {
+                if draft.isEmpty { draft = restoreDraft }
+                if attachments.attachments.isEmpty {
+                    attachments.attachments = restoreAttachments
+                }
+                store.toast = error.localizedDescription
+            }
+        }
+    }
+
+    private func stopPtyInput() {
+        Task {
+            do {
+                _ = try await api.sendInput(
+                    id: sessionId,
+                    input: "\u{1B}",
+                    view: "terminal",
+                    shortcutKey: "esc"
+                )
+            } catch {
+                store.toast = error.localizedDescription
+            }
+        }
+    }
+
+    @ViewBuilder private var toastView: some View {
+        if let toast = store.toast {
+            Text(toast)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Capsule().fill(Color.black.opacity(0.82)))
                 .padding(.top, 8)
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
@@ -1205,6 +1477,234 @@ private struct ComposerPasteInterceptor: NSViewRepresentable {
             }
             return characters == "v"
         }
+    }
+}
+
+/// NSTextView keeps marked-text handling inside AppKit's text-input pipeline.
+/// The delegate only sees an unconsumed newline command, which lets Return send
+/// without stealing the same key from Chinese/Japanese/Korean input methods.
+private struct IMEAwareComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let isFocused: Bool
+    let onFocusChange: (Bool) -> Void
+    let onCompositionChange: (Bool) -> Void
+    let onSubmit: () -> Void
+    let onHeightChange: (CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = ComposerNSTextView(frame: .zero)
+        textView.delegate = context.coordinator
+        textView.string = text
+        textView.placeholder = placeholder
+        textView.onMarkedTextChange = { active in
+            context.coordinator.parent.onCompositionChange(active)
+        }
+        textView.isRichText = false
+        textView.importsGraphics = false
+        // Chat prompts and PTY commands must stay byte-for-byte as typed.
+        // AppKit enables several prose-oriented substitutions by default.
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.font = .systemFont(ofSize: 16)
+        textView.textColor = .labelColor
+        textView.insertionPointColor = NSColor(Theme.wandAccent)
+        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 36)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(
+            width: 0,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.setAccessibilityLabel("消息输入")
+        textView.setAccessibilityHelp("按 Return 发送，按 Shift-Return 换行")
+
+        scrollView.documentView = textView
+        context.coordinator.scrollView = scrollView
+        context.coordinator.reportHeight(for: textView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
+
+        textView.placeholder = placeholder
+        textView.onMarkedTextChange = { active in
+            context.coordinator.parent.onCompositionChange(active)
+        }
+        textView.insertionPointColor = NSColor(Theme.wandAccent)
+        if textView.string != text && !textView.hasMarkedText() {
+            let selection = textView.selectedRanges
+            context.coordinator.isApplyingBinding = true
+            textView.string = text
+            context.coordinator.isApplyingBinding = false
+            if !selection.isEmpty, !text.isEmpty {
+                textView.selectedRanges = selection.map { value in
+                    let range = value.rangeValue
+                    let location = min(range.location, (text as NSString).length)
+                    let length = min(range.length, (text as NSString).length - location)
+                    return NSValue(range: NSRange(location: location, length: length))
+                }
+            }
+            textView.needsDisplay = true
+            context.coordinator.reportHeight(for: textView)
+        }
+
+        if isFocused {
+            if textView.window?.firstResponder !== textView {
+                DispatchQueue.main.async { [weak textView] in
+                    guard let textView, context.coordinator.parent.isFocused else { return }
+                    textView.window?.makeFirstResponder(textView)
+                }
+            }
+        } else if textView.window?.firstResponder === textView {
+            textView.window?.makeFirstResponder(nil)
+        }
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        if let textView = scrollView.documentView as? ComposerNSTextView {
+            textView.onMarkedTextChange = nil
+            textView.delegate = nil
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: IMEAwareComposerTextView
+        weak var scrollView: NSScrollView?
+        var isApplyingBinding = false
+        private var lastReportedHeight: CGFloat = 0
+
+        init(parent: IMEAwareComposerTextView) {
+            self.parent = parent
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            if !parent.isFocused {
+                parent.onFocusChange(true)
+            }
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            if parent.isFocused {
+                parent.onFocusChange(false)
+            }
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            textView.needsDisplay = true
+            if !isApplyingBinding {
+                parent.text = textView.string
+            }
+            reportHeight(for: textView)
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)) else {
+                return false
+            }
+
+            // AppKit normally consumes this key inside NSTextInputContext before
+            // reaching the delegate. Keep the explicit guard for input methods
+            // that still forward insertNewline while marked text is active.
+            if textView.hasMarkedText() {
+                textView.unmarkText()
+                return true
+            }
+
+            let modifiers = NSApp.currentEvent?.modifierFlags
+                .intersection(.deviceIndependentFlagsMask) ?? []
+            if modifiers.contains(.shift) {
+                return false
+            }
+
+            parent.onSubmit()
+            return true
+        }
+
+        func reportHeight(for textView: NSTextView) {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else { return }
+            layoutManager.ensureLayout(for: textContainer)
+            let contentHeight = layoutManager.usedRect(for: textContainer).height
+                + (textView.textContainerInset.height * 2)
+                + 2
+            let height = min(112, max(36, ceil(contentHeight)))
+            scrollView?.hasVerticalScroller = contentHeight > 112
+            guard abs(height - lastReportedHeight) > 0.5 else { return }
+            lastReportedHeight = height
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onHeightChange(height)
+            }
+        }
+    }
+}
+
+private final class ComposerNSTextView: NSTextView {
+    var onMarkedTextChange: ((Bool) -> Void)?
+    var placeholder = "" {
+        didSet { needsDisplay = true }
+    }
+
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        super.setMarkedText(
+            string,
+            selectedRange: selectedRange,
+            replacementRange: replacementRange
+        )
+        onMarkedTextChange?(hasMarkedText())
+        needsDisplay = true
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        onMarkedTextChange?(false)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !hasMarkedText(), !placeholder.isEmpty else { return }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.systemFont(ofSize: 16),
+            .foregroundColor: NSColor.placeholderTextColor
+        ]
+        let origin = NSPoint(
+            x: textContainerInset.width + 1,
+            y: textContainerInset.height
+        )
+        placeholder.draw(at: origin, withAttributes: attributes)
     }
 }
 

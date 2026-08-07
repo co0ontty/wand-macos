@@ -1,7 +1,8 @@
 # macOS 客户端
 
 Wand 的 macOS 原生 SwiftUI 客户端。连接后默认进入原生会话列表与聊天界面，
-直连 wand 服务端 REST + WebSocket 协议；WKWebView 仅保留为完整网页版兜底入口。
+直连 wand 服务端 REST + WebSocket 协议；PTY 的 ANSI/TUI 终端画布由精简
+WKWebView 渲染，侧栏、会话头和输入栏保持原生，另保留完整网页版兜底入口。
 
 ## 约定
 
@@ -102,5 +103,5 @@ macos/Wand/
 ├── WandSocket.swift           # WebSocket 订阅、重连与 resync
 ├── WandModels.swift           # 服务端协议 Codable 模型
 ├── LocalNetworkPermission.swift # macOS 15+ 本地网络权限：触发弹窗/被拒探测/设置深链
-└── WebContainerView.swift     # 完整网页版兜底
+└── WebContainerView.swift     # PTY 终端画布与完整网页版兜底
 ```

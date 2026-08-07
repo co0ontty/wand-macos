@@ -287,6 +287,33 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// 原生 PTY composer 与网页终端保持同一提交协议：正文与 Return 分成两个
+    /// chunk，间隔一帧发送，避免 CLI 的 bracketed-paste 检测把末尾回车吞掉。
+    func sendPtyTerminalInput(_ text: String) async throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if status != "running" {
+            toast = "正在恢复会话…"
+            let resumed = try await api.resumeSession(id: sessionId)
+            apply(snapshot: resumed)
+            socket.requestResync()
+        }
+        let textSnapshot = try await api.sendInput(
+            id: sessionId,
+            input: trimmed,
+            view: "terminal"
+        )
+        apply(snapshot: textSnapshot)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let enterSnapshot = try await api.sendInput(
+            id: sessionId,
+            input: "\r",
+            view: "terminal",
+            shortcutKey: "enter_text"
+        )
+        apply(snapshot: enterSnapshot)
+    }
+
     func setModel(_ model: String?) {
         let previous = selectedModel
         selectedModel = model
