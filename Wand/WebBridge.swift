@@ -7,7 +7,6 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
     private let model: WebViewModel
     private weak var webView: WKWebView?
     private var serverURL: URL?
-    private lazy var installer = DmgInstaller()
     private var hasLoadedOnce = false
 
     init(model: WebViewModel) {
@@ -18,7 +17,6 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
         self.webView = webView
         self.serverURL = serverURL
         self.model.webView = webView
-        installer.serverURL = serverURL
     }
 
     /// 切换到错误覆盖层（主线程）。token 登录失败时由 WebViewRepresentable 调用。
@@ -33,10 +31,12 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
     func userContentController(_ uc: WKUserContentController, didReceive msg: WKScriptMessage) {
         guard let dict = msg.body as? [String: Any], let type = dict["type"] as? String else { return }
         switch type {
-        case "downloadUpdate":
-            let url = (dict["url"] as? String) ?? ""
-            let fileName = (dict["fileName"] as? String) ?? "wand-update.dmg"
-            installer.downloadAndMount(urlString: url, fileName: fileName, presentingWindow: webView?.window)
+        case "downloadUpdate", "checkAppUpdate":
+            // 兼容旧 Web UI 的 downloadUpdate 消息，但不再接受连接服务器提供的
+            // 任意 DMG URL。macOS 客户端始终通过官方 GitHub Release 更新。
+            Task { @MainActor in
+                await UpdateFlowController.shared.checkManually()
+            }
         case "backToNative":
             DispatchQueue.main.async { [weak self] in
                 self?.model.requestClose?()

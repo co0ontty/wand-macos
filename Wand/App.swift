@@ -30,6 +30,11 @@ struct WandApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {
+                Button("检查更新…") {
+                    Task { @MainActor in
+                        await UpdateFlowController.shared.checkManually()
+                    }
+                }
                 Button("切换服务器…") {
                     NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                 }
@@ -40,9 +45,17 @@ struct WandApp: App {
 }
 
 final class WandAppDelegate: NSObject, NSApplicationDelegate {
-    private var remindedVersion: String?
-
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // helper 只有收到新版启动确认后才删除旧版备份；必须在其他启动任务前确认。
+        MacUpdateManager.shared.completeLaunchedUpdateIfNeeded()
+
+        // XCTest 会启动完整 App 宿主。测试期间不应弹本地网络权限或访问真实 GitHub API；
+        // 更新检查本身由注入 DataLoader 的测试覆盖。
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil {
+            return
+        }
+
         // 等应用完成激活、主窗口可见后再触发；在 SwiftUI App.init 阶段访问网络时，
         // 系统权限 UI 还没有可靠的呈现上下文，新安装的 App 可能完全不弹框。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -55,16 +68,15 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
             self.closeDuplicateMainWindows()
         }
 
-        // 主窗口建立后后台查一次；30 分钟内已查过会自动跳过。发现新版时以
+        // 主窗口建立后后台查一次；24 小时内已成功检查会自动跳过。发现新版时以
         // 原生提醒呈现，不依赖用户是否已连接某一台 Wand 服务。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             Task { @MainActor in
-                guard let self,
-                      let result = await GitHubReleaseUpdater.shared.checkOnLaunchIfNeeded(),
+                guard let result = await MacUpdateManager.shared.check(.launch),
                       case let .updateAvailable(update) = result else {
                     return
                 }
-                self.presentUpdateReminder(for: update)
+                UpdateFlowController.shared.presentLaunchReminder(for: update)
             }
         }
     }
@@ -91,53 +103,6 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func presentUpdateReminder(for update: GitHubReleaseUpdater.Update) {
-        guard remindedVersion != update.latestVersion else { return }
-        remindedVersion = update.latestVersion
-
-        let alert = NSAlert()
-        alert.messageText = "发现 Wand 新版本 v\(update.latestVersion)"
-        alert.alertStyle = .informational
-
-        let canAutoUpdate = update.preferredAsset != nil && UpdateInstaller.canInstallInPlace
-        if let asset = update.preferredAsset, canAutoUpdate {
-            let size = ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)
-            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n新版已发布到 GitHub Release（\(size)）。Wand 会自动下载并替换当前应用，重启后即可完成更新，无需重新安装。"
-            alert.addButton(withTitle: "立即更新")
-            alert.addButton(withTitle: "查看 Release")
-            alert.addButton(withTitle: "稍后提醒")
-        } else {
-            let reason = update.preferredAsset == nil
-                ? "该 GitHub Release 未包含 macOS ZIP 或 DMG。"
-                : (UpdateInstaller.installBlockReason ?? "当前 Wand.app 无法原位更新。")
-            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n\(reason)请在 Release 页面手动下载。"
-            alert.addButton(withTitle: "查看 Release")
-            alert.addButton(withTitle: "稍后提醒")
-        }
-
-        let handleResponse: (NSApplication.ModalResponse) -> Void = { response in
-            if canAutoUpdate {
-                switch response {
-                case .alertFirstButtonReturn:
-                    Task { @MainActor in
-                        UpdateFlowController.shared.start(update: update)
-                    }
-                case .alertSecondButtonReturn:
-                    NSWorkspace.shared.open(update.releaseURL)
-                default:
-                    break
-                }
-            } else if response == .alertFirstButtonReturn {
-                NSWorkspace.shared.open(update.releaseURL)
-            }
-        }
-
-        if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeKey }) {
-            alert.beginSheetModal(for: window, completionHandler: handleResponse)
-        } else {
-            handleResponse(alert.runModal())
-        }
-    }
 }
 
 extension Notification.Name {

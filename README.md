@@ -8,7 +8,7 @@ WKWebView 渲染，侧栏、会话头和输入栏保持原生，另保留完整�
 
 - 工程代码放在 `macos/Wand/`
 - `.app` 与 `.dmg` 构建产物**不要提交到仓库**（已在 `.gitignore`）
-- 设置页里的下载入口指向 wand 运行时配置目录中的 DMG（默认 `~/.wand/macos/`），不是仓库下的产物
+- 原生客户端更新始终查询官方 GitHub Release，不依赖当前连接的 wand 服务
 - 原生界面与 iOS 共用协议模型：会话列表、新建会话、聊天、权限审批、恢复与快捷提交
 
 ## 原生客户端协议
@@ -24,7 +24,7 @@ WKWebView 渲染，侧栏、会话头和输入栏保持原生，另保留完整�
 
 ```bash
 ./build.sh 1.16.0
-# 产物：build/Wand.app + dist/wand-v1.16.0.zip + dist/wand-v1.16.0.dmg
+# 产物：build/Wand.app + ZIP + DMG + wand-v1.16.0.update.json
 ```
 
 要求：
@@ -86,15 +86,27 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 
 ## 更新
 
-客户端启动时会按间隔检查官方 GitHub Release，也可在原生设置中强制检查。发现新版本后：
+客户端启动 3 秒后检查官方 GitHub Release；成功检查后 24 小时防抖，失败不写检查时间。
+应用菜单和原生设置均可强制检查。更新通道是本机偏好，不跟随当前连接服务的 Web 更新通道：
 
-1. 优先下载同版本 ZIP；旧 Release 没有 ZIP 时回退到 DMG。
-2. 解包后校验 bundle id、`CFBundleShortVersionString`、主可执行文件与代码签名。
-3. 用户确认重启后，由外部 helper 备份并原位替换当前 `Wand.app`，随后自动打开新版。
-4. 复制或启动失败时 helper 会恢复旧应用；诊断日志写入 `~/Library/Logs/Wand/update.log`。
+- Stable：只使用公开稳定 Release。
+- Beta：同时考虑 Stable 与 prerelease；同基础版本的 `-beta.*` 按 Wand 安装顺序视为正式版之后的构建。
+- 从 Beta 切回 Stable 不自动降级，等待下一个更高的 Stable 版本。
+
+发现新版本后：
+
+1. 只匹配 `wand-v<Release 版本>[+构建时间].zip|dmg`，ZIP 优先、DMG 兜底。
+2. 新 Release 先读取 `.update.json` 清单，校验文件大小与 SHA-256；旧 Release 兼容签名校验。
+3. 解包后校验 bundle id、`CFBundleShortVersionString`、主可执行文件与代码签名。
+4. 下载完成后写入可恢复事务；选择“稍后”时，设置页会保留“重启完成更新”入口 7 天。
+5. helper 备份并替换当前 `Wand.app`，只有新版写入启动确认后才删除备份。
+6. 复制、启动或确认失败时 helper 自动恢复旧应用；诊断日志写入 `~/Library/Logs/Wand/update.log`。
 
 因此日常更新不再需要重新挂载 DMG 或拖拽安装。当前 app 所在目录必须可写；若从只读 DMG
 直接运行，先将 `Wand.app` 拖到 Applications。Release 同时保留 DMG，供首次安装或自动更新失败时兜底。
+
+嵌入网页版发来的旧 `downloadUpdate` 消息只会触发原生官方检查，不再接受连接服务器提供的
+DMG 地址。服务端 `/api/macos-dmg-update` 暂时保留，供旧客户端和浏览器手动下载兼容。
 
 ## 工程结构
 
@@ -106,7 +118,7 @@ macos/Wand/
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
 ├── NewSessionView.swift       # 五个 Provider、会话类型、目录与权限模式
 ├── GitQuickCommitView.swift   # 原生快捷提交面板
-├── GitHubReleaseUpdater.swift # GitHub Release 检查与 ZIP/DMG 资产选择
+├── MacUpdateManager.swift     # 唯一更新状态源、Stable/Beta、缓存与待重启事务
 ├── UpdateInstaller.swift      # 下载、校验、原位替换、失败回滚与自动重启
 ├── WandAPI.swift              # REST 客户端
 ├── WandSocket.swift           # WebSocket 订阅、重连与 resync

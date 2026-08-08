@@ -9,6 +9,7 @@
 #   build/Wand.app
 #   dist/wand-v<version>.zip
 #   dist/wand-v<version>.dmg
+#   dist/wand-v<version>.update.json
 
 set -euo pipefail
 
@@ -38,9 +39,18 @@ if ! xcodebuild -version >/dev/null 2>&1; then
 fi
 
 VERSION="${1:?usage: build.sh <version> (例如 1.16.0)}"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+  echo "❌ version 必须是 X.Y.Z 或 X.Y.Z-prerelease（收到：$VERSION）" >&2
+  exit 1
+fi
 BUILD_STAMP="${WAND_BUILD_STAMP:-}"
 if [[ -n "$BUILD_STAMP" && ! "$BUILD_STAMP" =~ ^[0-9]{12}$ ]]; then
   echo "❌ WAND_BUILD_STAMP 必须是 YYYYMMDDHHMM（收到：$BUILD_STAMP）" >&2
+  exit 1
+fi
+ASSET_VERSION="${WAND_ASSET_VERSION:-$VERSION}"
+if [[ ! "$ASSET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[-+A-Za-z0-9.]*$ ]]; then
+  echo "❌ WAND_ASSET_VERSION 无效（收到：$ASSET_VERSION）" >&2
   exit 1
 fi
 # 数字 build 号：major*10000 + minor*100 + patch
@@ -99,7 +109,7 @@ codesign --sign - --force --deep --options runtime \
 codesign --verify --strict --verbose=2 "$APP_DST"
 
 echo "==> ditto 制作自动更新 ZIP"
-ZIP_OUT="$DIST_DIR/wand-v${VERSION}.zip"
+ZIP_OUT="$DIST_DIR/wand-v${ASSET_VERSION}.zip"
 /usr/bin/ditto -c -k --keepParent "$APP_DST" "$ZIP_OUT"
 
 echo "==> hdiutil 制作 DMG"
@@ -112,7 +122,7 @@ cp "$PROJECT_ROOT/首次打开说明.txt" "$STAGING/首次打开说明.txt"
 # 估算 DMG 大小（应用大小 + 20MB padding）
 SIZE_KB=$(($(du -sk "$STAGING" | awk '{print $1}') + 20000))
 
-DMG_OUT="$DIST_DIR/wand-v${VERSION}.dmg"
+DMG_OUT="$DIST_DIR/wand-v${ASSET_VERSION}.dmg"
 hdiutil create \
   -volname "Wand $VERSION" \
   -srcfolder "$STAGING" \
@@ -122,8 +132,14 @@ hdiutil create \
   -fs HFS+ \
   "$DMG_OUT"
 
+echo "==> 生成更新清单（大小 + SHA-256）"
+MANIFEST_OUT="$DIST_DIR/wand-v${VERSION}.update.json"
+"$PROJECT_ROOT/scripts/generate-update-manifest.sh" \
+  "$VERSION" "$ZIP_OUT" "$DMG_OUT" "$MANIFEST_OUT"
+
 echo ""
 echo "✅ 完成"
 echo "   .app: $APP_DST"
 echo "   ZIP : $ZIP_OUT"
 echo "   DMG : $DMG_OUT"
+echo "   JSON: $MANIFEST_OUT"

@@ -16,7 +16,7 @@ struct SettingsView: View {
     @State private var selectedPane: SettingsPane = .connection
     @State private var showTroubleshooting = false
     @State private var permissionDenied: Bool?
-    @ObservedObject private var releaseUpdater = GitHubReleaseUpdater.shared
+    @ObservedObject private var updateManager = MacUpdateManager.shared
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
@@ -281,10 +281,9 @@ struct SettingsView: View {
         }
     }
 
-    /// 桌面端直接查询官方 GitHub Release，而不是依赖当前连接的 Wand 服务。
-    /// 这样即使服务离线或切换服务器，更新入口仍然可用。
+    /// macOS 客户端更新通道是本机偏好，不跟随当前连接服务的 Web 更新通道。
     private var updateControlDeck: some View {
-        settingsCard("保持在最新版本", description: "自动从 GitHub Release 检查；下载后原位替换，重启即可完成更新。") {
+        settingsCard("保持在最新版本", description: "直接检查官方 GitHub Release；下载后校验并原位替换，失败时自动恢复旧版。") {
             HStack(spacing: 11) {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 17, weight: .semibold))
@@ -292,58 +291,94 @@ struct SettingsView: View {
                     .frame(width: 36, height: 36)
                     .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.success.opacity(0.13)))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(releaseUpdater.isChecking ? "正在检查 GitHub Release" : "当前 \(appVersion)")
+                    Text(updateManager.isChecking ? "正在检查 GitHub Release" : "当前 \(appVersion)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
-                    Text(releaseUpdater.availableUpdate != nil
-                        ? "新版本可以自动更新"
-                        : "通过 GitHub Release 保持最新")
+                    Text(updateManager.pendingInstall != nil
+                        ? "新版本已准备好，等待重启"
+                        : updateManager.availableUpdate != nil
+                            ? "新版本可以自动更新"
+                            : "通过 GitHub Release 保持最新")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textSecondary)
                 }
                 Spacer()
+                Picker("更新通道", selection: Binding(
+                    get: { updateManager.channel },
+                    set: { channel in
+                        Task { _ = await updateManager.setChannel(channel) }
+                    }
+                )) {
+                    ForEach(MacUpdateManager.Channel.allCases) { channel in
+                        Text(channel.title).tag(channel)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+                .disabled(updateManager.isChecking || updateManager.pendingInstall != nil)
             }
-            if releaseUpdater.isChecking {
+            if updateManager.isChecking {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在检查更新…") }
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
-            } else if let update = releaseUpdater.availableUpdate {
+            } else if let pending = updateManager.pendingInstall {
+                Text("v\(pending.version) 已下载并通过校验")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("待安装包最多保留 7 天；重启后会自动替换并验证新版是否成功启动。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+            } else if let update = updateManager.availableUpdate {
                 Text("发现 v\(update.latestVersion)")
                     .font(.system(size: 13, weight: .semibold))
                 if let asset = update.preferredAsset {
-                    let format = asset.name.lowercased().hasSuffix(".zip") ? "ZIP" : "DMG"
-                    Text("GitHub Release · \(format) · \(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file))")
+                    let integrity = asset.sha256 == nil ? "签名校验" : "SHA-256 + 签名校验"
+                    Text("GitHub Release · \(asset.fileExtension.uppercased()) · \(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)) · \(integrity)")
                         .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
                     if let reason = UpdateInstaller.installBlockReason {
                         Text(reason)
                             .font(.system(size: 11)).foregroundColor(Theme.warning)
                     }
                 } else {
-                    Text("该 Release 未附带 macOS ZIP 或 DMG，可在 GitHub 页面手动下载。")
+                    Text("该 Release 未附带严格匹配版本的 macOS ZIP 或 DMG，可在 GitHub 页面手动下载。")
                         .font(.system(size: 11)).foregroundColor(Theme.warning)
                 }
-                if let updateError = releaseUpdater.lastError {
+                if let updateError = updateManager.lastError {
                     Text(updateError).font(.system(size: 12)).foregroundColor(Theme.danger)
                 }
-            } else if let updateError = releaseUpdater.lastError {
+            } else if let updateError = updateManager.lastError {
                 Text(updateError).font(.system(size: 12)).foregroundColor(Theme.danger)
             } else {
-                Text(releaseUpdater.lastSuccessfulCheck == nil ? "将自动检查 GitHub Release" : "当前已是最新版本")
+                Text(updateManager.lastSuccessfulCheck == nil ? "启动后将自动检查 GitHub Release" : "当前已是最新版本")
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
             }
             HStack(spacing: 8) {
-                Button("强制检查更新") { Task { _ = await releaseUpdater.checkManually() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.brand)
-                    .disabled(releaseUpdater.isChecking)
-                if let update = releaseUpdater.availableUpdate {
+                if updateManager.pendingInstall != nil {
+                    Button("重启完成更新") { UpdateFlowController.shared.relaunchPending() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.brand)
+                } else {
+                    Button("强制检查更新") { Task { _ = await updateManager.check(.manual) } }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.brand)
+                        .disabled(updateManager.isChecking)
+                }
+                if let update = updateManager.availableUpdate {
                     if update.preferredAsset != nil, UpdateInstaller.canInstallInPlace {
-                        Button("立即更新") { installUpdate(update) }
+                        Button("立即更新") { installUpdate() }
                             .buttonStyle(.bordered)
                     }
                     Button("查看 Release") { NSWorkspace.shared.open(update.releaseURL) }
                         .buttonStyle(.bordered)
+                } else if let pending = updateManager.pendingInstall {
+                    Button("查看 Release") { NSWorkspace.shared.open(pending.releaseURL) }
+                        .buttonStyle(.bordered)
                 }
             }
+            Text(updateManager.channel == .beta
+                ? "Beta 包按 Wand 安装顺序更新；切回 Stable 不会自动降级。"
+                : "Stable 通道不会接收 GitHub prerelease。")
+                .font(.system(size: 10))
+                .foregroundColor(Theme.textSecondary)
         }
     }
 
@@ -360,8 +395,8 @@ struct SettingsView: View {
         return "macOS 不提供可直接读取的授权状态；连接异常时可用故障排查进一步检测。"
     }
 
-    private func installUpdate(_ update: GitHubReleaseUpdater.Update) {
-        UpdateFlowController.shared.start(update: update)
+    private func installUpdate() {
+        UpdateFlowController.shared.start()
     }
 
     private var localNetworkDescription: String {

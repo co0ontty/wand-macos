@@ -13,7 +13,6 @@
 		A100000000000000000000A4 /* WebContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B4 /* WebContainerView.swift */; };
 		A100000000000000000000A5 /* WebBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B5 /* WebBridge.swift */; };
 		A100000000000000000000A6 /* ServerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B6 /* ServerStore.swift */; };
-		A100000000000000000000A8 /* DmgInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B8 /* DmgInstaller.swift */; };
 		A100000000000000000000A9 /* SelfSignedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B9 /* SelfSignedSession.swift */; };
 		A100000000000000000000AA /* WandAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BA /* WandAuth.swift */; };
 		A100000000000000000000AB /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BB /* Theme.swift */; };
@@ -32,12 +31,24 @@
 		A200000000000000000000C2 /* FileTreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D2 /* FileTreeView.swift */; };
 		A200000000000000000000C3 /* FilePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D3 /* FilePanelView.swift */; };
 		A200000000000000000000C4 /* TroubleshootingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D4 /* TroubleshootingView.swift */; };
-		A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D5 /* GitHubReleaseUpdater.swift */; };
+		A200000000000000000000C5 /* MacUpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D5 /* MacUpdateManager.swift */; };
 		A200000000000000000000C6 /* UpdateInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000D6 /* UpdateInstaller.swift */; };
 		A100000000000000000000C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* Assets.xcassets */; };
 		D4000000000000000000AC01 /* MissionsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC01 /* MissionsModels.swift */; };
 		D4000000000000000000AC02 /* MissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC02 /* MissionsView.swift */; };
+		E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B1 /* MacUpdateManagerTests.swift */; };
+		E500000000000000000000A2 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B3 /* XCTest.framework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		E500000000000000000000C1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000000000000000000FA00 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1000000000000000000F700;
+			remoteInfo = Wand;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A100000000000000000000B1 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
@@ -46,7 +57,6 @@
 		A100000000000000000000B4 /* WebContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebContainerView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B5 /* WebBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebBridge.swift; sourceTree = "<group>"; };
 		A100000000000000000000B6 /* ServerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerStore.swift; sourceTree = "<group>"; };
-		A100000000000000000000B8 /* DmgInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DmgInstaller.swift; sourceTree = "<group>"; };
 		A100000000000000000000B9 /* SelfSignedSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfSignedSession.swift; sourceTree = "<group>"; };
 		A100000000000000000000BA /* WandAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WandAuth.swift; sourceTree = "<group>"; };
 		A100000000000000000000BB /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
@@ -65,7 +75,7 @@
 		A200000000000000000000D2 /* FileTreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeView.swift; sourceTree = "<group>"; };
 		A200000000000000000000D3 /* FilePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePanelView.swift; sourceTree = "<group>"; };
 		A200000000000000000000D4 /* TroubleshootingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TroubleshootingView.swift; sourceTree = "<group>"; };
-		A200000000000000000000D5 /* GitHubReleaseUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubReleaseUpdater.swift; sourceTree = "<group>"; };
+		A200000000000000000000D5 /* MacUpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateManager.swift; sourceTree = "<group>"; };
 		A200000000000000000000D6 /* UpdateInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateInstaller.swift; sourceTree = "<group>"; };
 		A100000000000000000000D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A100000000000000000000E1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -73,6 +83,9 @@
 		A100000000000000000000F1 /* Wand.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Wand.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D4000000000000000000BC01 /* MissionsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsModels.swift; sourceTree = "<group>"; };
 		D4000000000000000000BC02 /* MissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsView.swift; sourceTree = "<group>"; };
+		E500000000000000000000B1 /* MacUpdateManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateManagerTests.swift; sourceTree = "<group>"; };
+		E500000000000000000000B2 /* WandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E500000000000000000000B3 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -83,6 +96,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E5000000000000000000F301 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E500000000000000000000A2 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -90,7 +111,9 @@
 			isa = PBXGroup;
 			children = (
 				A1000000000000000000F500 /* Wand */,
+				E5000000000000000000F500 /* WandTests */,
 				A1000000000000000000F600 /* Products */,
+				E500000000000000000000B3 /* XCTest.framework */,
 			);
 			sourceTree = "<group>";
 		};
@@ -103,7 +126,6 @@
 				A100000000000000000000B4 /* WebContainerView.swift */,
 				A100000000000000000000B5 /* WebBridge.swift */,
 				A100000000000000000000B6 /* ServerStore.swift */,
-				A100000000000000000000B8 /* DmgInstaller.swift */,
 				A100000000000000000000B9 /* SelfSignedSession.swift */,
 				A100000000000000000000BA /* WandAuth.swift */,
 				A100000000000000000000BB /* Theme.swift */,
@@ -122,7 +144,7 @@
 				A200000000000000000000D2 /* FileTreeView.swift */,
 				A200000000000000000000D3 /* FilePanelView.swift */,
 				A200000000000000000000D4 /* TroubleshootingView.swift */,
-				A200000000000000000000D5 /* GitHubReleaseUpdater.swift */,
+				A200000000000000000000D5 /* MacUpdateManager.swift */,
 				A200000000000000000000D6 /* UpdateInstaller.swift */,
 				D4000000000000000000BC01 /* MissionsModels.swift */,
 				D4000000000000000000BC02 /* MissionsView.swift */,
@@ -137,8 +159,17 @@
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000F1 /* Wand.app */,
+				E500000000000000000000B2 /* WandTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E5000000000000000000F500 /* WandTests */ = {
+			isa = PBXGroup;
+			children = (
+				E500000000000000000000B1 /* MacUpdateManagerTests.swift */,
+			);
+			path = WandTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -161,6 +192,24 @@
 			productReference = A100000000000000000000F1 /* Wand.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E5000000000000000000F700 /* WandTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E5000000000000000000FB00 /* Build configuration list for PBXNativeTarget "WandTests" */;
+			buildPhases = (
+				E5000000000000000000F800 /* Sources */,
+				E5000000000000000000F301 /* Frameworks */,
+				E5000000000000000000F900 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E500000000000000000000C2 /* PBXTargetDependency */,
+			);
+			name = WandTests;
+			productName = WandTests;
+			productReference = E500000000000000000000B2 /* WandTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -173,6 +222,10 @@
 				TargetAttributes = {
 					A1000000000000000000F700 = {
 						CreatedOnToolsVersion = 15.0;
+					};
+					E5000000000000000000F700 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = A1000000000000000000F700;
 					};
 				};
 			};
@@ -191,6 +244,7 @@
 			projectRoot = "";
 			targets = (
 				A1000000000000000000F700 /* Wand */,
+				E5000000000000000000F700 /* WandTests */,
 			);
 		};
 /* End PBXProject section */
@@ -201,6 +255,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				A100000000000000000000C1 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5000000000000000000F900 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -217,7 +278,6 @@
 				A100000000000000000000A4 /* WebContainerView.swift in Sources */,
 				A100000000000000000000A5 /* WebBridge.swift in Sources */,
 				A100000000000000000000A6 /* ServerStore.swift in Sources */,
-				A100000000000000000000A8 /* DmgInstaller.swift in Sources */,
 				A100000000000000000000A9 /* SelfSignedSession.swift in Sources */,
 				A100000000000000000000AA /* WandAuth.swift in Sources */,
 				A100000000000000000000AB /* Theme.swift in Sources */,
@@ -236,14 +296,30 @@
 				A200000000000000000000C2 /* FileTreeView.swift in Sources */,
 				A200000000000000000000C3 /* FilePanelView.swift in Sources */,
 				A200000000000000000000C4 /* TroubleshootingView.swift in Sources */,
-				A200000000000000000000C5 /* GitHubReleaseUpdater.swift in Sources */,
+				A200000000000000000000C5 /* MacUpdateManager.swift in Sources */,
 				A200000000000000000000C6 /* UpdateInstaller.swift in Sources */,
 				D4000000000000000000AC01 /* MissionsModels.swift in Sources */,
 				D4000000000000000000AC02 /* MissionsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E5000000000000000000F800 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E500000000000000000000C2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1000000000000000000F700 /* Wand */;
+			targetProxy = E500000000000000000000C1 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A100000000000000000000D2 /* Debug */ = {
@@ -361,6 +437,34 @@
 			};
 			name = Release;
 		};
+		E500000000000000000000D4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wand.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Wand.app/Contents/MacOS/Wand";
+			};
+			name = Debug;
+		};
+		E500000000000000000000D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wand.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Wand.app/Contents/MacOS/Wand";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -378,6 +482,15 @@
 			buildConfigurations = (
 				A100000000000000000000D2 /* Debug */,
 				A100000000000000000000D3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E5000000000000000000FB00 /* Build configuration list for PBXNativeTarget "WandTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E500000000000000000000D4 /* Debug */,
+				E500000000000000000000D5 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

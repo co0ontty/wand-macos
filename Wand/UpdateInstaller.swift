@@ -1,4 +1,6 @@
 import AppKit
+import Combine
+import CryptoKit
 import Foundation
 
 /// GitHub Release 自更新器：下载 ZIP/DMG、校验其中的 Wand.app，并在当前进程退出后原位替换。
@@ -9,6 +11,7 @@ final class UpdateInstaller {
 
     enum Stage {
         case downloading(received: Int64, total: Int64)
+        case verifying
         case extracting
         case readyToRelaunch(stagedAppPath: String)
         case failed(String)
@@ -22,6 +25,12 @@ final class UpdateInstaller {
         let bundleURL = Bundle.main.bundleURL.resolvingSymlinksInPath()
         guard bundleURL.pathExtension.lowercased() == "app" else {
             return "当前进程不是从 Wand.app 中运行，无法原位更新。"
+        }
+        if bundleURL.path.contains("/AppTranslocation/") {
+            return "当前 Wand.app 正在系统隔离目录中运行。请先把 Wand.app 移到 Applications 文件夹。"
+        }
+        if bundleURL.path.hasPrefix("/Volumes/") {
+            return "当前 Wand.app 正从磁盘镜像或外置只读卷运行。请先把 Wand.app 移到 Applications 文件夹。"
         }
 
         let parentURL = bundleURL.deletingLastPathComponent()
@@ -42,7 +51,7 @@ final class UpdateInstaller {
     private init() {}
 
     func startUpdate(
-        _ update: GitHubReleaseUpdater.Update,
+        _ update: MacUpdateManager.Update,
         progress: @escaping ProgressHandler
     ) {
         guard let asset = update.preferredAsset else {
@@ -87,7 +96,8 @@ final class UpdateInstaller {
                     result,
                     updateID: updateID,
                     fileExtension: fileExtension,
-                    expectedVersion: update.latestVersion
+                    expectedVersion: update.latestVersion,
+                    expectedAsset: asset
                 )
             }
         )
@@ -119,20 +129,22 @@ final class UpdateInstaller {
     }
 
     /// 用户确认后启动 helper；调用方随后应终止当前 Wand 进程。
-    func relaunch(stagedAppPath: String) -> Result<Void, Error> {
+    func relaunch(pending: MacUpdateManager.PendingInstall) -> Result<Void, Error> {
         do {
             guard Self.canInstallInPlace else {
                 throw installerError(code: 20, message: Self.installBlockReason ?? "当前 Wand.app 无法原位更新。")
             }
 
-            let stagedURL = URL(fileURLWithPath: stagedAppPath).standardizedFileURL
-            try validateApp(at: stagedURL, expectedVersion: nil)
+            let stagedURL = URL(fileURLWithPath: pending.stagedAppPath).standardizedFileURL
+            try validateApp(at: stagedURL, expectedVersion: pending.version)
 
             let destinationPath = Bundle.main.bundleURL.resolvingSymlinksInPath().path
             let scriptPath = try writeHelperScript(
                 parentPID: ProcessInfo.processInfo.processIdentifier,
                 stagedAppPath: stagedURL.path,
-                destinationAppPath: destinationPath
+                destinationAppPath: destinationPath,
+                transactionID: pending.transactionID,
+                expectedVersion: pending.version
             )
             try launchHelper(scriptPath: scriptPath)
             return .success(())
@@ -141,13 +153,35 @@ final class UpdateInstaller {
         }
     }
 
+#if DEBUG
+    /// 只供集成测试执行 helper 的临时目录回滚路径；生产调用仍必须经过 relaunch 校验。
+    func makeHelperScriptForTesting(
+        parentPID: Int32,
+        stagedAppPath: String,
+        destinationAppPath: String,
+        transactionID: String,
+        expectedVersion: String,
+        logPath: String
+    ) throws -> String {
+        try writeHelperScript(
+            parentPID: parentPID,
+            stagedAppPath: stagedAppPath,
+            destinationAppPath: destinationAppPath,
+            transactionID: transactionID,
+            expectedVersion: expectedVersion,
+            logPathOverride: logPath
+        )
+    }
+#endif
+
     // MARK: - Download and extraction
 
     private func handleDownloadResult(
         _ result: Result<URL, Error>,
         updateID: UUID,
         fileExtension: String,
-        expectedVersion: String
+        expectedVersion: String,
+        expectedAsset: MacUpdateManager.Update.Asset
     ) {
         guard isActive(updateID) else {
             if case let .success(url) = result { try? FileManager.default.removeItem(at: url) }
@@ -158,12 +192,13 @@ final class UpdateInstaller {
         case let .failure(error):
             finish(.failed("下载失败：\(error.localizedDescription)"), for: updateID)
         case let .success(downloadedURL):
-            emit(.extracting, for: updateID)
+            emit(.verifying, for: updateID)
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 self?.extractAndValidate(
                     downloadedURL: downloadedURL,
                     fileExtension: fileExtension,
                     expectedVersion: expectedVersion,
+                    expectedAsset: expectedAsset,
                     updateID: updateID
                 )
             }
@@ -174,6 +209,7 @@ final class UpdateInstaller {
         downloadedURL: URL,
         fileExtension: String,
         expectedVersion: String,
+        expectedAsset: MacUpdateManager.Update.Asset,
         updateID: UUID
     ) {
         var stagingDirectory: URL?
@@ -181,6 +217,8 @@ final class UpdateInstaller {
 
         do {
             guard isActive(updateID) else { return }
+            try validateDownloadedAsset(at: downloadedURL, expected: expectedAsset)
+            emit(.extracting, for: updateID)
             let directory = try makeStagingDirectory()
             stagingDirectory = directory
 
@@ -322,6 +360,36 @@ final class UpdateInstaller {
         )
     }
 
+    private func validateDownloadedAsset(
+        at fileURL: URL,
+        expected asset: MacUpdateManager.Update.Asset
+    ) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let actualSize = (attributes[.size] as? NSNumber)?.int64Value ?? -1
+        guard asset.size <= 0 || actualSize == asset.size else {
+            throw installerError(
+                code: 9,
+                message: "更新包大小为 \(actualSize) 字节，与 Release 的 \(asset.size) 字节不一致。"
+            )
+        }
+        guard let expectedHash = asset.sha256 else { return }
+
+        let actualHash = try sha256(of: fileURL)
+        guard actualHash.caseInsensitiveCompare(expectedHash) == .orderedSame else {
+            throw installerError(code: 10, message: "更新包 SHA-256 校验失败，文件可能不完整或已被替换。")
+        }
+    }
+
+    private func sha256(of fileURL: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     private func runProcess(executable: String, arguments: [String], failureMessage: String) throws {
         let process = Process()
         let output = Pipe()
@@ -344,38 +412,59 @@ final class UpdateInstaller {
     private func writeHelperScript(
         parentPID: Int32,
         stagedAppPath: String,
-        destinationAppPath: String
+        destinationAppPath: String,
+        transactionID: String,
+        expectedVersion: String,
+        logPathOverride: String? = nil
     ) throws -> String {
         let identifier = UUID().uuidString
         let scriptURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("wand-update-\(identifier).sh")
         let backupPath = destinationAppPath + ".wand-update-backup-" + identifier
+        let stagingDirectory = (stagedAppPath as NSString).deletingLastPathComponent
+        let acknowledgementPath = (stagingDirectory as NSString).appendingPathComponent(".wand-update-ack")
+        let resultPath = ((stagingDirectory as NSString).deletingLastPathComponent as NSString)
+            .appendingPathComponent("last-result.txt")
 
-        let logsDirectory = try FileManager.default.url(
-            for: .libraryDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ).appendingPathComponent("Logs/Wand", isDirectory: true)
-        try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
-        let logPath = logsDirectory.appendingPathComponent("update.log").path
+        let logPath: String
+        if let logPathOverride {
+            logPath = logPathOverride
+        } else {
+            let logsDirectory = try FileManager.default.url(
+                for: .libraryDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            ).appendingPathComponent("Logs/Wand", isDirectory: true)
+            try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+            logPath = logsDirectory.appendingPathComponent("update.log").path
+        }
 
         let script = """
         #!/bin/bash
         set -u
         STAGED=\(shellQuote(stagedAppPath))
-        STAGED_DIR=\(shellQuote((stagedAppPath as NSString).deletingLastPathComponent))
+        STAGED_DIR=\(shellQuote(stagingDirectory))
         DEST=\(shellQuote(destinationAppPath))
         BACKUP=\(shellQuote(backupPath))
+        ACK=\(shellQuote(acknowledgementPath))
+        RESULT=\(shellQuote(resultPath))
+        TRANSACTION_ID=\(shellQuote(transactionID))
+        VERSION=\(shellQuote(expectedVersion))
         LOG=\(shellQuote(logPath))
         PARENT_PID=\(parentPID)
 
         exec >>"$LOG" 2>&1
-        echo "$(date '+%Y-%m-%d %H:%M:%S') starting Wand update"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') starting Wand update to $VERSION"
+        /bin/rm -f "$ACK" "$RESULT"
 
         cleanup() {
             /bin/rm -rf "$STAGED_DIR"
             /bin/rm -f "$0"
+        }
+
+        mark_failure() {
+            /usr/bin/printf '%s\n' "$1" > "$RESULT"
         }
 
         rollback() {
@@ -392,29 +481,54 @@ final class UpdateInstaller {
         done
         if /bin/kill -0 "$PARENT_PID" 2>/dev/null; then
             echo "Wand did not exit within 30 seconds; aborting"
+            mark_failure "上次更新未完成：旧版 Wand 未在 30 秒内退出。"
             cleanup
             exit 10
         fi
         if [ ! -d "$STAGED" ]; then
             echo "staged app is missing"
+            mark_failure "上次更新未完成：待安装的 Wand.app 已丢失。"
             cleanup
             exit 11
         fi
 
         if [ -d "$DEST" ]; then
-            /bin/mv "$DEST" "$BACKUP" || { cleanup; exit 12; }
+            /bin/mv "$DEST" "$BACKUP" || {
+                mark_failure "上次更新未完成：无法备份旧版 Wand.app。"
+                cleanup
+                exit 12
+            }
         fi
         if ! /usr/bin/ditto "$STAGED" "$DEST"; then
             rollback
+            mark_failure "上次更新失败，已恢复旧版 Wand.app。"
             cleanup
             exit 13
         fi
 
         /usr/bin/xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
-        if ! /usr/bin/open "$DEST"; then
+        if ! /usr/bin/open "$DEST" --args --wand-update-token "$TRANSACTION_ID" --wand-update-ack "$ACK"; then
             rollback
+            mark_failure "新版 Wand 无法启动，已恢复旧版。"
+            /usr/bin/open "$DEST" >/dev/null 2>&1 || true
             cleanup
             exit 14
+        fi
+
+        for _ in $(/usr/bin/seq 1 150); do
+            if [ -f "$ACK" ]; then break; fi
+            /bin/sleep 0.2
+        done
+        if [ ! -f "$ACK" ]; then
+            echo "new Wand did not acknowledge launch; rolling back"
+            /usr/bin/pkill -TERM -x Wand 2>/dev/null || true
+            /bin/sleep 1
+            /usr/bin/pkill -KILL -x Wand 2>/dev/null || true
+            rollback
+            mark_failure "新版 Wand 未能完成启动，已自动恢复旧版。"
+            /usr/bin/open "$DEST" >/dev/null 2>&1 || true
+            cleanup
+            exit 15
         fi
 
         /bin/rm -rf "$BACKUP"
@@ -494,14 +608,55 @@ final class UpdateFlowController {
 
     static let shared = UpdateFlowController()
 
+    private let manager = MacUpdateManager.shared
     private var progressWindow: UpdateProgressWindow?
-    private var releaseURL: URL?
+    private var stateObservation: AnyCancellable?
+    private var isPresentingInstall = false
+    private var presentedReminderVersion: String?
 
-    private init() {}
+    private init() {
+        stateObservation = manager.$state.sink { [weak self] state in
+            self?.handle(state)
+        }
+    }
 
-    func start(update: GitHubReleaseUpdater.Update) {
+    func presentLaunchReminder(for update: MacUpdateManager.Update) {
+        guard manager.shouldPresentReminder(for: update),
+              presentedReminderVersion != update.latestVersion else { return }
+        presentedReminderVersion = update.latestVersion
+        presentUpdateAlert(update, automatic: true)
+    }
+
+    func checkManually() async {
+        guard let result = await manager.check(.manual) else {
+            if manager.pendingInstall != nil { relaunchPending() }
+            return
+        }
+        switch result {
+        case let .upToDate(currentVersion):
+            let alert = NSAlert()
+            alert.messageText = "Wand 已是最新版本"
+            alert.informativeText = "当前版本 v\(currentVersion) · \(manager.channel.title) 通道"
+            alert.addButton(withTitle: "好的")
+            present(alert)
+        case let .updateAvailable(update):
+            presentUpdateAlert(update, automatic: false)
+        case let .failed(message):
+            showFailure(message, releaseURL: nil, title: "检查更新失败")
+        }
+    }
+
+    func start() {
         if let progressWindow {
             progressWindow.showCentered()
+            return
+        }
+        if manager.pendingInstall != nil {
+            relaunchPending()
+            return
+        }
+        guard let update = manager.availableUpdate else {
+            showFailure("当前没有可安装的新版本。", releaseURL: nil)
             return
         }
         guard update.preferredAsset != nil else {
@@ -513,80 +668,142 @@ final class UpdateFlowController {
             return
         }
 
-        releaseURL = update.releaseURL
         let window = UpdateProgressWindow()
         window.onCancel = { [weak self] in
-            UpdateInstaller.shared.cancel()
+            self?.manager.cancelInstall()
             self?.progressWindow = nil
-            self?.releaseURL = nil
+            self?.isPresentingInstall = false
         }
         progressWindow = window
+        isPresentingInstall = true
         window.showCentered()
-
-        UpdateInstaller.shared.startUpdate(update) { [weak self] stage in
-            self?.handle(stage)
+        if let reason = manager.installAvailableUpdate() {
+            progressWindow?.close()
+            progressWindow = nil
+            isPresentingInstall = false
+            showFailure(reason, releaseURL: update.releaseURL)
         }
     }
 
-    private func handle(_ stage: UpdateInstaller.Stage) {
-        switch stage {
-        case let .downloading(received, total):
+    func relaunchPending() {
+        guard let pending = manager.pendingInstall else { return }
+        confirmRelaunch(pending: pending)
+    }
+
+    private func handle(_ state: MacUpdateManager.State) {
+        guard isPresentingInstall else { return }
+        switch state {
+        case let .downloading(_, received, total):
             progressWindow?.setDownloading(received: received, total: total)
-        case .extracting:
+        case .preparing:
             progressWindow?.setExtracting()
-        case let .readyToRelaunch(stagedAppPath):
+        case let .readyToRelaunch(pending):
             progressWindow?.close()
             progressWindow = nil
-            confirmRelaunch(stagedAppPath: stagedAppPath)
-        case let .failed(message):
-            let releaseURL = self.releaseURL
+            isPresentingInstall = false
+            confirmRelaunch(pending: pending)
+        case let .failed(message, update):
             progressWindow?.close()
             progressWindow = nil
-            self.releaseURL = nil
-            showFailure(message, releaseURL: releaseURL)
+            isPresentingInstall = false
+            showFailure(message, releaseURL: update?.releaseURL)
+        case .available:
+            // 下载被用户取消时 manager 回到 available。
+            progressWindow?.close()
+            progressWindow = nil
+            isPresentingInstall = false
+        default:
+            break
         }
     }
 
-    private func confirmRelaunch(stagedAppPath: String) {
+    private func presentUpdateAlert(_ update: MacUpdateManager.Update, automatic: Bool) {
+        let alert = NSAlert()
+        alert.messageText = "发现 Wand 新版本 v\(update.latestVersion)"
+        alert.alertStyle = .informational
+
+        let canAutoUpdate = update.preferredAsset != nil && UpdateInstaller.canInstallInPlace
+        if let asset = update.preferredAsset, canAutoUpdate {
+            let size = ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)
+            let integrity = asset.sha256 == nil ? "旧版 Release 将使用应用签名校验。" : "下载完成后会校验 SHA-256 与应用签名。"
+            alert.informativeText = "当前版本 v\(update.currentVersion) · \(update.channel.title) 通道。\n\n更新包：\(asset.fileExtension.uppercased()) · \(size)\n\(integrity)"
+            alert.addButton(withTitle: "立即更新")
+            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: "稍后提醒")
+        } else {
+            let reason = update.preferredAsset == nil
+                ? "该 GitHub Release 未包含匹配版本的 macOS ZIP 或 DMG。"
+                : (UpdateInstaller.installBlockReason ?? "当前 Wand.app 无法原位更新。")
+            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n\(reason)请在 Release 页面手动下载。"
+            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: "稍后提醒")
+        }
+
+        let response = present(alert)
+        if canAutoUpdate {
+            switch response {
+            case .alertFirstButtonReturn:
+                start()
+            case .alertSecondButtonReturn:
+                NSWorkspace.shared.open(update.releaseURL)
+            default:
+                if automatic { manager.deferReminder(for: update) }
+            }
+        } else if response == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(update.releaseURL)
+        } else if automatic {
+            manager.deferReminder(for: update)
+        }
+    }
+
+    private func confirmRelaunch(pending: MacUpdateManager.PendingInstall) {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "新版本已准备完成"
-        alert.informativeText = "重启 Wand 即可完成更新，不需要重新安装应用。"
+        alert.informativeText = "v\(pending.version) 已完成校验。重启 Wand 后会替换当前应用；如果新版未能完成启动，将自动恢复旧版。"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "立即重启更新")
         alert.addButton(withTitle: "稍后")
 
-        guard alert.runModal() == .alertFirstButtonReturn else {
+        guard present(alert) == .alertFirstButtonReturn else {
             let info = NSAlert()
             info.messageText = "更新包已保留"
-            info.informativeText = "稍后可从这里打开新版 Wand.app：\n\(stagedAppPath)"
+            info.informativeText = "稍后可在设置的“关于”页面点击“重启完成更新”。待安装包会保留 7 天。"
             info.addButton(withTitle: "好的")
-            info.runModal()
-            releaseURL = nil
+            present(info)
             return
         }
 
-        switch UpdateInstaller.shared.relaunch(stagedAppPath: stagedAppPath) {
+        switch manager.relaunchPendingUpdate() {
         case .success:
             NSApp.terminate(nil)
         case let .failure(error):
-            let releaseURL = self.releaseURL
-            self.releaseURL = nil
-            showFailure("启动替换程序失败：\(error.localizedDescription)\n\n更新包位于：\(stagedAppPath)", releaseURL: releaseURL)
+            showFailure(
+                "启动替换程序失败：\(error.localizedDescription)\n\n更新包仍保留在：\(pending.stagedAppPath)",
+                releaseURL: pending.releaseURL
+            )
         }
     }
 
-    private func showFailure(_ message: String, releaseURL: URL?) {
+    private func showFailure(_ message: String, releaseURL: URL?, title: String = "自动更新失败") {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "自动更新失败"
+        alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
         if releaseURL != nil { alert.addButton(withTitle: "查看 Release") }
         alert.addButton(withTitle: "关闭")
-        if alert.runModal() == .alertFirstButtonReturn, let releaseURL {
+        if present(alert) == .alertFirstButtonReturn, let releaseURL {
             NSWorkspace.shared.open(releaseURL)
         }
+    }
+
+    @discardableResult
+    private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        NSApp.activate(ignoringOtherApps: true)
+        // 更新提醒统一使用 application-modal，避免设置 sheet 关闭或切换服务器时
+        // 把 alert 一并销毁，导致更新任务失去呈现上下文。
+        return alert.runModal()
     }
 }
 
