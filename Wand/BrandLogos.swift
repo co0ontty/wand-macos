@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - 品牌 logo 矢量 Shape
 // Claude / Codex / Grok 路径来自 simple-icons（CC0）的 24x24 viewBox；OpenCode / Qoder
-// 使用本地几何字形。SVG path 由脚本转换为 SwiftUI Path 命令（圆弧已展开为贝塞尔曲线）。
+// 使用本地几何字形，Pi 使用 pi.dev/logo-auto.svg 的官方像素标。
 // 填充色由调用方 .fill(color) 决定。
 // 用法：BrandLogoShape(provider: session.provider).fill(tint).frame(width: 21, height: 21)
 
@@ -16,8 +16,37 @@ struct BrandLogoShape: Shape {
         case "opencode": return Self.openCodePath(in: rect)
         case "grok": return Self.grokPath(in: rect)
         case "qoder": return Self.qoderPath(in: rect)
+        case "pi": return Self.piPath(in: rect)
         default: return Self.claudePath(in: rect)
         }
+    }
+
+    /// Pi 官方像素化品牌标，裁掉原 SVG 仅用于安全留白的外圈。
+    private static func piPath(in rect: CGRect) -> Path {
+        let w = rect.width / 469.43
+        let h = rect.height / 469.43
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: 352.07 * w, y: 0))
+        path.addLine(to: CGPoint(x: 352.07 * w, y: 234.71 * h))
+        path.addLine(to: CGPoint(x: 234.71 * w, y: 234.71 * h))
+        path.addLine(to: CGPoint(x: 234.71 * w, y: 352.07 * h))
+        path.addLine(to: CGPoint(x: 117.36 * w, y: 352.07 * h))
+        path.addLine(to: CGPoint(x: 117.36 * w, y: 469.43 * h))
+        path.addLine(to: CGPoint(x: 0, y: 469.43 * h))
+        path.closeSubpath()
+        path.move(to: CGPoint(x: 117.36 * w, y: 117.36 * h))
+        path.addLine(to: CGPoint(x: 117.36 * w, y: 234.71 * h))
+        path.addLine(to: CGPoint(x: 234.71 * w, y: 234.71 * h))
+        path.addLine(to: CGPoint(x: 234.71 * w, y: 117.36 * h))
+        path.closeSubpath()
+        path.addRect(CGRect(
+            x: 352.07 * w,
+            y: 234.71 * h,
+            width: 117.36 * w,
+            height: 234.72 * h
+        ))
+        return path
     }
 
     /// Claude（Anthropic 星芒）。

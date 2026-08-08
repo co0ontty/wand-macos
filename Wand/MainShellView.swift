@@ -1464,6 +1464,7 @@ struct SessionTile: View {
         case "grok": return "Grok"
         case "opencode": return "OpenCode"
         case "qoder": return "Qoder"
+        case "pi": return "Pi"
         default: return "Claude"
         }
     }
@@ -1666,6 +1667,7 @@ struct SessionHeaderView: View {
         case "opencode": return "OpenCode"
         case "grok": return "Grok"
         case "qoder": return "Qoder"
+        case "pi": return "Pi"
         default: return "Claude"
         }
     }

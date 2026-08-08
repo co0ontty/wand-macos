@@ -30,17 +30,10 @@ private struct MissionProviderMark: View {
     let size: CGFloat
 
     var body: some View {
-        Group {
-            if provider == "pi" {
-                Text("π")
-                    .font(.system(size: size * 0.78, weight: .bold, design: .rounded))
-                    .foregroundColor(color)
-            } else {
-                BrandLogoShape(provider: provider).fill(color)
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityLabel(provider.capitalized)
+        BrandLogoShape(provider: provider)
+            .fill(color)
+            .frame(width: size, height: size)
+            .accessibilityLabel(provider.capitalized)
     }
 }
 

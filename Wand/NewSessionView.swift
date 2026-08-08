@@ -22,12 +22,14 @@ struct NewSessionView: View {
     @State private var openCodeModels: [ModelInfo] = []
     @State private var grokModels: [ModelInfo] = []
     @State private var qoderModels: [ModelInfo] = []
+    @State private var piModels: [ModelInfo] = []
     @State private var serverDefaultModels = ProviderDefaultModels(
         claude: nil,
         codex: nil,
         opencode: nil,
         grok: nil,
-        qoder: nil
+        qoder: nil,
+        pi: nil
     )
     @State private var selectedModel = ""
     @State private var thinkingEffort = "off"
@@ -54,7 +56,7 @@ struct NewSessionView: View {
     }
 
     enum Provider: String, CaseIterable, Identifiable {
-        case claude, codex, opencode, grok, qoder
+        case claude, codex, opencode, grok, qoder, pi
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -63,6 +65,7 @@ struct NewSessionView: View {
             case .opencode: return "OpenCode"
             case .grok: return "Grok"
             case .qoder: return "Qoder"
+            case .pi: return "Pi"
             }
         }
         var desc: String {
@@ -72,6 +75,7 @@ struct NewSessionView: View {
             case .opencode: return "OpenCode 的流式或终端会话"
             case .grok: return "Grok Build 的流式或终端会话"
             case .qoder: return "Qoder CLI 的流式或终端会话"
+            case .pi: return "Pi 的 JSON 或终端会话"
             }
         }
         var symbol: String {
@@ -81,6 +85,7 @@ struct NewSessionView: View {
             case .opencode: return "chevron.left.forwardslash.chevron.right"
             case .grok: return "g.circle"
             case .qoder: return "q.circle"
+            case .pi: return "p.circle"
             }
         }
     }
@@ -105,6 +110,8 @@ struct NewSessionView: View {
                 return "Grok streaming-json 结构化聊天界面，支持多轮续聊与思考过程展示。"
             case (.structured, .qoder):
                 return "Qoder stream-json 结构化聊天界面，支持多轮续聊和工具调用展示。"
+            case (.structured, .pi):
+                return "Pi JSON 结构化聊天界面，支持续聊、思考过程和工具调用展示。"
             case (.pty, .codex):
                 return "Codex PTY 终端会话；terminal 是原始输出，chat 是解析后的阅读视图。"
             case (.pty, .claude):
@@ -115,6 +122,8 @@ struct NewSessionView: View {
                 return "Grok Build TUI 的原始 PTY 终端会话。"
             case (.pty, .qoder):
                 return "Qoder CLI 的原始 PTY 终端会话。"
+            case (.pty, .pi):
+                return "Pi TUI 的原始 PTY 终端会话。"
             }
         }
     }
@@ -173,7 +182,9 @@ struct NewSessionView: View {
         /// 对齐 Web getSupportedModes：Codex 只支持全权限。
         static func supported(for tool: Provider) -> Set<Self> {
             if tool == .codex { return [.fullAccess] }
-            if tool == .opencode || tool == .grok { return [.managed, .fullAccess, .standard] }
+            if tool == .opencode || tool == .grok || tool == .pi {
+                return [.managed, .fullAccess, .standard]
+            }
             if tool == .qoder { return [.managed, .fullAccess, .autoEdit, .standard] }
             return Set(allCases)
         }
@@ -202,6 +213,11 @@ struct NewSessionView: View {
                     return "Qoder 使用自身权限确认；支持 TUI 与 stream-json 结构化会话。"
                 }
             }
+            if tool == .pi {
+                return self == .managed || self == .fullAccess
+                    ? "Pi 将自动批准工具调用；支持 TUI 与 JSON 结构化会话。"
+                    : "Pi 使用自身权限确认；支持 TUI 与 JSON 结构化会话。"
+            }
             switch self {
             case .fullAccess:
                 return "自动确认权限请求与高权限操作，适合你确认环境安全后的连续修改。"
@@ -224,6 +240,7 @@ struct NewSessionView: View {
         case .opencode: openCodeModels
         case .grok: grokModels
         case .qoder: qoderModels
+        case .pi: piModels
         }
     }
 
@@ -371,21 +388,30 @@ struct NewSessionView: View {
         title: String,
         desc: String,
         symbol: String,
+        provider: String? = nil,
         selected: Bool,
         enabled: Bool = true,
         onTap: @escaping () -> Void
     ) -> some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: symbol)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(selected ? Theme.wandAccent : Theme.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .background(
-                        Circle().fill(
-                            (selected ? Theme.wandAccent : Theme.textSecondary).opacity(0.10)
-                        )
+                Group {
+                    if let provider {
+                        BrandLogoShape(provider: provider)
+                            .fill(selected ? Theme.wandAccent : Theme.textSecondary)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: symbol)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(selected ? Theme.wandAccent : Theme.textSecondary)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .background(
+                    Circle().fill(
+                        (selected ? Theme.wandAccent : Theme.textSecondary).opacity(0.10)
                     )
+                )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.system(size: 14, weight: .semibold))
@@ -413,13 +439,14 @@ struct NewSessionView: View {
     }
 
     private var providerCards: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 5)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
         return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
             ForEach(Provider.allCases) { tool in
                 optionCard(
                     title: tool.label,
                     desc: tool.desc,
                     symbol: tool.symbol,
+                    provider: tool.rawValue,
                     selected: provider == tool
                 ) {
                     provider = tool
@@ -752,6 +779,7 @@ struct NewSessionView: View {
         case "opencode": provider = .opencode
         case "grok": provider = .grok
         case "qoder": provider = .qoder
+        case "pi": provider = .pi
         default: provider = .claude
         }
         sessionType = config?.defaultSessionKind == "pty" ? .pty : .structured
@@ -767,7 +795,8 @@ struct NewSessionView: View {
             codex: config?.defaultCodexModel,
             opencode: config?.defaultOpenCodeModel,
             grok: config?.defaultGrokModel,
-            qoder: config?.defaultQoderModel
+            qoder: config?.defaultQoderModel,
+            pi: config?.defaultPiModel
         )
         if let response = try? await api.models() {
             availableModels = response.models
@@ -775,12 +804,14 @@ struct NewSessionView: View {
             openCodeModels = response.opencodeModels ?? []
             grokModels = response.grokModels ?? []
             qoderModels = response.qoderModels ?? []
+            piModels = response.piModels ?? []
             serverDefaultModels = response.defaultModels ?? ProviderDefaultModels(
                 claude: response.defaultModel,
                 codex: response.defaultCodexModel,
                 opencode: response.defaultOpenCodeModel,
                 grok: response.defaultGrokModel,
-                qoder: response.defaultQoderModel
+                qoder: response.defaultQoderModel,
+                pi: response.defaultPiModel
             )
         }
         recentPaths = (try? await api.recentPaths()) ?? []

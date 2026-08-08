@@ -365,6 +365,8 @@ struct SessionSnapshot: Decodable, Identifiable {
     let pendingEscalation: EscalationRequest?
     let permissionBlocked: Bool?
     let autoApprovePermissions: Bool?
+    var providerCliActive: Bool? = nil
+    var providerCliExitCode: Int? = nil
 
     var isStructured: Bool { (sessionKind ?? "pty") == "structured" }
     var providerLabel: String {
@@ -373,6 +375,7 @@ struct SessionSnapshot: Decodable, Identifiable {
         case "grok": return "Grok"
         case "opencode": return "OpenCode"
         case "qoder": return "Qoder"
+        case "pi": return "Pi"
         default: return "Claude"
         }
     }
@@ -494,6 +497,8 @@ struct WsData: Decodable {
     let pendingEscalation: EscalationRequest?
     let permissionBlocked: Bool?
     let autoApprovePermissions: Bool?
+    let providerCliActive: Bool?
+    let providerCliExitCode: Int?
     // —— output 事件增量字段 ——
     let chunk: String?
     let lastMessage: ConversationTurn?
@@ -656,16 +661,18 @@ struct ThinkingEffortSlider: View {
 struct ModelsResponse: Decodable {
     let models: [ModelInfo]
     let codexModels: [ModelInfo]
-    /// OpenCode / Grok / Qoder 是服务端扩展字段；旧服务端没有时仍可创建会话，
+    /// OpenCode / Grok / Qoder / Pi 是服务端扩展字段；旧服务端没有时仍可创建会话，
     /// 仅在模型菜单中回落到“默认”。
     let opencodeModels: [ModelInfo]?
     let grokModels: [ModelInfo]?
     let qoderModels: [ModelInfo]?
+    let piModels: [ModelInfo]?
     let defaultModel: String?
     let defaultCodexModel: String?
     let defaultOpenCodeModel: String?
     let defaultGrokModel: String?
     let defaultQoderModel: String?
+    let defaultPiModel: String?
     let defaultModels: ProviderDefaultModels?
 
     func defaultModelId(for provider: String) -> String {
@@ -677,6 +684,7 @@ struct ModelsResponse: Decodable {
         case "opencode": return defaultOpenCodeModel ?? ""
         case "grok": return defaultGrokModel ?? ""
         case "qoder": return defaultQoderModel ?? ""
+        case "pi": return defaultPiModel ?? ""
         default: return defaultModel ?? ""
         }
     }
@@ -688,6 +696,7 @@ struct ProviderDefaultModels: Decodable {
     let opencode: String?
     let grok: String?
     let qoder: String?
+    let pi: String?
 
     func model(for provider: String) -> String? {
         switch provider {
@@ -695,6 +704,7 @@ struct ProviderDefaultModels: Decodable {
         case "opencode": return opencode
         case "grok": return grok
         case "qoder": return qoder
+        case "pi": return pi
         default: return claude
         }
     }
@@ -771,6 +781,7 @@ struct ServerConfigInfo: Decodable {
     let defaultOpenCodeModel: String?
     let defaultGrokModel: String?
     let defaultQoderModel: String?
+    let defaultPiModel: String?
     let defaultModels: ProviderDefaultModels?
     let defaultThinkingEffort: String?
     let currentVersion: String?

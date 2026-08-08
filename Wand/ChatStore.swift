@@ -198,6 +198,8 @@ final class ChatStore: ObservableObject {
                 permissionBlocked: data.permissionBlocked,
                 autoApprovePermissions: data.autoApprovePermissions
             )
+            snapshot?.providerCliActive = data.providerCliActive
+            snapshot?.providerCliExitCode = data.providerCliExitCode
         }
     }
 
@@ -231,6 +233,11 @@ final class ChatStore: ObservableObject {
 
     private func applyCommonFields(_ data: WsData) {
         if let s = data.structuredState { isResponding = s.inFlight ?? isResponding }
+        if let active = data.providerCliActive {
+            snapshot?.providerCliActive = active
+            if !active { isResponding = false }
+        }
+        if let exitCode = data.providerCliExitCode { snapshot?.providerCliExitCode = exitCode }
         if let q = data.queuedMessages { queuedMessages = q }
         if let esc = data.pendingEscalation {
             pendingEscalation = esc
@@ -350,6 +357,7 @@ final class ChatStore: ObservableObject {
         case "opencode": availableModels = response.opencodeModels ?? []
         case "grok": availableModels = response.grokModels ?? []
         case "qoder": availableModels = response.qoderModels ?? []
+        case "pi": availableModels = response.piModels ?? []
         default: availableModels = response.models
         }
         defaultModel = response.defaultModelId(for: provider)

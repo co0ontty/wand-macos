@@ -595,6 +595,7 @@ final class WandAPI {
             case "opencode": body["defaultOpenCodeModel"] = model
             case "grok": body["defaultGrokModel"] = model
             case "qoder": body["defaultQoderModel"] = model
+            case "pi": body["defaultPiModel"] = model
             default: body["defaultModel"] = model
             }
         }
@@ -615,6 +616,7 @@ final class WandAPI {
         case "opencode": return "opencode-cli-run"
         case "grok": return "grok-cli-headless"
         case "qoder": return "qoder-cli-print"
+        case "pi": return "pi-cli-json"
         default: return "claude-cli-print"
         }
     }
