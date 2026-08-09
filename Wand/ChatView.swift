@@ -46,48 +46,40 @@ struct ChatView: View {
     }
 
     var body: some View {
-        ZStack {
-            WandAmbientBackground()
-            if store.loading {
-                ProgressView().tint(Theme.brand)
-            } else if let error = store.loadError {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.bubble.fill")
-                        .font(.system(size: 30)).foregroundColor(Theme.danger)
-                    Text("会话加载失败").font(.headline).foregroundColor(Theme.textPrimary)
-                    Text(error).font(.footnote).foregroundColor(Theme.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .textSelection(.enabled)
-                    HStack(spacing: 10) {
-                        Button("重新加载") { store.retryLoad() }
-                            .buttonStyle(.borderedProminent).tint(Theme.brand)
-                        Button { showTroubleshooting = true } label: {
-                            Label("故障排查", systemImage: "stethoscope")
+        VStack(spacing: 0) {
+            sessionActionBar
+            ZStack {
+                WandAmbientBackground()
+                if store.loading {
+                    ProgressView().tint(Theme.brand)
+                } else if let error = store.loadError {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.bubble.fill")
+                            .font(.system(size: 30)).foregroundColor(Theme.danger)
+                        Text("会话加载失败").font(.headline).foregroundColor(Theme.textPrimary)
+                        Text(error).font(.footnote).foregroundColor(Theme.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .textSelection(.enabled)
+                        HStack(spacing: 10) {
+                            Button("重新加载") { store.retryLoad() }
+                                .buttonStyle(.borderedProminent).tint(Theme.brand)
+                            Button { showTroubleshooting = true } label: {
+                                Label("故障排查", systemImage: "stethoscope")
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
                     }
+                    .padding(32)
+                } else if store.messages.isEmpty && !store.isResponding {
+                    sessionLaunchPanel
+                } else {
+                    messageList
                 }
-                .padding(32)
-            } else if store.messages.isEmpty && !store.isResponding {
-                sessionLaunchPanel
-            } else {
-                messageList
             }
         }
         // 点消息区任意空白处收起键盘；输入栏在 safeAreaInset 里不受影响，
         // 点发送 / 权限按钮不会误收。
         .dismissKeyboardOnTap()
-        .navigationTitle("")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 12) {
-                    gitChangesButton
-                    if store.isStructured {
-                        sessionSettingsMenu
-                    }
-                }
-            }
-        }
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(isPresented: $showQuickCommit) {
             GitQuickCommitView(
@@ -700,6 +692,31 @@ struct ChatView: View {
         }
     }
 
+    /// 自绘会话操作行：取代原本压在系统工具栏里的 Git 改动与模型/思考设置。
+    /// 非结构化(终端)会话不显示设置入口；正在加载或出错时整行隐藏，避免抢占焦点。
+    @ViewBuilder
+    private var sessionActionBar: some View {
+        if !store.loading && store.loadError == nil {
+            HStack(spacing: 8) {
+                gitChangesButton
+                    .buttonStyle(.plain)
+                if store.isStructured {
+                    sessionSettingsMenu
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .frame(height: 34)
+            .background(Theme.background)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color(nsColor: Theme.borderSubtle))
+                    .frame(height: 0.5)
+            }
+        }
+    }
+
     private var sessionSettingsMenu: some View {
         Button {
             showSessionSettingsPanel = true
@@ -894,30 +911,26 @@ struct ChatView: View {
     }
 }
 
-/// PTY 会话使用原生 macOS chrome 与 composer；WKWebView 只承担终端画布，
-/// 保留 ANSI、光标和全屏 TUI 语义，同时避免把整套网页应用再次嵌进原生三栏。
+/// PTY 会话的原生终端外壳。目标体验：像打开 Terminal.app / iTerm2 一样自然。
+/// xterm passthrough 让键盘直达 PTY；底部一条紧凑状态栏显示 cwd、终端尺寸、缩放
+/// 和操作按钮（清屏 / 刷新 / 停止）。快捷键：Cmd±缩放、Cmd+0 重置、Cmd+K 清屏。
 struct PtySessionView: View {
     let sessionId: String
     let api: WandAPI
 
-    @Environment(\.colorSchemeContrast) private var contrast
     @StateObject private var store: ChatStore
-    @StateObject private var attachments: ComposerAttachmentController
-    @State private var draft = ""
-    @State private var composerInputHeight: CGFloat = 36
-    @State private var composerIsComposing = false
-    @State private var isSending = false
+    @StateObject private var terminalWebModel = WebViewModel()
     @State private var showStopConfirm = false
-    @FocusState private var inputFocused: Bool
+    /// 终端信息刷新定时器（cols/rows/scale label）。
+    @State private var infoTimer: Timer?
 
     init(sessionId: String, api: WandAPI) {
         self.sessionId = sessionId
         self.api = api
         _store = StateObject(wrappedValue: ChatStore(sessionId: sessionId, api: api))
-        _attachments = StateObject(
-            wrappedValue: ComposerAttachmentController(sessionId: sessionId, api: api)
-        )
     }
+
+    private static let statusBarBackground = Color(red: 0.063, green: 0.050, blue: 0.043)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -926,7 +939,9 @@ struct PtySessionView: View {
                 token: api.token,
                 sessionId: sessionId,
                 embedTerminal: true,
-                embedNativeInput: true
+                embedNativeInput: true,
+                embedPassthrough: true,
+                webViewModel: terminalWebModel
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -937,27 +952,44 @@ struct PtySessionView: View {
                     onResolve: { store.resolvePermission($0) }
                 )
                 .padding(.horizontal, 12)
-                .padding(.top, 8)
+                .padding(.top, 4)
             }
 
-            nativeComposer
+            terminalStatusBar
         }
-        .background(Color(red: 0.090, green: 0.071, blue: 0.059))
-        .fileImporter(
-            isPresented: $attachments.showFileImporter,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true,
-            onCompletion: attachments.handleFileSelection
-        )
+        .background(EmbeddedTerminalStyle.background)
         .onAppear {
-            attachments.setToastHandler { store.toast = $0 }
             store.start()
+            // 初始延迟 + 周期刷新终端尺寸 / 缩放标签
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                terminalWebModel.refreshTerminalInfo()
+            }
+            infoTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+                terminalWebModel.refreshTerminalInfo()
+            }
         }
         .onDisappear {
-            attachments.cancelPendingUploads()
             store.shutdown()
+            infoTimer?.invalidate()
+            infoTimer = nil
         }
         .overlay(alignment: .top) { toastView }
+        .background(
+            // 隐藏快捷键：Cmd±缩放、Cmd+0 重置、Cmd+K 清屏。
+            // SwiftUI 的 keyboardShortcut 必须挂在可见控件上才生效。
+            Group {
+                Button("缩小") { terminalWebModel.adjustEmbeddedTerminalScale(delta: -0.25) }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("放大") { terminalWebModel.adjustEmbeddedTerminalScale(delta: 0.25) }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("重置缩放") { terminalWebModel.resetEmbeddedTerminalScale() }
+                    .keyboardShortcut("0", modifiers: .command)
+                Button("清屏") { terminalWebModel.clearTerminal() }
+                    .keyboardShortcut("k", modifiers: .command)
+            }
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        )
         .confirmationDialog(
             "确定要停止当前终端任务吗？",
             isPresented: $showStopConfirm,
@@ -968,182 +1000,104 @@ struct PtySessionView: View {
         }
     }
 
-    private var nativeComposer: some View {
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+    // MARK: - 终端状态栏
 
-        return VStack(alignment: .leading, spacing: 6) {
-            VStack(alignment: .leading, spacing: 7) {
-                if !attachments.attachments.isEmpty {
-                    PendingAttachmentsPreview(
-                        baseURL: api.baseURL,
-                        attachments: attachments.attachments,
-                        onRemove: attachments.remove
-                    )
-                }
-                IMEAwareComposerTextView(
-                    text: $draft,
-                    placeholder: "输入终端消息",
-                    isFocused: inputFocused,
-                    onFocusChange: { inputFocused = $0 },
-                    onCompositionChange: { composerIsComposing = $0 },
-                    onSubmit: sendDraft,
-                    onHeightChange: { composerInputHeight = $0 }
-                )
-                .frame(height: composerInputHeight)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 5)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .background(
-                    ComposerPasteInterceptor(
-                        attachments: attachments,
-                        isInputFocused: inputFocused
-                    )
-                    .frame(width: 0, height: 0)
-                )
+    /// 底部紧凑状态栏，对齐 Terminal.app / iTerm2 的底栏语义：
+    /// 左侧 cwd + 终端尺寸；右侧操作按钮（缩放 / 清屏 / 刷新 / 停止）。
+    private var terminalStatusBar: some View {
+        HStack(spacing: 0) {
+            // 左侧：cwd
+            HStack(spacing: 4) {
+                Image(systemName: "folder")
+                    .font(.system(size: 9, weight: .medium))
+                Text(shortCwd)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            HStack(spacing: ComposerMetrics.actionSpacing) {
-                attachmentsMenu
-                HStack(spacing: 4) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("终端")
-                        .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundColor(Color.white.opacity(0.45))
+            .help(store.snapshot?.cwd ?? "")
+
+            // 终端尺寸
+            if !terminalWebModel.terminalSizeLabel.isEmpty {
+                Text(terminalWebModel.terminalSizeLabel)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(Color.white.opacity(0.35))
+                    .padding(.leading, 10)
+                    .help("终端尺寸（列 × 行）")
+            }
+
+            Spacer(minLength: 8)
+
+            // 右侧：操作按钮组
+            HStack(spacing: 1) {
+                statusBarButton(systemName: "minus", help: "缩小（Cmd−）") {
+                    terminalWebModel.adjustEmbeddedTerminalScale(delta: -0.25)
                 }
-                .foregroundColor(Theme.textSecondary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(Capsule().fill(Theme.textSecondary.opacity(0.10)))
-                .overlay(Capsule().stroke(Theme.textSecondary.opacity(0.22), lineWidth: 1))
-                Spacer(minLength: 0)
-                trailingButtons
+                Text(terminalWebModel.terminalScaleLabel)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Color.white.opacity(0.6))
+                    .frame(width: 36, height: 22)
+                    .help("缩放比例（Cmd+0 重置）")
+                statusBarButton(systemName: "plus", help: "放大（Cmd+）") {
+                    terminalWebModel.adjustEmbeddedTerminalScale(delta: 0.25)
+                }
+
+                statusBarDivider()
+
+                statusBarButton(systemName: "trash", help: "清屏（Cmd+K）") {
+                    terminalWebModel.clearTerminal()
+                }
+                statusBarButton(systemName: "arrow.clockwise", help: "刷新页面") {
+                    terminalWebModel.refreshEmbeddedTerminal()
+                }
+
+                if !store.loading && store.status == "running" {
+                    statusBarDivider()
+                    statusBarButton(systemName: "stop.fill", help: "停止任务（Esc）", tint: .red) {
+                        showStopConfirm = true
+                    }
+                }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .wandGlass(.panel)
-        .overlay(
-            shape.stroke(
-                inputFocused ? Theme.wandAccent.opacity(contrast == .increased ? 1 : 0.62) : Theme.border,
-                lineWidth: contrast == .increased ? 2 : (inputFocused ? 1.35 : 1)
-            )
-        )
-        .padding(.horizontal, 12)
-        .padding(.top, 7)
-        .padding(.bottom, 8)
-        .background(Theme.background.opacity(0.97))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Self.statusBarBackground)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.06))
+                .frame(height: 0.5)
+        }
     }
 
-    private var attachmentsMenu: some View {
-        Menu {
-            Button {
-                attachments.showFileImporter = true
-            } label: {
-                Label("选择图片或文件…", systemImage: "paperclip")
-            }
-            .disabled(attachments.isUploading || attachments.isFull)
+    private var shortCwd: String {
+        guard let cwd = store.snapshot?.cwd, !cwd.isEmpty else { return "—" }
+        let name = (cwd as NSString).lastPathComponent
+        return name.isEmpty ? cwd : name
+    }
 
-            Button {
-                _ = attachments.importFromPasteboard(.general)
-            } label: {
-                Label("粘贴剪贴板中的图片", systemImage: "photo.on.rectangle")
-            }
-            .disabled(attachments.isUploading || attachments.isFull)
-        } label: {
-            if attachments.isUploading {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(
-                        width: ComposerMetrics.actionVisualSize,
-                        height: ComposerMetrics.actionVisualSize
-                    )
-            } else {
-                Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(Theme.textSecondary)
-                    .frame(
-                        width: ComposerMetrics.actionVisualSize,
-                        height: ComposerMetrics.actionVisualSize
-                    )
-                    .background(Circle().fill(Theme.surface))
-                    .overlay(Circle().stroke(Theme.border, lineWidth: 1))
-            }
+    private func statusBarButton(
+        systemName: String,
+        help: String,
+        tint: Color = Color.white,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(tint.opacity(0.7))
+                .frame(width: 24, height: 22)
+                .contentShape(Rectangle())
         }
-        .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
         .buttonStyle(.plain)
-        .accessibilityLabel("添加附件和更多操作")
+        .help(help)
     }
 
-    private var trailingButtons: some View {
-        HStack(spacing: ComposerMetrics.actionSpacing) {
-            if !store.loading && store.status == "running" {
-                Button { showStopConfirm = true } label: {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(
-                            width: ComposerMetrics.actionVisualSize,
-                            height: ComposerMetrics.actionVisualSize
-                        )
-                        .background(Circle().fill(Theme.danger))
-                }
-                .frame(
-                    width: ComposerMetrics.actionTouchSize,
-                    height: ComposerMetrics.actionTouchSize
-                )
-                .buttonStyle(.plain)
-                .accessibilityLabel("停止任务")
-            }
-            Button(action: sendDraft) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(canSend ? Theme.surface : Theme.textSecondary.opacity(0.55))
-                    .frame(
-                        width: ComposerMetrics.actionVisualSize,
-                        height: ComposerMetrics.actionVisualSize
-                    )
-                    .background(
-                        Circle().fill(canSend ? Theme.textPrimary : Theme.textSecondary.opacity(0.16))
-                    )
-            }
-            .frame(
-                width: ComposerMetrics.actionTouchSize,
-                height: ComposerMetrics.actionTouchSize
-            )
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .accessibilityLabel("发送")
-        }
-    }
-
-    private var canSend: Bool {
-        !store.loading && !composerIsComposing && !isSending && !attachments.isUploading && (
-            !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !attachments.attachments.isEmpty
-        )
-    }
-
-    private func sendDraft() {
-        guard canSend else { return }
-        let text = buildAttachmentPrompt(attachments.attachments, body: draft)
-        guard !text.isEmpty else { return }
-        let restoreDraft = draft
-        let restoreAttachments = attachments.attachments
-        draft = ""
-        attachments.attachments.removeAll()
-        isSending = true
-        inputFocused = true
-        Task {
-            defer { isSending = false }
-            do {
-                try await store.sendPtyTerminalInput(text)
-            } catch {
-                if draft.isEmpty { draft = restoreDraft }
-                if attachments.attachments.isEmpty {
-                    attachments.attachments = restoreAttachments
-                }
-                store.toast = error.localizedDescription
-            }
-        }
+    private func statusBarDivider() -> some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.12))
+            .frame(width: 0.5, height: 12)
+            .padding(.horizontal, 3)
     }
 
     private func stopPtyInput() {

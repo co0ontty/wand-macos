@@ -1,12 +1,19 @@
 import Combine
 import SwiftUI
 
-/// 横屏 native 应用主壳:原生窗口工具栏 + 三栏(左会话 / 中聊天 / 右文件)。
+/// 横屏 native 应用主壳:自绘扁平顶栏 + 三栏(左会话 / 中聊天 / 右文件)。
 /// 窗口不足以同时保证聊天正文和两侧栏可读时，右栏改为临时 Inspector，
 /// 不再挤压主工作区；宽窗口才使用常驻三栏。
 ///
+/// 顶栏与主壳共享的连接状态。
+enum ShellConnectionState {
+    case connecting
+    case connected
+    case disconnected(String)
+}
+
 /// 三栏宽度常量对齐 web 端 token(`.sidebar-width: 300px`, `.file-panel-width: 320px`),
-/// 顶部操作统一放进 macOS 原生 toolbar，内容区不再额外绘制应用顶栏。
+/// 顶部操作统一放进自绘 WandTopBar，内容区不再使用系统原生工具栏。
 struct MainShellView: View {
     let serverURL: URL
     let token: String?
@@ -20,7 +27,7 @@ struct MainShellView: View {
     @State private var selectedSessionProvider: String = "claude"
     @State private var selectedSession: SessionSnapshot?
     /// 连接状态(给顶栏的 connection dot 用)。
-    @State private var connectionState: ConnectionState = .connecting
+    @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
     @State private var showMissions = false
     @StateObject private var gitStatusStore = GitStatusStore()
@@ -30,12 +37,6 @@ struct MainShellView: View {
     private let persistentRightPanelMinimumWidth: CGFloat = 1_220
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
-
-    enum ConnectionState {
-        case connecting
-        case connected
-        case disconnected(String)
-    }
 
     enum RightPanelTab: String, CaseIterable, Identifiable {
         case files
@@ -81,7 +82,6 @@ struct MainShellView: View {
                 nativeShell
             }
         }
-        .toolbar { windowToolbar }
         .sheet(isPresented: $presentSettings) {
             SettingsView(
                 serverURL: serverURL,
@@ -123,259 +123,69 @@ struct MainShellView: View {
     }
 
     private var nativeShell: some View {
-        GeometryReader { geo in
-            content(width: geo.size.width)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(WandAmbientBackground())
-            .frame(minWidth: 900, minHeight: 600)
-            .overlay(alignment: .bottom) {
-                if geo.size.width < 800 {
-                    Text("建议横屏使用,体验更佳")
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.textSecondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Theme.surface.opacity(0.9))
-                        )
-                        .wandGlassCard(cornerRadius: 999)
-                        .padding(.bottom, 8)
+        VStack(spacing: 0) {
+            WandTopBar(
+                connectionState: connectionState,
+                displayHost: displayHost,
+                showWebFallback: showWebFallback,
+                filePanelOpen: filePanelOpen,
+                onToggleFilePanel: {
+                    withAnimation(structuralAnimation) { filePanelOpen.toggle() }
+                },
+                onOpenMissions: { showMissions = true },
+                onOpenSettings: { presentSettings = true },
+                onOpenWebFallback: { showWebFallback = true },
+                onReturnToNative: { showWebFallback = false },
+                onCheckConnection: checkConnection,
+                onOpenTroubleshooting: { showTroubleshooting = true },
+                onSwitchServer: {
+                    NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                 }
-            }
-            .onChange(of: geo.size.width) { newWidth in
-                // 从常驻三栏进入紧凑布局时主动收起；用户随后仍可按需打开临时 Inspector。
-                if newWidth < persistentRightPanelMinimumWidth && filePanelOpen {
-                    withAnimation(structuralAnimation) {
-                        filePanelOpen = false
-                    }
-                }
-            }
-            .onAppear {
-                if geo.size.width < persistentRightPanelMinimumWidth {
-                    filePanelOpen = false
-                }
-            }
-        }
-    }
-
-    // MARK: - 原生窗口工具栏
-
-    @ToolbarContentBuilder
-    private var windowToolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            if showWebFallback {
-                Button {
-                    showWebFallback = false
-                } label: {
-                    Label("返回原生界面", systemImage: "chevron.backward")
-                }
-                .help("返回原生界面")
-            } else {
-                toolbarIdentityMenu
-            }
-        }
-
-        ToolbarItem(placement: .principal) {
-            if showWebFallback {
-                Label("网页版", systemImage: "safari")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
-            }
-        }
-
-        // 会话标题与 Git 操作由 ChatView 提供；这里不再放一个竞争性的 principal
-        // 项，避免窄窗口时标题、路径和全局操作彼此挤压。
-        ToolbarItemGroup(placement: .primaryAction) {
-            agentInboxToolbarButton
-                .opacity(showWebFallback ? 0 : 1)
-                .disabled(showWebFallback)
-            filePanelToolbarButton
-                .opacity(showWebFallback ? 0 : 1)
-                .disabled(showWebFallback)
-            applicationToolbarMenu
-                .opacity(showWebFallback ? 0 : 1)
-                .disabled(showWebFallback)
-        }
-    }
-
-    private var agentInboxToolbarButton: some View {
-        Button {
-            showMissions = true
-        } label: {
-            Label("Agent Inbox", systemImage: "tray.full")
-        }
-        .buttonStyle(.borderless)
-        .keyboardShortcut("2", modifiers: .command)
-        .help("打开 Agent Inbox 与并行任务")
-        .accessibilityLabel("打开 Agent Inbox 与并行任务")
-    }
-
-    /// 左侧只承载全局身份和连接状态。把服务器信息做成可点击的菜单，而非一个
-    /// 只能靠悬停理解的绿/红小点；既不抢会话标题的位置，也能直接抵达恢复动作。
-    private var toolbarIdentityMenu: some View {
-        Menu {
-            Section("服务器") {
-                Label(displayHost, systemImage: "server.rack")
-                Label(connectionMenuStatus, systemImage: connectionSystemImage)
-            }
-
-            Divider()
-
-            Button {
-                checkConnection()
-            } label: {
-                Label("重新连接", systemImage: "arrow.clockwise")
-            }
-
-            if case .disconnected = connectionState {
-                Button {
-                    showTroubleshooting = true
-                } label: {
-                    Label("故障排查", systemImage: "stethoscope")
-                }
-            }
-
-            Divider()
-
-            Button {
-                NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
-            } label: {
-                Label("切换服务器…", systemImage: "server.rack")
-            }
-        } label: {
-            HStack(spacing: 7) {
-                WandBrandMark(size: 18)
-                Text("Wand")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                toolbarConnectionBadge
-            }
-            .fixedSize()
-        }
-        .menuStyle(.borderlessButton)
-        .help("\(connectionHelp) · \(displayHost)")
-        .accessibilityLabel("Wand，\(connectionAccessibilityValue)")
-        .accessibilityHint("打开服务器状态与连接操作")
-    }
-
-    /// 文件栏是唯一的高频全局动作，保留在工具栏上并用文字明确它影响的区域。
-    private var filePanelToolbarButton: some View {
-        Button {
-            withAnimation(structuralAnimation) {
-                filePanelOpen.toggle()
-            }
-        } label: {
-            Label(
-                filePanelOpen ? "隐藏文件" : "显示文件",
-                systemImage: filePanelOpen ? "sidebar.right" : "sidebar.squares.right"
             )
-        }
-        .buttonStyle(.borderless)
-        .help(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
-        .accessibilityLabel(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
-    }
-
-    /// 将低频应用级操作归入有语义的“设置与更多”，取代难以预测的省略号菜单。
-    private var applicationToolbarMenu: some View {
-        Menu {
-            Button {
-                presentSettings = true
-            } label: {
-                Label("设置…", systemImage: "gearshape")
+            GeometryReader { geo in
+                content(width: geo.size.width)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .bottom) {
+                        if geo.size.width < 800 {
+                            Text("建议横屏使用,体验更佳")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textSecondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Theme.surfaceElevated)
+                                )
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Theme.border, lineWidth: 0.8)
+                                )
+                                .padding(.bottom, 8)
+                        }
+                    }
+                    .onChange(of: geo.size.width) { newWidth in
+                        // 从常驻三栏进入紧凑布局时主动收起；用户随后仍可按需打开临时 Inspector。
+                        if newWidth < persistentRightPanelMinimumWidth && filePanelOpen {
+                            withAnimation(structuralAnimation) {
+                                filePanelOpen = false
+                            }
+                        }
+                    }
+                    .onAppear {
+                        if geo.size.width < persistentRightPanelMinimumWidth {
+                            filePanelOpen = false
+                        }
+                    }
             }
-
-            Button {
-                showWebFallback = true
-            } label: {
-                Label("打开网页版", systemImage: "safari")
-            }
-        } label: {
-            Label("设置与更多", systemImage: "gearshape")
+            .background(WandAmbientBackground())
         }
-        .menuStyle(.borderlessButton)
-        .help("设置与更多")
-        .accessibilityLabel("设置与更多")
-    }
-
-    private var toolbarConnectionBadge: some View {
-        HStack(spacing: 4) {
-            toolbarConnectionIndicator
-            Text(connectionShortLabel)
-        }
-        .font(.system(size: 10, weight: .medium))
-        .foregroundColor(connectionTint)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(
-            Capsule(style: .continuous)
-                .fill(connectionTint.opacity(0.12))
-        )
-        // Menu 已提供完整的、可朗读的状态；避免 VoiceOver 在同一控件里重复。
-        .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private var toolbarConnectionIndicator: some View {
-        switch connectionState {
-        case .connecting:
-            ProgressView()
-                .controlSize(.mini)
-                .tint(connectionTint)
-        case .connected, .disconnected:
-            Image(systemName: connectionSystemImage)
-                .font(.system(size: 10, weight: .semibold))
-        }
-    }
-
-    private var connectionTint: Color {
-        switch connectionState {
-        case .connecting: return Theme.warning
-        case .connected: return Theme.success
-        case .disconnected: return Theme.danger
-        }
-    }
-
-    private var connectionSystemImage: String {
-        switch connectionState {
-        case .connecting: return "arrow.triangle.2.circlepath"
-        case .connected: return "checkmark.circle.fill"
-        case .disconnected: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var connectionShortLabel: String {
-        switch connectionState {
-        case .connecting: return "连接中"
-        case .connected: return "已连接"
-        case .disconnected: return "未连接"
-        }
-    }
-
-    private var connectionMenuStatus: String {
-        switch connectionState {
-        case .connecting: return "正在连接"
-        case .connected: return "已连接"
-        case .disconnected(let message): return "连接失败：\(message)"
-        }
-    }
-
-    private var connectionAccessibilityValue: String {
-        "\(connectionMenuStatus)，服务器 \(displayHost)"
+        .frame(minWidth: 900, minHeight: 600)
     }
 
     private var displayHost: String {
         guard let host = serverURL.host else { return serverURL.absoluteString }
         if let port = serverURL.port { return "\(host):\(port)" }
         return host
-    }
-
-    private var connectionHelp: String {
-        switch connectionState {
-        case .connecting: return "正在连接服务器"
-        case .connected: return "服务器已连接"
-        case .disconnected(let message): return "服务器连接失败：\(message)"
-        }
     }
 
     private var disconnectedMessage: String? {
@@ -431,7 +241,7 @@ struct MainShellView: View {
                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     .background(
                         RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                            .fill(Theme.surfaceElevated.opacity(0.72))
+                            .fill(Theme.surfaceElevated)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
                 if filePanelOpen && usesPersistentRightPanel {
@@ -447,7 +257,7 @@ struct MainShellView: View {
                 rightColumn
                     .frame(width: compactPanelWidth)
                     .wandGlass(.panel)
-                    .shadow(color: Color.black.opacity(0.28), radius: 24, x: -8, y: 8)
+                    .shadow(color: Color.black.opacity(0.16), radius: 16, x: -4, y: 4)
                     .padding(10)
                     .transition(rightPanelTransition)
                     .zIndex(2)
@@ -564,6 +374,245 @@ struct MainShellView: View {
         )
     }
 
+}
+
+// MARK: - 自绘扁平顶栏
+
+/// 完全自绘的应用顶栏，取代原生 unified 工具栏。
+/// 左侧承载全局身份和连接状态，右侧承载 Agent Inbox / 文件 / 设置与更多；
+/// web 兜底模式下左侧退化为「返回原生界面」。背景铺 Theme.background，与窗口底色一致，
+/// 底部加一条 0.5pt 暖色细分割线，把顶栏与工作区清晰分层但不喧宾夺主。
+private struct WandTopBar: View {
+    let connectionState: ShellConnectionState
+    let displayHost: String
+    let showWebFallback: Bool
+    let filePanelOpen: Bool
+    let onToggleFilePanel: () -> Void
+    let onOpenMissions: () -> Void
+    let onOpenSettings: () -> Void
+    let onOpenWebFallback: () -> Void
+    let onReturnToNative: () -> Void
+    let onCheckConnection: () -> Void
+    let onOpenTroubleshooting: () -> Void
+    let onSwitchServer: () -> Void
+
+    private var connectionTint: Color {
+        switch connectionState {
+        case .connecting: return Theme.warning
+        case .connected: return Theme.success
+        case .disconnected: return Theme.danger
+        }
+    }
+
+    private var connectionSystemImage: String {
+        switch connectionState {
+        case .connecting: return "arrow.triangle.2.circlepath"
+        case .connected: return "checkmark.circle.fill"
+        case .disconnected: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var connectionShortLabel: String {
+        switch connectionState {
+        case .connecting: return "连接中"
+        case .connected: return "已连接"
+        case .disconnected: return "未连接"
+        }
+    }
+
+    private var connectionMenuStatus: String {
+        switch connectionState {
+        case .connecting: return "正在连接"
+        case .connected: return "已连接"
+        case .disconnected(let message): return "连接失败：\(message)"
+        }
+    }
+
+    private var connectionHelp: String {
+        switch connectionState {
+        case .connecting: return "正在连接服务器"
+        case .connected: return "服务器已连接"
+        case .disconnected(let message): return "服务器连接失败：\(message)"
+        }
+    }
+
+    private var connectionAccessibilityValue: String {
+        "\(connectionMenuStatus)，服务器 \(displayHost)"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if showWebFallback {
+                Button(action: onReturnToNative) {
+                    Label("返回原生界面", systemImage: "chevron.backward")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.textPrimary)
+                }
+                .buttonStyle(.borderless)
+                .help("返回原生界面")
+                Spacer()
+                Label("网页版", systemImage: "safari")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+            } else {
+                identityMenu
+                Spacer(minLength: 0)
+                rightActions
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 10)
+        .frame(height: 44)
+        .frame(maxWidth: .infinity)
+        .background(Theme.background)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color(nsColor: Theme.borderSubtle))
+                .frame(height: 0.5)
+        }
+    }
+
+    /// 左侧只承载全局身份和连接状态。把服务器信息做成可点击的菜单，而非一个
+    /// 只能靠悬停理解的绿/红小点；既不抢会话标题的位置，也能直接抵达恢复动作。
+    private var identityMenu: some View {
+        Menu {
+            Section("服务器") {
+                Label(displayHost, systemImage: "server.rack")
+                Label(connectionMenuStatus, systemImage: connectionSystemImage)
+            }
+
+            Divider()
+
+            Button(action: onCheckConnection) {
+                Label("重新连接", systemImage: "arrow.clockwise")
+            }
+
+            if case .disconnected = connectionState {
+                Button(action: onOpenTroubleshooting) {
+                    Label("故障排查", systemImage: "stethoscope")
+                }
+            }
+
+            Divider()
+
+            Button(action: onSwitchServer) {
+                Label("切换服务器…", systemImage: "server.rack")
+            }
+        } label: {
+            HStack(spacing: 7) {
+                WandBrandMark(size: 18)
+                Text("Wand")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                connectionBadge
+            }
+            .fixedSize()
+        }
+        .menuStyle(.borderlessButton)
+        .help("\(connectionHelp) · \(displayHost)")
+        .accessibilityLabel("Wand，\(connectionAccessibilityValue)")
+        .accessibilityHint("打开服务器状态与连接操作")
+    }
+
+    private var connectionBadge: some View {
+        HStack(spacing: 4) {
+            connectionIndicator
+            Text(connectionShortLabel)
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundColor(connectionTint)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(connectionTint.opacity(0.12))
+        )
+        // Menu 已提供完整的、可朗读的状态；避免 VoiceOver 在同一控件里重复。
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var connectionIndicator: some View {
+        switch connectionState {
+        case .connecting:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(connectionTint)
+        case .connected, .disconnected:
+            Image(systemName: connectionSystemImage)
+                .font(.system(size: 10, weight: .semibold))
+        }
+    }
+
+    private var rightActions: some View {
+        HStack(spacing: 4) {
+            // Agent Inbox：Cmd-2 快捷键保留，与原工具栏一致。
+            Button(action: onOpenMissions) {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Circle().fill(Theme.surfaceElevated)
+                    )
+                    .overlay(
+                        Circle().stroke(Theme.border, lineWidth: 0.7)
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("2", modifiers: .command)
+            .help("打开 Agent Inbox 与并行任务")
+            .accessibilityLabel("打开 Agent Inbox 与并行任务")
+
+            // 文件面板是唯一的高频全局动作，用图标明确它影响的区域。
+            Button(action: onToggleFilePanel) {
+                Image(
+                    systemName: filePanelOpen
+                        ? "sidebar.right"
+                        : "sidebar.squares.right"
+                )
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(Theme.textSecondary)
+                .frame(width: 30, height: 30)
+                .background(
+                    Circle().fill(Theme.surfaceElevated)
+                )
+                .overlay(
+                    Circle().stroke(Theme.border, lineWidth: 0.7)
+                )
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
+            .accessibilityLabel(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
+
+            // 将低频应用级操作归入有语义的“设置与更多”。
+            Menu {
+                Button(action: onOpenSettings) {
+                    Label("设置…", systemImage: "gearshape")
+                }
+                Button(action: onOpenWebFallback) {
+                    Label("打开网页版", systemImage: "safari")
+                }
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Circle().fill(Theme.surfaceElevated)
+                    )
+                    .overlay(
+                        Circle().stroke(Theme.border, lineWidth: 0.7)
+                    )
+                    .contentShape(Circle())
+            }
+            .menuStyle(.borderlessButton)
+            .help("设置与更多")
+            .accessibilityLabel("设置与更多")
+        }
+    }
 }
 
 private struct ConnectionFailureView: View {

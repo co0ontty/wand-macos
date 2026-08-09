@@ -14,9 +14,6 @@ struct WandApp: App {
         WindowGroup("Wand") {
             ContentView()
                 .environmentObject(store)
-                // 原生工具栏已经呈现 Wand 品牌；隐藏系统重复的窗口标题，
-                // 避免顶部同时出现两个 “Wand”。
-                .hideNativeWindowTitle()
                 .frame(
                     // 横屏布局:ideal 1440 × 880,最小 900 × 600;
                     // maxWidth / maxHeight 显式设 .infinity 让窗口可自由拖大/缩。
@@ -24,9 +21,8 @@ struct WandApp: App {
                     minHeight: 600, idealHeight: 880, maxHeight: .infinity
                 )
         }
-        // 常规 unified 工具栏给状态、文件与会话操作足够的呼吸空间；紧凑样式会把
-        // 这些不同层级的控件压进同一条窄带，降低扫描与点击效率。
-        .windowToolbarStyle(.unified(showsTitle: false))
+        // 顶部不再使用系统统一工具栏；应用顶栏完全由 MainShellView 内的
+        // WandTopBar 自绘，与暖米色主题和扁平面板统一。
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {

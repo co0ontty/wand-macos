@@ -2,8 +2,8 @@ import SwiftUI
 import AppKit
 
 /// 品牌色与复用样式,对齐 web 端的 :root token(暖米色背景 + 暖珊瑚 accent)。
-/// 颜色随系统明暗自适应；液态玻璃抽象在 macOS 26+ 走 SwiftUI 原生 Liquid Glass，
-/// 老系统退化为半透明 surface + 暖色描边。
+/// 颜色随系统明暗自适应；面板/卡片走扁平实色 surface + 暖色细描边的简约风格,
+/// 不再使用系统 Liquid Glass / 毛玻璃 material,保证各 macOS 版本外观一致。
 ///
 /// 暖米色背景取 web 端 --bg-primary #F6F1E8,品牌主色取 web 端 --accent #C5653D。
 /// 旧 `Theme.brand`(#D97757, iOS / macOS 沿用)保留做兼容 — 引用方暂未迁移过来之前不破坏。
@@ -176,29 +176,20 @@ enum Theme {
         }
     }
 
-    // MARK: - 液态玻璃抽象
+    // MARK: - 面板表面抽象
 
-    /// 液态玻璃胶囊:顶栏 / 面板 / 会话头卡片背景。
-    /// macOS 26+ 直接使用 SwiftUI Liquid Glass;老系统退化为半透明 surface。
+    /// 扁平面板:顶栏 / 侧栏 / 输入栏 / 会话头卡片背景。
+    /// 统一走实色 surface + 暖色细描边,不再依赖 Liquid Glass / 毛玻璃 material,
+    /// 各 macOS 版本外观一致,也与整体扁平简约风格保持协调。
     /// 视图层用 `View.wandGlass(...)` 直接挂即可。
     enum Glass: Equatable {
-        case chrome           // 顶栏 / 工具条(高不透明,放在最顶)
-        case panel            // 侧栏 / 输入栏(中等不透明)
+        case chrome           // 顶栏 / 工具条(不透明实色)
+        case panel            // 侧栏 / 输入栏(接近不透明实色)
 
         var cornerRadius: CGFloat {
             switch self {
             case .chrome: return 0     // 顶栏贴窗口
             case .panel: return Radius.lg
-            }
-        }
-
-        @available(macOS 26.0, *)
-        var nativeEffect: SwiftUI.Glass {
-            switch self {
-            case .chrome:
-                return .regular.tint(Theme.wandAccent.opacity(0.035))
-            case .panel:
-                return .regular.tint(Theme.wandAccent.opacity(0.045))
             }
         }
     }
@@ -258,12 +249,12 @@ struct WandAmbientBackground: View {
             let canvas = max(proxy.size.width, proxy.size.height)
             ZStack {
                 Theme.background
-                // 静态的环境光让玻璃层有可折射的“内容”，但不做环境呼吸动画：
+                // 极淡的环境光给扁平实色面板留一丝暖色基调，不做环境呼吸动画：
                 // 这块背景会始终存在于高频生产力界面中，安静比显眼更重要。
                 Circle()
                     .fill(
                         RadialGradient(
-                            colors: [Theme.wandAccent.opacity(0.11), Theme.wandAccent.opacity(0)],
+                            colors: [Theme.wandAccent.opacity(0.06), Theme.wandAccent.opacity(0)],
                             center: .center,
                             startRadius: 0,
                             endRadius: canvas * 0.48
@@ -274,7 +265,7 @@ struct WandAmbientBackground: View {
                 Circle()
                     .fill(
                         RadialGradient(
-                            colors: [Theme.codex.opacity(0.075), Theme.codex.opacity(0)],
+                            colors: [Theme.codex.opacity(0.04), Theme.codex.opacity(0)],
                             center: .center,
                             startRadius: 0,
                             endRadius: canvas * 0.37
@@ -283,7 +274,7 @@ struct WandAmbientBackground: View {
                     .frame(width: canvas * 0.90, height: canvas * 0.90)
                     .offset(x: proxy.size.width * 0.43, y: -proxy.size.height * 0.12)
                 LinearGradient(
-                    colors: [Color.white.opacity(0.055), .clear, Color.black.opacity(0.025)],
+                    colors: [Color.white.opacity(0.04), .clear, Color.black.opacity(0.018)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -324,19 +315,17 @@ private struct WandGlassModifier: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
         let highContrast = contrast == .increased
 
-        if reduceTransparency || highContrast {
-            content
-                .background(shape.fill(Theme.surfaceElevated))
-                .overlay(shape.stroke(Theme.border, lineWidth: highContrast ? 1.5 : 1))
-        } else if #available(macOS 26.0, *) {
-            content.glassEffect(kind.nativeEffect, in: shape)
-                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
-        } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .background(shape.fill(Theme.surface.opacity(kind == .chrome ? 0.64 : 0.48)))
-                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
-        }
+        // 扁平实色表面：chrome 顶栏完全不透明，panel 接近不透明；统一暖色细描边。
+        // 高对比度下描边加粗；reduceTransparency 与普通路径一致(本就是实色)。
+        let fillOpacity: Double = kind == .chrome ? 1.0 : 0.92
+        content
+            .background(shape.fill(Theme.surfaceElevated.opacity(fillOpacity)))
+            .overlay(
+                shape.stroke(
+                    Theme.border,
+                    lineWidth: highContrast ? 1.5 : 0.8
+                )
+            )
     }
 }
 
@@ -350,22 +339,17 @@ private struct WandGlassCardModifier: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let highContrast = contrast == .increased
 
-        if reduceTransparency || highContrast {
-            content
-                .background(shape.fill(Theme.surfaceElevated))
-                .overlay(shape.stroke(Theme.border, lineWidth: highContrast ? 1.5 : 1))
-        } else if #available(macOS 26.0, *) {
-            content
-                .glassEffect(.regular.tint(Theme.wandAccent.opacity(0.025)), in: shape)
-                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
-                .shadow(color: Theme.ShadowToken.md.color.opacity(0.56), radius: 12, y: 4)
-        } else {
-            content
-                .background(.thinMaterial, in: shape)
-                .background(shape.fill(Theme.surfaceElevated.opacity(0.56)))
-                .overlay(shape.stroke(Theme.glassHighlight, lineWidth: 0.65))
-                .shadow(color: Theme.ShadowToken.md.color.opacity(0.52), radius: 12, y: 4)
-        }
+        // 扁平卡片：实色 elevated 表面 + 暖色细描边 + 极轻阴影表达浮起,
+        // 不再使用 thin material / glassEffect。
+        content
+            .background(shape.fill(Theme.surfaceElevated))
+            .overlay(
+                shape.stroke(
+                    Theme.border,
+                    lineWidth: highContrast ? 1.5 : 0.8
+                )
+            )
+            .shadow(color: Theme.ShadowToken.md.color.opacity(0.5), radius: 8, y: 3)
     }
 }
 
@@ -437,12 +421,6 @@ extension View {
     /// 老 SDK 不支持 NSWindow.titlebarAppearsTransparent/titleVisibility 时静默降级。
     func hideNativeTitleBar() -> some View {
         background(NativeTitleBarHider())
-    }
-
-    /// 主窗口保留 traffic lights 与统一工具栏，只隐藏系统重复渲染的窗口标题。
-    /// 与 `hideNativeTitleBar()` 不同，这里不改变窗口拖拽策略，也不影响 sheet。
-    func hideNativeWindowTitle() -> some View {
-        background(NativeWindowTitleHider())
     }
 
     /// 挂载后整块 view 都变成可拖动区,拖动时通过 NSWindow.setFrameOrigin 移动窗口。
@@ -561,32 +539,6 @@ private final class SheetTitleBarNSView: NSView {
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true
         }
-    }
-}
-
-/// 主窗口的标题可见性需要落到 AppKit；SwiftUI 的 WindowGroup 没有对应修饰符。
-private struct NativeWindowTitleHider: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        MainWindowTitleNSView()
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? MainWindowTitleNSView)?.applyToWindow()
-    }
-}
-
-private final class MainWindowTitleNSView: NSView {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        applyToWindow()
-    }
-
-    func applyToWindow() {
-        guard let window, window.sheetParent == nil, window.styleMask.contains(.titled) else { return }
-        window.titleVisibility = .hidden
-        // 标题文字可以隐藏，但工具栏不应随之透明：保留系统 material 才能让顶栏
-        // 与工作区、侧栏清晰分层，并自动适配“减少透明度”和高对比度设置。
-        window.titlebarAppearsTransparent = false
     }
 }
 
