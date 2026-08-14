@@ -2,14 +2,6 @@ import Combine
 import Foundation
 import SwiftUI
 
-private enum MissionWorkspaceTab: String, CaseIterable, Identifiable {
-    case inbox
-    case missions
-
-    var id: String { rawValue }
-    var title: String { self == .inbox ? "Inbox" : "任务" }
-}
-
 private struct MissionProviderOption: Identifiable {
     let id: String
     let title: String
@@ -120,8 +112,6 @@ struct MissionsView: View {
     let onOpenSession: (String) -> Void
     let onDismiss: () -> Void
 
-    @State private var tab: MissionWorkspaceTab = .inbox
-    @State private var inbox: [AgentActivityItem] = []
     @State private var missions: [MissionInfo] = []
     @State private var selectedMissionId: String?
     @State private var selectedAttemptId: String?
@@ -154,11 +144,9 @@ struct MissionsView: View {
             toolbar
             Divider().opacity(0.35)
             Group {
-                if loading && inbox.isEmpty && missions.isEmpty {
+                if loading && missions.isEmpty {
                     ProgressView().tint(Theme.wandAccent)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if tab == .inbox {
-                    inboxWorkspace
                 } else {
                     missionsWorkspace
                 }
@@ -170,7 +158,6 @@ struct MissionsView: View {
             MissionCreateView(api: api) { mission in
                 missions.removeAll { $0.id == mission.id }
                 missions.insert(mission, at: 0)
-                tab = .missions
                 selectMission(mission)
             }
         }
@@ -202,19 +189,12 @@ struct MissionsView: View {
     private var toolbar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "tray.full.fill")
+                Image(systemName: "square.stack.3d.up.fill")
                     .foregroundColor(Theme.wandAccent)
-                Text("Agent Inbox")
+                Text("并行任务")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
             }
-            Picker("任务视图", selection: $tab) {
-                ForEach(MissionWorkspaceTab.allCases) { item in
-                    Text(item.title).tag(item)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 210)
             Spacer()
             Button {
                 Task { await refresh(showProgress: false) }
@@ -222,7 +202,7 @@ struct MissionsView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(WandIconButtonStyle())
-            .help("刷新 Agent Inbox 与任务")
+            .help("刷新并行任务")
             Button {
                 showCreate = true
             } label: {
@@ -235,29 +215,6 @@ struct MissionsView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Theme.surface.opacity(0.68))
-    }
-
-    @ViewBuilder private var inboxWorkspace: some View {
-        if inbox.isEmpty {
-            MissionEmptyState(
-                icon: "tray",
-                title: "Inbox 是空的",
-                detail: "Agent 需要输入、权限或完成任务时会出现在这里。"
-            )
-        } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    MissionActivityGroup(title: "需要你", items: inbox.filter(\.needsAttention), onOpen: openActivity)
-                    MissionActivityGroup(title: "执行中", items: inbox.filter { $0.state == "working" }, onOpen: openActivity)
-                    MissionActivityGroup(
-                        title: "最近完成",
-                        items: inbox.filter { !$0.needsAttention && $0.state != "working" },
-                        onOpen: openActivity
-                    )
-                }
-                .padding(20)
-            }
-        }
     }
 
     @ViewBuilder private var missionsWorkspace: some View {
@@ -470,12 +427,6 @@ struct MissionsView: View {
         }
     }
 
-    private func openActivity(_ item: AgentActivityItem) {
-        Task { try? await api.markMissionInboxRead(sessionId: item.sessionId) }
-        onOpenSession(item.sessionId)
-        onDismiss()
-    }
-
     private func selectMission(_ mission: MissionInfo) {
         selectedMissionId = mission.id
         if let currentAttemptId = selectedAttemptId,
@@ -559,12 +510,8 @@ struct MissionsView: View {
 
     private func refresh(showProgress: Bool) async {
         if showProgress { loading = true }
-        async let loadedInbox = api.missionInbox()
-        async let loadedMissions = api.missions()
         do {
-            let values = try await (loadedInbox, loadedMissions)
-            inbox = values.0
-            missions = values.1
+            missions = try await api.missions()
             if let selectedMissionId,
                let refreshed = missions.first(where: { $0.id == selectedMissionId }) {
                 comments = refreshed.comments.filter { $0.attemptId == selectedAttemptId }
@@ -577,72 +524,11 @@ struct MissionsView: View {
             }
             errorMessage = nil
         } catch {
-            if showProgress || (inbox.isEmpty && missions.isEmpty) {
+            if showProgress || missions.isEmpty {
                 errorMessage = error.localizedDescription
             }
         }
         loading = false
-    }
-}
-
-private struct MissionActivityGroup: View {
-    let title: String
-    let items: [AgentActivityItem]
-    let onOpen: (AgentActivityItem) -> Void
-
-    var body: some View {
-        if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title.uppercased())
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(Theme.textMuted)
-                    .padding(.leading, 4)
-                ForEach(items) { item in
-                    Button { onOpen(item) } label: {
-                        MissionActivityRow(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-}
-
-private struct MissionActivityRow: View {
-    let item: AgentActivityItem
-    @State private var hovered = false
-
-    var body: some View {
-        let presentation = missionStatePresentation(item.state)
-        HStack(spacing: 12) {
-            Image(systemName: presentation.1)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(presentation.2)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(item.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(Theme.textPrimary)
-                    if item.readAt == nil { Circle().fill(Theme.wandAccent).frame(width: 7, height: 7) }
-                }
-                Text(item.summary ?? item.cwd ?? presentation.0)
-                    .font(.system(size: 12))
-                    .foregroundColor(Theme.textSecondary)
-                    .lineLimit(2)
-                Text([item.provider?.capitalized, presentation.0].compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(presentation.2)
-            }
-            Spacer()
-            Image(systemName: "arrow.up.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Theme.textMuted)
-        }
-        .padding(13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .wandSelectionSurface(isSelected: false, isHovered: hovered, cornerRadius: 14)
-        .onHover { hovered = $0 }
     }
 }
 

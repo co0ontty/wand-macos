@@ -379,7 +379,7 @@ struct MainShellView: View {
 // MARK: - 自绘扁平顶栏
 
 /// 完全自绘的应用顶栏，取代原生 unified 工具栏。
-/// 左侧承载全局身份和连接状态，右侧承载 Agent Inbox / 文件 / 设置与更多；
+/// 左侧承载全局身份和连接状态，右侧承载并行任务 / 文件 / 设置与更多；
 /// web 兜底模式下左侧退化为「返回原生界面」。背景铺 Theme.background，与窗口底色一致，
 /// 底部加一条 0.5pt 暖色细分割线，把顶栏与工作区清晰分层但不喧宾夺主。
 private struct WandTopBar: View {
@@ -546,9 +546,8 @@ private struct WandTopBar: View {
 
     private var rightActions: some View {
         HStack(spacing: 4) {
-            // Agent Inbox：Cmd-2 快捷键保留，与原工具栏一致。
             Button(action: onOpenMissions) {
-                Image(systemName: "tray.full")
+                Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(Theme.textSecondary)
                     .frame(width: 30, height: 30)
@@ -562,8 +561,8 @@ private struct WandTopBar: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut("2", modifiers: .command)
-            .help("打开 Agent Inbox 与并行任务")
-            .accessibilityLabel("打开 Agent Inbox 与并行任务")
+            .help("打开并行任务")
+            .accessibilityLabel("打开并行任务")
 
             // 文件面板是唯一的高频全局动作，用图标明确它影响的区域。
             Button(action: onToggleFilePanel) {
