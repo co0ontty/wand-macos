@@ -1,8 +1,9 @@
 # macOS 客户端
 
-Wand 的 macOS 原生 SwiftUI 客户端。连接后默认进入原生会话列表与聊天界面，
-直连 wand 服务端 REST + WebSocket 协议；PTY 的 ANSI/TUI 终端画布由精简
-WKWebView 渲染，侧栏、会话头和输入栏保持原生，另保留完整网页版兜底入口。
+Wand 的 macOS 原生 SwiftUI 客户端。连接后进入 Codex 风格的安静三栏壳：
+左栏是「会话 / 项目」，中栏是阅读轴上的聊天或任务窗口，右栏是按需打开的
+文件 Inspector。项目 / 任务 / worktree 对齐 Orca 与 iOS/Web 工作区模型。
+PTY 的 ANSI/TUI 终端画布由精简 WKWebView 渲染，另保留完整网页版兜底入口。
 
 ## 约定
 
@@ -113,7 +114,9 @@ DMG 地址。服务端 `/api/macos-dmg-update` 暂时保留，供旧客户端和
 ```
 macos/Wand/
 ├── ContentView.swift          # 已连接进入 MainShellView，未连接进入 ConnectView
-├── MainShellView.swift        # 原生三栏主界面、会话列表、设置与网页版入口
+├── MainShellView.swift        # 原生三栏主界面：会话/项目侧栏、顶栏阅读轴
+├── WorkspaceListView.swift    # 项目树、任务、worktree 审查入口
+├── WorkspaceTaskView.swift    # 任务工作窗口与标签条
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
 ├── NewSessionView.swift       # 五个 Provider、会话类型、目录与权限模式

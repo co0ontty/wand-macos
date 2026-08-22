@@ -94,12 +94,12 @@ final class WandAPI {
     }
 
     /// 带 401 自动重登的请求入口。
-    private func requestData(method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> Data {
+    func requestData(method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> Data {
         let req = try makeRequest(method: method, path: path, body: body, timeout: timeout)
         return try await performAuthenticated(req)
     }
 
-    private func request<T: Decodable>(_ type: T.Type, method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> T {
+    func request<T: Decodable>(_ type: T.Type, method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> T {
         let data = try await requestData(method: method, path: path, body: body, timeout: timeout)
         do {
             return try JSONDecoder().decode(T.self, from: data)
@@ -108,12 +108,20 @@ final class WandAPI {
         }
     }
 
-    private func percentEncode(_ value: String) -> String {
+    func percentEncode(_ value: String) -> String {
         // 同时用于 query value 与单个 path component；只保留 RFC 3986 unreserved，
         // 避免文件名中的 &, +, ?, / 改变请求结构。
         let unreserved = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
     }
+
+    func percentEncodePathComponent(_ value: String) -> String {
+        percentEncode(value)
+    }
+
+    /// 块级窗口：带 blockBudget 时服务端只回最近这么多个内容块。
+    static let chatBlockWindow = 240
+
 
     // MARK: - 会话
 
@@ -126,7 +134,13 @@ final class WandAPI {
     }
 
     func getSession(id: String) async throws -> SessionSnapshot {
-        try await request(SessionSnapshot.self, method: "GET", path: "/api/sessions/\(id)?format=chat")
+        try await getSession(id: id, blockBudget: 0)
+    }
+
+    func getSession(id: String, blockBudget: Int) async throws -> SessionSnapshot {
+        var path = "/api/sessions/\(id)?format=chat"
+        if blockBudget > 0 { path += "&blockBudget=\(blockBudget)" }
+        return try await request(SessionSnapshot.self, method: "GET", path: path)
     }
 
     /// 历史消息分页：返回完整历史的 [offset, offset+limit) 段 + 总数。

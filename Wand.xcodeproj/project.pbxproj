@@ -36,6 +36,17 @@
 		A100000000000000000000C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* Assets.xcassets */; };
 		D4000000000000000000AC01 /* MissionsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC01 /* MissionsModels.swift */; };
 		D4000000000000000000AC02 /* MissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4000000000000000000BC02 /* MissionsView.swift */; };
+		F6000000000000000000AC01 /* SessionTimeFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC01 /* SessionTimeFormatting.swift */; };
+		F6000000000000000000AC02 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC02 /* WorkspaceModels.swift */; };
+		F6000000000000000000AC03 /* WorkspaceAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC03 /* WorkspaceAPI.swift */; };
+		F6000000000000000000AC04 /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC04 /* WorkspaceStore.swift */; };
+		F6000000000000000000AC05 /* WorkspaceLayoutReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC05 /* WorkspaceLayoutReconciler.swift */; };
+		F6000000000000000000AC06 /* WorkspaceWorktreeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC06 /* WorkspaceWorktreeModels.swift */; };
+		F6000000000000000000AC07 /* WorkspaceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC07 /* WorkspaceListView.swift */; };
+		F6000000000000000000AC08 /* WorkspaceCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC08 /* WorkspaceCreateView.swift */; };
+		F6000000000000000000AC09 /* WorkspaceTaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC09 /* WorkspaceTaskView.swift */; };
+		F6000000000000000000AC0A /* WorkspaceTargetPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC0A /* WorkspaceTargetPicker.swift */; };
+		F6000000000000000000AC0B /* WorkspaceWorktreeReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC0B /* WorkspaceWorktreeReviewView.swift */; };
 		E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B1 /* MacUpdateManagerTests.swift */; };
 		E500000000000000000000A2 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B3 /* XCTest.framework */; };
 /* End PBXBuildFile section */
@@ -83,6 +94,17 @@
 		A100000000000000000000F1 /* Wand.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Wand.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D4000000000000000000BC01 /* MissionsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsModels.swift; sourceTree = "<group>"; };
 		D4000000000000000000BC02 /* MissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MissionsView.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC01 /* SessionTimeFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTimeFormatting.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC02 /* WorkspaceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModels.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC03 /* WorkspaceAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceAPI.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC04 /* WorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStore.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC05 /* WorkspaceLayoutReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLayoutReconciler.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC06 /* WorkspaceWorktreeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceWorktreeModels.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC07 /* WorkspaceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceListView.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC08 /* WorkspaceCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCreateView.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC09 /* WorkspaceTaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTaskView.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC0A /* WorkspaceTargetPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTargetPicker.swift; sourceTree = "<group>"; };
+		F6000000000000000000BC0B /* WorkspaceWorktreeReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceWorktreeReviewView.swift; sourceTree = "<group>"; };
 		E500000000000000000000B1 /* MacUpdateManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateManagerTests.swift; sourceTree = "<group>"; };
 		E500000000000000000000B2 /* WandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E500000000000000000000B3 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
@@ -148,6 +170,17 @@
 				A200000000000000000000D6 /* UpdateInstaller.swift */,
 				D4000000000000000000BC01 /* MissionsModels.swift */,
 				D4000000000000000000BC02 /* MissionsView.swift */,
+				F6000000000000000000BC01 /* SessionTimeFormatting.swift */,
+				F6000000000000000000BC02 /* WorkspaceModels.swift */,
+				F6000000000000000000BC03 /* WorkspaceAPI.swift */,
+				F6000000000000000000BC04 /* WorkspaceStore.swift */,
+				F6000000000000000000BC05 /* WorkspaceLayoutReconciler.swift */,
+				F6000000000000000000BC06 /* WorkspaceWorktreeModels.swift */,
+				F6000000000000000000BC07 /* WorkspaceListView.swift */,
+				F6000000000000000000BC08 /* WorkspaceCreateView.swift */,
+				F6000000000000000000BC09 /* WorkspaceTaskView.swift */,
+				F6000000000000000000BC0A /* WorkspaceTargetPicker.swift */,
+				F6000000000000000000BC0B /* WorkspaceWorktreeReviewView.swift */,
 				A100000000000000000000D1 /* Assets.xcassets */,
 				A100000000000000000000E1 /* Info.plist */,
 				A100000000000000000000E2 /* Wand.entitlements */,
@@ -300,6 +333,17 @@
 				A200000000000000000000C6 /* UpdateInstaller.swift in Sources */,
 				D4000000000000000000AC01 /* MissionsModels.swift in Sources */,
 				D4000000000000000000AC02 /* MissionsView.swift in Sources */,
+				F6000000000000000000AC01 /* SessionTimeFormatting.swift in Sources */,
+				F6000000000000000000AC02 /* WorkspaceModels.swift in Sources */,
+				F6000000000000000000AC03 /* WorkspaceAPI.swift in Sources */,
+				F6000000000000000000AC04 /* WorkspaceStore.swift in Sources */,
+				F6000000000000000000AC05 /* WorkspaceLayoutReconciler.swift in Sources */,
+				F6000000000000000000AC06 /* WorkspaceWorktreeModels.swift in Sources */,
+				F6000000000000000000AC07 /* WorkspaceListView.swift in Sources */,
+				F6000000000000000000AC08 /* WorkspaceCreateView.swift in Sources */,
+				F6000000000000000000AC09 /* WorkspaceTaskView.swift in Sources */,
+				F6000000000000000000AC0A /* WorkspaceTargetPicker.swift in Sources */,
+				F6000000000000000000AC0B /* WorkspaceWorktreeReviewView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

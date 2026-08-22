@@ -37,6 +37,18 @@ struct WandApp: App {
                     NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                 }
                 .keyboardShortcut(",", modifiers: [.command, .shift])
+                Button("显示会话") {
+                    NotificationCenter.default.post(name: .wandRequestSidebarSection, object: SidebarSection.sessions)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+                Button("显示项目") {
+                    NotificationCenter.default.post(name: .wandRequestSidebarSection, object: SidebarSection.workspaces)
+                }
+                .keyboardShortcut("2", modifiers: .command)
+                Button("并行任务") {
+                    NotificationCenter.default.post(name: .wandRequestOpenMissions, object: nil)
+                }
+                .keyboardShortcut("2", modifiers: [.command, .shift])
             }
         }
     }
@@ -105,4 +117,6 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let wandRequestSwitchServer = Notification.Name("WandRequestSwitchServer")
+    static let wandRequestOpenMissions = Notification.Name("WandRequestOpenMissions")
+    static let wandRequestSidebarSection = Notification.Name("WandRequestSidebarSection")
 }

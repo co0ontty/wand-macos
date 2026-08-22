@@ -1,15 +1,17 @@
 import Combine
 import SwiftUI
 
-/// 横屏 native 应用主壳:自绘扁平顶栏 + 三栏(左会话 / 中聊天 / 右文件)。
-/// 窗口不足以同时保证聊天正文和两侧栏可读时，右栏改为临时 Inspector，
-/// 不再挤压主工作区；宽窗口才使用常驻三栏。
-///
-/// 顶栏与主壳共享的连接状态。
+/// 横屏 native 应用主壳。布局取 Codex Desktop 的安静三栏，信息架构取 Orca：
+/// 侧栏是「会话 / 项目」，工作区是一条阅读轴，右栏是按需 Inspector。
 enum ShellConnectionState {
     case connecting
     case connected
     case disconnected(String)
+}
+
+enum SidebarSection: String {
+    case sessions
+    case workspaces
 }
 
 /// 三栏宽度常量对齐 web 端 token(`.sidebar-width: 300px`, `.file-panel-width: 320px`),
@@ -26,11 +28,31 @@ struct MainShellView: View {
     @State private var selectedSessionId: String?
     @State private var selectedSessionProvider: String = "claude"
     @State private var selectedSession: SessionSnapshot?
+    @State private var selectedWorkspaceTask: WorkspaceTaskSelection?
+    @AppStorage("wand.sidebar.section") private var sidebarSectionRaw = SidebarSection.sessions.rawValue
+    @State private var sidebarQuery = ""
+    @State private var showCreateWorkspace = false
+    @State private var presentNewSession = false
     /// 连接状态(给顶栏的 connection dot 用)。
     @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
     @State private var showMissions = false
     @StateObject private var gitStatusStore = GitStatusStore()
+    @StateObject private var workspaceStore: WorkspaceStore
+
+    init(serverURL: URL, token: String?) {
+        self.serverURL = serverURL
+        self.token = token
+        _workspaceStore = StateObject(wrappedValue: WorkspaceStore(
+            api: WandAPI(baseURL: serverURL, token: token),
+            serverID: serverURL.absoluteString
+        ))
+    }
+
+    private var sidebarSection: SidebarSection {
+        get { SidebarSection(rawValue: sidebarSectionRaw) ?? .sessions }
+        nonmutating set { sidebarSectionRaw = newValue.rawValue }
+    }
 
     /// 300 会话栏 + 560 可读聊天区 + 320 Inspector + 间距与边距。
     /// 低于该值时右栏覆盖在内容之上，保持主任务宽度稳定。
@@ -105,12 +127,34 @@ struct MainShellView: View {
                 onDismiss: { showMissions = false }
             )
         }
+        .sheet(isPresented: $showCreateWorkspace) {
+            WorkspaceCreateView(api: api, store: workspaceStore) { created in
+                showCreateWorkspace = false
+                sidebarSection = .workspaces
+                Task { await workspaceStore.loadWorkspaceSessions(workspaceId: created.id) }
+            }
+        }
         .task {
             await checkConnectionAsync()
         }
         .onChange(of: selectedSessionId) { id in
             if id == nil {
                 selectedSession = nil
+            }
+        }
+        .onChange(of: workspaceStore.visibleSnapshot?.id) { _ in
+            guard sidebarSection == .workspaces,
+                  let snapshot = workspaceStore.visibleSnapshot else { return }
+            selectedSessionId = snapshot.id
+            selectedSessionProvider = snapshot.provider ?? "claude"
+            selectedSession = snapshot
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wandRequestOpenMissions)) { _ in
+            showMissions = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wandRequestSidebarSection)) { note in
+            if let section = note.object as? SidebarSection {
+                sidebarSectionBinding.wrappedValue = section
             }
         }
     }
@@ -122,6 +166,9 @@ struct MainShellView: View {
                 displayHost: displayHost,
                 showWebFallback: showWebFallback,
                 filePanelOpen: filePanelOpen,
+                workTitle: workTitle,
+                workSubtitle: workSubtitle,
+                workProvider: workProvider,
                 onToggleFilePanel: {
                     withAnimation(structuralAnimation) { filePanelOpen.toggle() }
                 },
@@ -186,6 +233,31 @@ struct MainShellView: View {
         return host
     }
 
+    private var workTitle: String? {
+        if sidebarSection == .workspaces, let selection = selectedWorkspaceTask {
+            return selection.task.name
+        }
+        return selectedSession?.displayTitle
+    }
+
+    private var workSubtitle: String? {
+        if sidebarSection == .workspaces, let selection = selectedWorkspaceTask {
+            let folder = (selection.workspace.cwd as NSString).lastPathComponent
+            return folder.isEmpty ? selection.workspace.name : "\(selection.workspace.name) · \(folder)"
+        }
+        guard let cwd = selectedSession?.cwd, !cwd.isEmpty else { return nil }
+        let name = (cwd as NSString).lastPathComponent
+        return name.isEmpty ? cwd : name
+    }
+
+    private var workProvider: String? {
+        if sidebarSection == .workspaces {
+            return workspaceStore.visibleSnapshot?.provider
+                ?? selectedWorkspaceTask?.workspace.defaultProvider?.rawValue
+        }
+        return selectedSession?.provider
+    }
+
     private var disconnectedMessage: String? {
         if case .disconnected(let message) = connectionState { return message }
         return nil
@@ -206,6 +278,8 @@ struct MainShellView: View {
     }
 
     private func openSessionFromMissions(_ sessionId: String) {
+        sidebarSection = .sessions
+        selectedWorkspaceTask = nil
         Task {
             do {
                 let session = try await api.getSession(id: sessionId)
@@ -217,6 +291,17 @@ struct MainShellView: View {
                 connectionState = .disconnected(error.localizedDescription)
             }
         }
+    }
+
+    private func presentSession(_ session: SessionSnapshot, keepWorkspaceContext: Bool = false) {
+        if !keepWorkspaceContext {
+            sidebarSection = .sessions
+            selectedWorkspaceTask = nil
+        }
+        selectedSessionId = session.id
+        selectedSessionProvider = session.provider ?? "claude"
+        selectedSession = session
+        connectionState = .connected
     }
 
     // MARK: - 状态
@@ -273,14 +358,154 @@ struct MainShellView: View {
     }
 
     private var sidebarColumn: some View {
-        SidebarColumn(
-            api: api,
-            selectedSessionId: $selectedSessionId,
-            onOpenMissions: { showMissions = true },
-            onSessionSelected: { session in
-                selectedSessionId = session.id
-                selectedSessionProvider = session.provider ?? "claude"
-                selectedSession = session
+        VStack(spacing: 0) {
+            sidebarChrome
+            if sidebarSection == .workspaces {
+                WorkspaceListView(
+                    store: workspaceStore,
+                    api: api,
+                    selectedTaskId: selectedWorkspaceTask?.task.id,
+                    query: sidebarQuery,
+                    onOpenTask: { workspace, task in
+                        selectedWorkspaceTask = WorkspaceTaskSelection(
+                            workspace: workspace,
+                            task: task
+                        )
+                    },
+                    onTaskRenamed: { updated in
+                        if var selection = selectedWorkspaceTask, selection.task.id == updated.id {
+                            selectedWorkspaceTask = WorkspaceTaskSelection(
+                                workspace: selection.workspace,
+                                task: updated
+                            )
+                        }
+                    },
+                    onTaskDeleted: { taskId in
+                        if selectedWorkspaceTask?.task.id == taskId {
+                            selectedWorkspaceTask = nil
+                        }
+                    },
+                    onOpenSession: { _, session in
+                        Task {
+                            do {
+                                let snapshot = try await api.getSession(id: session.id)
+                                presentSession(snapshot, keepWorkspaceContext: true)
+                            } catch {
+                                connectionState = .disconnected(error.localizedDescription)
+                            }
+                        }
+                    },
+                    onMergeAgentStarted: { _, started in
+                        presentSession(started, keepWorkspaceContext: true)
+                    },
+                    onWorkspaceDeleted: { workspaceId in
+                        if selectedWorkspaceTask?.workspace.id == workspaceId {
+                            selectedWorkspaceTask = nil
+                        }
+                    },
+                    onCreateWorkspace: { showCreateWorkspace = true }
+                )
+            } else {
+                SidebarColumn(
+                    api: api,
+                    selectedSessionId: $selectedSessionId,
+                    query: sidebarQuery,
+                    presentNewSession: $presentNewSession,
+                    onOpenMissions: { showMissions = true },
+                    onSessionSelected: { session in
+                        presentSession(session)
+                    }
+                )
+            }
+        }
+    }
+
+    private var sidebarChrome: some View {
+        VStack(spacing: 8) {
+            Picker("侧栏", selection: sidebarSectionBinding) {
+                Text("会话").tag(SidebarSection.sessions)
+                Text("项目").tag(SidebarSection.workspaces)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel("侧栏内容")
+
+            Button {
+                if sidebarSection == .workspaces {
+                    showCreateWorkspace = true
+                } else {
+                    presentNewSession = true
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 16)
+                    Text(sidebarSection == .workspaces ? "新建项目" : "新建会话")
+                        .font(.system(size: 13, weight: .medium))
+                    Spacer(minLength: 0)
+                }
+                .foregroundColor(Theme.textPrimary)
+                .padding(.horizontal, 8)
+                .frame(height: 30)
+                .contentShape(Rectangle())
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Theme.textPrimary.opacity(0.05))
+                )
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("n", modifiers: .command)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Theme.textMuted)
+                TextField(sidebarSection == .workspaces ? "搜索项目" : "搜索会话", text: $sidebarQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                if !sidebarQuery.isEmpty {
+                    Button {
+                        sidebarQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Theme.surface.opacity(0.9))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.8)
+            )
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+    }
+
+    private var sidebarSectionBinding: Binding<SidebarSection> {
+        Binding(
+            get: { sidebarSection },
+            set: { section in
+                sidebarSection = section
+                sidebarQuery = ""
+                if section == .sessions {
+                    selectedWorkspaceTask = nil
+                } else {
+                    selectedSessionId = nil
+                    selectedSession = nil
+                    if case .idle = workspaceStore.indexState {
+                        Task { await workspaceStore.loadWorkspaceIndex() }
+                    }
+                }
             }
         )
     }
@@ -293,16 +518,49 @@ struct MainShellView: View {
                 onRetry: checkConnection,
                 onTroubleshoot: { showTroubleshooting = true }
             )
+        } else if sidebarSection == .workspaces {
+            if let selection = selectedWorkspaceTask {
+                WorkspaceTaskView(
+                    workspace: selection.workspace,
+                    task: selection.task,
+                    api: api,
+                    store: workspaceStore,
+                    gitStatusStore: gitStatusStore
+                )
+                .id(selection.task.id)
+            } else if let sessionId = selectedSessionId {
+                MainColumn(
+                    api: api,
+                    sessionId: sessionId,
+                    provider: selectedSessionProvider,
+                    session: selectedSession,
+                    gitStatusStore: gitStatusStore,
+                    showsHeader: false
+                )
+            } else {
+                EmptyMainColumn(
+                    title: "选择一个任务",
+                    message: "项目把目录、worktree 和工作窗口收在一起。",
+                    actionTitle: "新建项目",
+                    action: { showCreateWorkspace = true }
+                )
+            }
         } else if let sessionId = selectedSessionId {
             MainColumn(
                 api: api,
                 sessionId: sessionId,
                 provider: selectedSessionProvider,
                 session: selectedSession,
-                gitStatusStore: gitStatusStore
+                gitStatusStore: gitStatusStore,
+                showsHeader: false
             )
         } else {
-            EmptyMainColumn(api: api)
+            EmptyMainColumn(
+                title: "选择会话或新建一个",
+                message: "从左侧打开最近的对话，或开始一个新的工作。",
+                actionTitle: "新建会话",
+                action: { presentNewSession = true }
+            )
         }
     }
 
@@ -378,6 +636,9 @@ private struct WandTopBar: View {
     let displayHost: String
     let showWebFallback: Bool
     let filePanelOpen: Bool
+    let workTitle: String?
+    let workSubtitle: String?
+    let workProvider: String?
     let onToggleFilePanel: () -> Void
     let onOpenSettings: () -> Void
     let onOpenWebFallback: () -> Void
@@ -454,11 +715,12 @@ private struct WandTopBar: View {
                     .fill(Color(nsColor: Theme.borderSubtle))
                     .frame(width: 0.5)
 
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
+                HStack(spacing: 10) {
+                    workIdentity
+                    Spacer(minLength: 8)
                     rightActions
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.workspaceBackground)
             }
@@ -469,6 +731,33 @@ private struct WandTopBar: View {
             Rectangle()
                 .fill(Color(nsColor: Theme.borderSubtle))
                 .frame(height: 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private var workIdentity: some View {
+        if let workTitle, !workTitle.isEmpty {
+            HStack(spacing: 8) {
+                if let workProvider {
+                    BrandLogoShape(provider: workProvider)
+                        .fill(Theme.providerColor(workProvider))
+                        .frame(width: 13, height: 13)
+                }
+                Text(workTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let workSubtitle, !workSubtitle.isEmpty {
+                    Text(workSubtitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(workSubtitle.map { "\(workTitle)，\($0)" } ?? workTitle)
         }
     }
 
@@ -615,37 +904,6 @@ private struct ConnectionFailureView: View {
 
 // MARK: - 侧栏容器
 
-private struct SidebarActionRow: View {
-    let title: String
-    let systemImage: String
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 17)
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                Spacer(minLength: 0)
-            }
-            .foregroundColor(Theme.textPrimary)
-            .padding(.horizontal, 8)
-            .frame(height: 32)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(hovering ? Theme.textPrimary.opacity(0.05) : .clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-    }
-}
-
 struct SidebarColumn: View {
     private enum SidebarViewMode: String {
         case sessions
@@ -736,6 +994,8 @@ struct SidebarColumn: View {
 
     let api: WandAPI
     @Binding var selectedSessionId: String?
+    var query: String = ""
+    @Binding var presentNewSession: Bool
     let onOpenMissions: () -> Void
     let onSessionSelected: (SessionSnapshot) -> Void
 
@@ -758,15 +1018,18 @@ struct SidebarColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            quickActions
-            Rectangle()
-                .fill(Color(nsColor: Theme.borderSubtle))
-                .frame(height: 0.5)
             header
             list
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color.clear)
+        .onChange(of: presentNewSession) { requested in
+            if requested {
+                newSessionInitialCwd = nil
+                showNewSession = true
+                presentNewSession = false
+            }
+        }
         .sheet(isPresented: $showNewSession, onDismiss: {
             newSessionInitialCwd = nil
         }) {
@@ -823,23 +1086,6 @@ struct SidebarColumn: View {
     }
 
     // MARK: - 头部
-
-    private var quickActions: some View {
-        VStack(spacing: 2) {
-            SidebarActionRow(title: "新建会话", systemImage: "square.and.pencil") {
-                newSessionInitialCwd = nil
-                showNewSession = true
-            }
-            .keyboardShortcut("n", modifiers: .command)
-            SidebarActionRow(title: "并行任务", systemImage: "square.stack.3d.up") {
-                onOpenMissions()
-            }
-            .keyboardShortcut("2", modifiers: .command)
-        }
-        .padding(.horizontal, 8)
-        .padding(.top, 7)
-        .padding(.bottom, 8)
-    }
 
     private var sidebarViewMode: SidebarViewMode {
         get { SidebarViewMode(rawValue: sidebarViewModeRaw) ?? .sessions }
@@ -909,6 +1155,11 @@ struct SidebarColumn: View {
                             isSelecting = true
                         } label: {
                             Label("选择多个会话", systemImage: "checkmark.circle")
+                        }
+                        Button {
+                            onOpenMissions()
+                        } label: {
+                            Label("并行任务", systemImage: "square.stack.3d.up")
                         }
                     }
                 } label: {
@@ -1134,8 +1385,21 @@ struct SidebarColumn: View {
     }
 
     private var listEntries: [ListEntry] {
-        (visibleSessions.map(ListEntry.session) + recoverableSessions.map(ListEntry.recoverable))
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let entries = (visibleSessions.map(ListEntry.session) + recoverableSessions.map(ListEntry.recoverable))
             .sorted { $0.sortTimestamp > $1.sortTimestamp }
+        guard !needle.isEmpty else { return entries }
+        return entries.filter { entry in
+            switch entry {
+            case .session(let session):
+                return session.displayTitle.lowercased().contains(needle)
+                    || (session.cwd?.lowercased().contains(needle) ?? false)
+                    || (session.provider?.lowercased().contains(needle) ?? false)
+            case .recoverable(let history):
+                return history.firstUserMessage.lowercased().contains(needle)
+                    || history.cwd.lowercased().contains(needle)
+            }
+        }
     }
 
     @discardableResult
@@ -1525,8 +1789,14 @@ struct SessionTile: View {
         session.displayTitle
     }
 
+    private var folderName: String? {
+        guard let cwd = session.cwd, !cwd.isEmpty else { return nil }
+        let name = (cwd as NSString).lastPathComponent
+        return name.isEmpty ? cwd : name
+    }
+
     private var subtitle: String {
-        if let cwd = session.cwd, !cwd.isEmpty { return cwd }
+        if let folderName { return folderName }
         switch provider {
         case "codex": return "Codex"
         case "grok": return "Grok"
@@ -1579,13 +1849,16 @@ struct SessionTile: View {
                     if !prominentStatus && recentTime.isEmpty {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                     }
-                    if let cwd = session.cwd, !cwd.isEmpty {
+                    if let folderName {
                         if prominentStatus || !recentTime.isEmpty {
                             Text("·")
                                 .foregroundColor(Theme.textMuted.opacity(0.7))
                         }
-                        WandPathText(path: cwd, fontSize: 9.5, color: Theme.textMuted)
-                            .frame(maxWidth: .infinity)
+                        Text(folderName)
+                            .font(.system(size: 9.5))
+                            .foregroundColor(Theme.textMuted)
+                            .lineLimit(1)
+                            .help(session.cwd ?? folderName)
                     } else {
                         Text(status)
                             .font(.system(size: 10.5, weight: .medium))
@@ -1655,17 +1928,30 @@ struct HistoryTile: View {
 // MARK: - 中栏空态 + 中栏容器
 
 struct EmptyMainColumn: View {
-    let api: WandAPI
+    var title: String = "选择会话或新建一个"
+    var message: String = "从左侧打开最近的对话，或开始一个新的工作。"
+    var actionTitle: String = "新建会话"
+    var action: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: 9) {
+        VStack(spacing: 10) {
             Image(systemName: "wand.and.stars")
                 .font(.system(size: 22, weight: .regular))
                 .foregroundColor(Theme.textSecondary)
-                .frame(width: 32, height: 32)
-            Text("选择会话或新建一个")
-                .font(.system(size: 14, weight: .medium))
+                .frame(width: 36, height: 36)
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+            if let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(WandPrimaryButtonStyle())
+                    .padding(.top, 6)
+            }
         }
         .padding(.bottom, 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1678,17 +1964,20 @@ struct MainColumn: View {
     let provider: String
     let session: SessionSnapshot?
     @ObservedObject var gitStatusStore: GitStatusStore
+    var showsHeader: Bool = true
 
     var body: some View {
         if session?.isStructured == false {
             // PTY 保留 Web 终端渲染器的键盘、光标和 ANSI/TUI 语义，
-            // 但只嵌入终端工作区；侧栏和会话头继续由原生主壳呈现。
+            // 但只嵌入终端工作区；标题已上收到自绘顶栏。
             VStack(spacing: 0) {
-                SessionHeaderView(
-                    provider: provider,
-                    title: session?.displayTitle,
-                    workingDirectory: session?.cwd
-                )
+                if showsHeader {
+                    SessionHeaderView(
+                        provider: provider,
+                        title: session?.displayTitle,
+                        workingDirectory: session?.cwd
+                    )
+                }
                 PtySessionView(sessionId: sessionId, api: api)
                 .id(sessionId)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1696,11 +1985,13 @@ struct MainColumn: View {
         } else {
             // 结构化会话继续使用原生消息与输入体验。
             VStack(spacing: 0) {
-                SessionHeaderView(
-                    provider: provider,
-                    title: session?.displayTitle,
-                    workingDirectory: session?.cwd
-                )
+                if showsHeader {
+                    SessionHeaderView(
+                        provider: provider,
+                        title: session?.displayTitle,
+                        workingDirectory: session?.cwd
+                    )
+                }
                 // 必须按 sessionId 绑定身份:MainShellView 在 if let selectedSessionId 分支内
                 // 复用 MainColumn 节点,只换参数。SwiftUI 默认保留子视图的 @StateObject,
                 // 切换会话时 ChatStore 仍指向上一个会话(socket 不重连、快照不重拉),

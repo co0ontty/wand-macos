@@ -70,6 +70,51 @@ enum JSONValue: Decodable {
     }
 }
 
+// MARK: - Provider
+
+/// Wand 支持的 CLI provider。工作区 / 任务窗口与 iOS 共用同一套归一规则。
+enum WandProvider: String, CaseIterable, Identifiable, Codable {
+    case claude
+    case codex
+    case opencode
+    case grok
+    case qoder
+    case pi
+
+    var id: String { rawValue }
+
+    init(normalizing value: String?) {
+        let raw = value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        switch raw {
+        case Self.codex.rawValue:
+            self = .codex
+        case Self.opencode.rawValue, "open-code", "open_code":
+            self = .opencode
+        case Self.grok.rawValue:
+            self = .grok
+        case Self.qoder.rawValue, "qodercli":
+            self = .qoder
+        case Self.pi.rawValue, "pi-cli", "pi-cli-json":
+            self = .pi
+        default:
+            self = .claude
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .opencode: return "OpenCode"
+        case .grok: return "Grok"
+        case .qoder: return "Qoder"
+        case .pi: return "Pi"
+        }
+    }
+}
+
 // MARK: - 特殊工具卡片的 input 模型
 
 /// AskUserQuestion 的一道题（tool_use input.questions[i]），字段对齐 Web 端 chat-render.ts。
@@ -378,6 +423,13 @@ struct SessionSnapshot: Decodable, Identifiable {
         case "pi": return "Pi"
         default: return "Claude"
         }
+    }
+
+    /// 工作区摘要与任务窗口共用：摘要 > 当前任务。
+    var title: String? {
+        if let summary, !summary.isEmpty { return summary }
+        if let currentTaskTitle, !currentTaskTitle.isEmpty { return currentTaskTitle }
+        return nil
     }
 
     /// 列表标题：摘要 > 当前任务 > cwd 末段。

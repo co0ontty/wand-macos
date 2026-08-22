@@ -6,6 +6,25 @@ import SwiftUI
 // 填充色由调用方 .fill(color) 决定。
 // 用法：BrandLogoShape(provider: session.provider).fill(tint).frame(width: 21, height: 21)
 
+/// 工作区 / 任务窗口使用的着色 logo。终端窗口没有品牌标，回落到系统终端图标。
+struct BrandLogo: View {
+    let provider: String?
+    let color: Color
+
+    var body: some View {
+        let normalized = provider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == nil || normalized == "terminal" || normalized == "shell" {
+            Image(systemName: "terminal")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .foregroundColor(color)
+        } else {
+            BrandLogoShape(provider: provider)
+                .fill(color)
+        }
+    }
+}
+
 /// 按 provider 渲染品牌 logo；OpenCode / Qoder 用清晰的产品字形，避免回落为 Claude 标记。
 struct BrandLogoShape: Shape {
     let provider: String?
