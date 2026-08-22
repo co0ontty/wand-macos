@@ -395,6 +395,11 @@ struct SessionSnapshot: Decodable, Identifiable {
     let startedAt: String?
     let endedAt: String?
     let archived: Bool?
+    let title: String?
+    let description: String?
+    let titleGenerating: Bool?
+    let workspaceId: String?
+    let workspaceTaskId: String?
     let summary: String?
     let currentTaskTitle: String?
     let selectedModel: String?
@@ -425,15 +430,9 @@ struct SessionSnapshot: Decodable, Identifiable {
         }
     }
 
-    /// 工作区摘要与任务窗口共用：摘要 > 当前任务。
-    var title: String? {
-        if let summary, !summary.isEmpty { return summary }
-        if let currentTaskTitle, !currentTaskTitle.isEmpty { return currentTaskTitle }
-        return nil
-    }
-
-    /// 列表标题：摘要 > 当前任务 > cwd 末段。
+    /// 列表标题：服务端 title > 摘要 > 当前任务 > cwd 末段。
     var displayTitle: String {
+        if let s = title, !s.isEmpty { return s }
         if let s = summary, !s.isEmpty { return s }
         if let t = currentTaskTitle, !t.isEmpty { return t }
         if let c = cwd, !c.isEmpty {
@@ -507,6 +506,13 @@ struct SessionDirectoryTreeResponse: Decodable {
     let revision: String
 }
 
+/// `GET /api/session-list` 的轻量探测：空闲轮询只关心 revision 是否变化。
+struct SessionListProbe: Decodable {
+    let unchanged: Bool?
+    let revision: String
+    let total: Int
+}
+
 // MARK: - WebSocket 消息
 
 /// /ws 推送的统一包络。data 的形状随 type 不同，这里用「超集 struct」承接：
@@ -536,6 +542,10 @@ struct WsData: Decodable {
     let startedAt: String?
     let endedAt: String?
     let archived: Bool?
+    let description: String?
+    let titleGenerating: Bool?
+    let workspaceId: String?
+    let workspaceTaskId: String?
     let summary: String?
     let currentTaskTitle: String?
     let selectedModel: String?

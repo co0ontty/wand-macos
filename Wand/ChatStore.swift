@@ -134,6 +134,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func apply(snapshot snap: SessionSnapshot) {
+        let previousError = snapshot?.structuredState?.lastError
         self.snapshot = snap
         applyWindowedMessages(snap.messages, offset: snap.messageOffset, total: snap.messageTotal)
         status = snap.status ?? status
@@ -145,6 +146,10 @@ final class ChatStore: ObservableObject {
         selectedModel = snap.selectedModel
         thinkingEffort = snap.thinkingEffort ?? "off"
         if snap.pendingEscalation != nil { legacyPermissionPrompt = nil }
+        if let error = snap.structuredState?.lastError?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !error.isEmpty, error != previousError {
+            toast = error
+        }
     }
 
     private func handle(_ event: WsIncoming) {
@@ -189,6 +194,8 @@ final class ChatStore: ObservableObject {
                 runner: data.runner, command: data.command, cwd: data.cwd,
                 mode: data.mode, status: data.status, exitCode: data.exitCode,
                 startedAt: data.startedAt, endedAt: data.endedAt, archived: data.archived,
+                title: data.title, description: data.description, titleGenerating: data.titleGenerating,
+                workspaceId: data.workspaceId, workspaceTaskId: data.workspaceTaskId,
                 summary: data.summary, currentTaskTitle: data.currentTaskTitle,
                 selectedModel: data.selectedModel, thinkingEffort: data.thinkingEffort,
                 claudeSessionId: data.claudeSessionId,
@@ -276,9 +283,10 @@ final class ChatStore: ObservableObject {
         Task {
             do {
                 if isStructured {
-                    try await api.sendInput(id: sessionId, input: trimmed)
+                    try await api.sendInput(id: sessionId, input: trimmed, respondImmediately: true)
+                    socket.requestResync()
                 } else {
-                    try await api.sendInput(id: sessionId, input: trimmed + "\n", view: "chat")
+                    try await sendPtyChatInput(trimmed)
                 }
             } catch {
                 toast = error.localizedDescription
@@ -297,6 +305,14 @@ final class ChatStore: ObservableObject {
     /// 原生 PTY composer 与网页终端保持同一提交协议：正文与 Return 分成两个
     /// chunk，间隔一帧发送，避免 CLI 的 bracketed-paste 检测把末尾回车吞掉。
     func sendPtyTerminalInput(_ text: String) async throws {
+        try await sendPtyInput(text, view: "terminal")
+    }
+
+    private func sendPtyChatInput(_ text: String) async throws {
+        try await sendPtyInput(text, view: "chat")
+    }
+
+    private func sendPtyInput(_ text: String, view: String) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if status != "running" {
@@ -305,20 +321,14 @@ final class ChatStore: ObservableObject {
             apply(snapshot: resumed)
             socket.requestResync()
         }
-        let textSnapshot = try await api.sendInput(
-            id: sessionId,
-            input: trimmed,
-            view: "terminal"
-        )
-        apply(snapshot: textSnapshot)
+        try await api.sendPtyInputChunk(id: sessionId, input: trimmed, view: view)
         try await Task.sleep(nanoseconds: 30_000_000)
-        let enterSnapshot = try await api.sendInput(
+        try await api.sendPtyInputChunk(
             id: sessionId,
             input: "\r",
-            view: "terminal",
+            view: view,
             shortcutKey: "enter_text"
         )
-        apply(snapshot: enterSnapshot)
     }
 
     func setModel(_ model: String?) {
@@ -390,9 +400,10 @@ final class ChatStore: ObservableObject {
         Task {
             do {
                 if isStructured {
-                    try await api.sendInput(id: sessionId, input: answerText)
+                    try await api.sendInput(id: sessionId, input: answerText, respondImmediately: true)
+                    socket.requestResync()
                 } else {
-                    try await api.sendInput(id: sessionId, input: answerText + "\n", view: "chat")
+                    try await sendPtyChatInput(answerText)
                 }
             } catch {
                 toast = error.localizedDescription
@@ -476,8 +487,13 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// 权限决策。结构化 escalation 走 resolve 端点；PTY 旧式提示走 approve/deny。
+    /// 权限决策。结构化会话没有运行时批准条；PTY 走 approve/deny。
     func resolvePermission(_ resolution: String) {
+        if isStructured {
+            pendingEscalation = nil
+            permissionBlocked = false
+            return
+        }
         if let esc = pendingEscalation {
             pendingEscalation = nil
             permissionBlocked = false

@@ -129,6 +129,15 @@ final class WandAPI {
         try await request([SessionSnapshot].self, method: "GET", path: "/api/sessions")
     }
 
+    /// 列表 revision 探测：`offset=0` 且 revision 未变时服务端回 `{unchanged:true}`。
+    func probeSessionList(revision: String?) async throws -> SessionListProbe {
+        var path = "/api/session-list?offset=0&limit=1"
+        if let revision, !revision.isEmpty {
+            path += "&revision=\(percentEncode(revision))"
+        }
+        return try await request(SessionListProbe.self, method: "GET", path: path)
+    }
+
     func sessionDirectories() async throws -> SessionDirectoryTreeResponse {
         try await request(SessionDirectoryTreeResponse.self, method: "GET", path: "/api/session-directories")
     }
@@ -243,11 +252,33 @@ final class WandAPI {
     }
 
     @discardableResult
-    func sendInput(id: String, input: String, view: String? = nil, shortcutKey: String? = nil) async throws -> SessionSnapshot {
+    func sendInput(
+        id: String,
+        input: String,
+        view: String? = nil,
+        shortcutKey: String? = nil,
+        respondImmediately: Bool = false
+    ) async throws -> SessionSnapshot {
         var body: [String: Any] = ["input": input]
         if let view { body["view"] = view }
         if let shortcutKey { body["shortcutKey"] = shortcutKey }
+        if respondImmediately { body["respondImmediately"] = true }
         return try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions/\(id)/input", body: body)
+    }
+
+    func sendPtyInputChunk(
+        id: String,
+        input: String,
+        view: String,
+        shortcutKey: String? = nil
+    ) async throws {
+        var body: [String: Any] = [
+            "input": input,
+            "view": view,
+            "responseMode": "accepted",
+        ]
+        if let shortcutKey { body["shortcutKey"] = shortcutKey }
+        _ = try await requestData(method: "POST", path: "/api/sessions/\(id)/input", body: body)
     }
 
     /// 由服务端按 index 摘掉队列项并立即发送，避免客户端与自动 flush 重复发送。

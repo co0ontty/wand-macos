@@ -1014,6 +1014,7 @@ struct SidebarColumn: View {
     @State private var pendingDeletion: PendingDeletion?
     @State private var deleteInProgress = false
     @State private var deletionError: String?
+    @State private var sessionListRevision = ""
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -1406,6 +1407,14 @@ struct SidebarColumn: View {
     private func load(silent: Bool = false) async -> Bool {
         if !silent { loading = true }
         do {
+            let probe = try await api.probeSessionList(
+                revision: sessionListRevision.isEmpty ? nil : sessionListRevision
+            )
+            if silent, probe.unchanged == true {
+                loading = false
+                return true
+            }
+            sessionListRevision = probe.revision
             async let directoryRequest = try? api.sessionDirectories()
             let s = try await api.listSessions()
             sessions = s
