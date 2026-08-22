@@ -14,6 +14,8 @@ struct WandApp: App {
         WindowGroup("Wand") {
             ContentView()
                 .environmentObject(store)
+                // 隐藏原生标题栏：自绘 WandTopBar 铺到窗口上沿，红绿灯浮在顶栏左侧。
+                .extendContentUnderTitleBar()
                 .frame(
                     // 横屏布局:ideal 1440 × 880,最小 900 × 600;
                     // maxWidth / maxHeight 显式设 .infinity 让窗口可自由拖大/缩。

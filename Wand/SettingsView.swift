@@ -61,7 +61,6 @@ struct SettingsView: View {
 
     private var settingsHeader: some View {
         HStack(spacing: 12) {
-            WandBrandMark(size: 38)
             VStack(alignment: .leading, spacing: 2) {
                 Text("系统设置")
                     .font(.system(size: 17, weight: .semibold))
@@ -74,9 +73,6 @@ struct SettingsView: View {
             Text(appVersion)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(Theme.textSecondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(Theme.surface.opacity(0.75)))
             Button("完成") { dismiss() }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.brand)
@@ -93,17 +89,23 @@ struct SettingsView: View {
                 Button {
                     selectedPane = pane
                 } label: {
-                    Label(pane.title, systemImage: pane.systemImage)
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 9) {
+                        Image(systemName: pane.systemImage)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(selectedPane == pane ? Theme.textPrimary : Theme.textSecondary)
+                            .frame(width: 16)
+                        Text(pane.title)
+                            .font(.system(size: 13, weight: .medium))
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(selectedPane == pane ? Theme.textPrimary : Theme.textSecondary)
                 .padding(.vertical, 4)
                 .listRowBackground(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(selectedPane == pane ? Theme.wandAccent.opacity(0.12) : Color.clear)
+                        .fill(selectedPane == pane ? Theme.textPrimary.opacity(0.065) : Color.clear)
                 )
             }
         }
@@ -114,7 +116,6 @@ struct SettingsView: View {
     private var detailPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                settingsOverview
                 detailHeader
                 switch selectedPane {
                 case .connection:
@@ -144,39 +145,6 @@ struct SettingsView: View {
                 .font(.system(size: 13))
                 .foregroundColor(Theme.textSecondary)
         }
-    }
-
-    /// 与 Android 的 SettingsOverview 对齐：任何设置子页都先能判断这台设备的状态。
-    private var settingsOverview: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "desktopcomputer")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(Theme.brand)
-                .frame(width: 36, height: 36)
-                .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.brand.opacity(0.13)))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("此 Mac 上的 Wand")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Text(serverURL.host ?? serverURL.absoluteString)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(Theme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 10)
-            settingsStatePill(token?.isEmpty == false ? "已安全连接" : "已连接", color: Theme.success)
-            settingsStatePill("macOS", color: Theme.brand)
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                .fill(Theme.surfaceElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                        .stroke(Theme.border.opacity(0.72), lineWidth: 0.75)
-                )
-        )
     }
 
     private var connectionContent: some View {
@@ -437,19 +405,6 @@ struct SettingsView: View {
                         .stroke(Theme.border.opacity(0.72), lineWidth: 0.75)
                 )
         )
-    }
-
-    private func settingsStatePill(_ label: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label).lineLimit(1)
-        }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundColor(Theme.textPrimary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Capsule().fill(color.opacity(0.10)))
-        .overlay(Capsule().stroke(color.opacity(0.18), lineWidth: 0.6))
     }
 
     private var appVersion: String {

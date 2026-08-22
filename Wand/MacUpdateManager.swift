@@ -519,6 +519,7 @@ final class MacUpdateManager: ObservableObject {
     private func restorePersistedState() {
         if let resultMessage = consumeUpdateResultMarker() {
             clearPendingInstall()
+            sweepOrphanedStaging(keepingStagedAppPath: nil)
             state = .failed(message: resultMessage, update: cachedUpdate(for: channel))
             return
         }
@@ -529,13 +530,49 @@ final class MacUpdateManager: ObservableObject {
                age < Self.pendingInstallLifetime,
                fileManager.fileExists(atPath: pending.stagedAppPath),
                Self.compareInstallOrder(pending.version, currentVersionProvider()) >= 0 {
+                sweepOrphanedStaging(keepingStagedAppPath: pending.stagedAppPath)
                 state = .readyToRelaunch(pending)
                 return
             }
             discardStagingDirectory(for: pending.stagedAppPath)
             clearPendingInstall()
         }
+        sweepOrphanedStaging(keepingStagedAppPath: nil)
         restoreAvailability(for: channel)
+    }
+
+    /// 下载/解压中途进程被杀（强退、断电、崩溃）会留下没有任何 pending 记录指向的
+    /// `staging-*` 目录——里面是整个待安装 .app 副本，上百 MB，且永远不会被安装
+    /// 脚本的 cleanup() 触及。启动恢复状态时扫一遍 Updates 目录，只保留正在生效
+    /// 的 pending staging，其余孤儿全部删除（与安卓端 APK 启动清扫同一类修复）。
+    private func sweepOrphanedStaging(keepingStagedAppPath stagedAppPath: String?) {
+        Self.sweepOrphanedStagingDirectories(
+            in: Self.updatesDirectory(fileManager: fileManager),
+            keepingStagedAppPath: stagedAppPath,
+            fileManager: fileManager
+        )
+    }
+
+    /// 独立成 static 以便单测注入临时目录；只会碰 Updates 下自己创建的 staging-* 目录。
+    static func sweepOrphanedStagingDirectories(
+        in updatesDirectory: URL,
+        keepingStagedAppPath stagedAppPath: String?,
+        fileManager: FileManager = .default
+    ) {
+        let keep = stagedAppPath.map {
+            URL(fileURLWithPath: $0).standardizedFileURL.deletingLastPathComponent()
+        }
+        let entries = (try? fileManager.contentsOfDirectory(
+            at: updatesDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for entry in entries {
+            guard entry.hasDirectoryPath,
+                  entry.lastPathComponent.hasPrefix("staging-"),
+                  entry.standardizedFileURL != keep else { continue }
+            try? fileManager.removeItem(at: entry)
+        }
     }
 
     private func restoreAvailability(for channel: Channel) {

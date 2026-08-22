@@ -1,12 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// 品牌色与复用样式,对齐 web 端的 :root token(暖米色背景 + 暖珊瑚 accent)。
-/// 颜色随系统明暗自适应；面板/卡片走扁平实色 surface + 暖色细描边的简约风格,
-/// 不再使用系统 Liquid Glass / 毛玻璃 material,保证各 macOS 版本外观一致。
-///
-/// 暖米色背景取 web 端 --bg-primary #F6F1E8,品牌主色取 web 端 --accent #C5653D。
-/// 旧 `Theme.brand`(#D97757, iOS / macOS 沿用)保留做兼容 — 引用方暂未迁移过来之前不破坏。
+/// macOS 客户端的视觉 token。
+/// 主壳参考 Codex Desktop：中性灰侧栏、近白工作区、极细分隔线，品牌色只用于
+/// 关键动作和状态，不再用大面积暖色卡片包裹结构区域。
 enum Theme {
     private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> NSColor {
         NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
@@ -78,33 +75,44 @@ enum Theme {
 
     // MARK: - 背景层(对齐 web --bg-*)
 
-    /// 主背景:对齐 web --bg-primary 暖米色。暗色下走 web 没明确的暗色(纯 web 是亮色),
-    /// 这里在暗色下用暖灰底,保留品牌识别。
+    /// 窗口底色。结构层保持中性，避免与代码、终端和 diff 内容争抢注意力。
     static let background = dynamic(
-        light: rgb(0.961, 0.953, 0.933),  // #F5F3EE
-        dark: rgb(0.075, 0.067, 0.059)    // #13110F
+        light: rgb(0.953, 0.953, 0.949),  // #F3F3F2
+        dark: rgb(0.090, 0.090, 0.086)    // #171716
     )
 
-    /// 二级背景,顶栏 / 侧栏 / 输入栏胶囊(对齐 web --bg-secondary)。
+    /// Codex 风格的结构侧栏，比正文区域略深一档。
+    static let sidebarBackground = dynamic(
+        light: rgb(0.941, 0.941, 0.937),  // #F0F0EF
+        dark: rgb(0.118, 0.118, 0.114)    // #1E1E1D
+    )
+
+    /// 聊天、终端和空状态所在的主工作区。
+    static let workspaceBackground = dynamic(
+        light: rgb(0.992, 0.992, 0.988),  // #FDFDFC
+        dark: rgb(0.075, 0.075, 0.073)    // #131312
+    )
+
+    /// 二级背景：输入栏、静态控件和轻量卡片。
     static let surface = dynamic(
-        light: rgbA(1.0, 0.992, 0.976, 0.86),      // #FFFDF9
-        dark: rgbA(0.129, 0.118, 0.102, 0.86)      // #211E1A
+        light: rgbA(0.976, 0.976, 0.973, 0.94),
+        dark: rgbA(0.145, 0.145, 0.141, 0.94)
     )
 
-    /// 浮起层背景(对齐 web --bg-elevated)。
+    /// 浮起层背景。
     static let surfaceElevated = dynamic(
-        light: rgb(0.988, 0.980, 0.965),  // #FCFAF6
-        dark: rgb(0.114, 0.102, 0.090)    // #1D1A17
+        light: rgb(1.0, 1.0, 0.996),
+        dark: rgb(0.137, 0.137, 0.133)
     )
 
     // MARK: - 边框(对齐 web --border-*)
 
-    static let borderSubtle = rgbA(0.424, 0.345, 0.282, 0.10)
-    static let borderDefault = rgbA(0.424, 0.345, 0.282, 0.18)
+    static let borderSubtle = rgbA(0.0, 0.0, 0.0, 0.075)
+    static let borderDefault = rgbA(0.0, 0.0, 0.0, 0.12)
     static let border = dynamic(
-        light: rgb(0.851, 0.824, 0.788),
-        dark: rgb(0.239, 0.216, 0.188)
-    ) // #D9D2C9 / #3D3730
+        light: rgb(0.855, 0.855, 0.843),
+        dark: rgb(0.235, 0.235, 0.224)
+    )
     static let borderFocus = rgbA(0.773, 0.396, 0.239, 0.50)    // rgba(197,101,61,0.5)
     /// 玻璃表面的受光边缘。只用于结构性面板，避免每个控件都抢视觉注意力。
     static let glassHighlight = dynamic(
@@ -115,20 +123,20 @@ enum Theme {
     // MARK: - 文本(对齐 web --text-*)
 
     static let textPrimary = dynamic(
-        light: rgb(0.157, 0.137, 0.122),   // #28231F
-        dark: rgb(0.953, 0.933, 0.906)     // #F3EEE7
+        light: rgb(0.125, 0.125, 0.118),
+        dark: rgb(0.941, 0.941, 0.925)
     )
     static let textSecondary = dynamic(
-        light: rgb(0.384, 0.353, 0.325),   // #625A53
-        dark: rgb(0.780, 0.745, 0.706)     // #C7BEB4
+        light: rgb(0.365, 0.365, 0.349),
+        dark: rgb(0.745, 0.745, 0.722)
     )
     static let textTertiary = dynamic(
-        light: rgb(0.478, 0.443, 0.408),
-        dark: rgb(0.659, 0.620, 0.580)
+        light: rgb(0.455, 0.455, 0.435),
+        dark: rgb(0.635, 0.635, 0.608)
     )
     static let textMuted = dynamic(
-        light: rgb(0.545, 0.510, 0.475),   // #8B8279
-        dark: rgb(0.584, 0.545, 0.506)     // #958B81
+        light: rgb(0.545, 0.545, 0.522),
+        dark: rgb(0.565, 0.565, 0.537)
     )
     // MARK: - 语义色(对齐 web --success/--warning/--danger/--info)
 
@@ -143,8 +151,8 @@ enum Theme {
     // MARK: - 圆角(对齐 web --radius-*)
 
     enum Radius {
-        static let md: CGFloat = 14
-        static let lg: CGFloat = 20
+        static let md: CGFloat = 10
+        static let lg: CGFloat = 12
     }
 
     // MARK: - 阴影(对齐 web --shadow-*,暖色调)
@@ -198,7 +206,7 @@ enum Theme {
 
     /// WKWebView overscroll 区域底色,避免加载前/回弹时露出白底。
     static var nsBackground: NSColor {
-        dynamicNS(light: rgb(0.961, 0.953, 0.933), dark: rgb(0.075, 0.067, 0.059))
+        dynamicNS(light: rgb(0.992, 0.992, 0.988), dark: rgb(0.075, 0.075, 0.073))
     }
 
     // MARK: - 渐变背景(对齐 web body 径向渐变)
@@ -245,43 +253,9 @@ extension View {
 
 struct WandAmbientBackground: View {
     var body: some View {
-        GeometryReader { proxy in
-            let canvas = max(proxy.size.width, proxy.size.height)
-            ZStack {
-                Theme.background
-                // 极淡的环境光给扁平实色面板留一丝暖色基调，不做环境呼吸动画：
-                // 这块背景会始终存在于高频生产力界面中，安静比显眼更重要。
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Theme.wandAccent.opacity(0.06), Theme.wandAccent.opacity(0)],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: canvas * 0.48
-                        )
-                    )
-                    .frame(width: canvas * 1.18, height: canvas * 1.18)
-                    .offset(x: -proxy.size.width * 0.37, y: -proxy.size.height * 0.46)
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Theme.codex.opacity(0.04), Theme.codex.opacity(0)],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: canvas * 0.37
-                        )
-                    )
-                    .frame(width: canvas * 0.90, height: canvas * 0.90)
-                    .offset(x: proxy.size.width * 0.43, y: -proxy.size.height * 0.12)
-                LinearGradient(
-                    colors: [Color.white.opacity(0.04), .clear, Color.black.opacity(0.018)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
+        Theme.workspaceBackground
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
     }
 }
 
@@ -315,17 +289,19 @@ private struct WandGlassModifier: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: kind.cornerRadius, style: .continuous)
         let highContrast = contrast == .increased
 
-        // 扁平实色表面：chrome 顶栏完全不透明，panel 接近不透明；统一暖色细描边。
-        // 高对比度下描边加粗；reduceTransparency 与普通路径一致(本就是实色)。
-        let fillOpacity: Double = kind == .chrome ? 1.0 : 0.92
-        content
-            .background(shape.fill(Theme.surfaceElevated.opacity(fillOpacity)))
-            .overlay(
-                shape.stroke(
-                    Theme.border,
-                    lineWidth: highContrast ? 1.5 : 0.8
+        if kind == .chrome {
+            // 工具栏与标题栏保持平面，只由相邻内容自己的细分隔线建立层级。
+            content.background(Theme.workspaceBackground)
+        } else {
+            content
+                .background(shape.fill(Theme.surfaceElevated.opacity(0.92)))
+                .overlay(
+                    shape.stroke(
+                        Theme.border,
+                        lineWidth: highContrast ? 1.5 : 0.8
+                    )
                 )
-            )
+        }
     }
 }
 
@@ -339,8 +315,7 @@ private struct WandGlassCardModifier: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let highContrast = contrast == .increased
 
-        // 扁平卡片：实色 elevated 表面 + 暖色细描边 + 极轻阴影表达浮起,
-        // 不再使用 thin material / glassEffect。
+        // 内容卡片与工作区同处一个平面，只用实色和细描边分组。
         content
             .background(shape.fill(Theme.surfaceElevated))
             .overlay(
@@ -349,7 +324,6 @@ private struct WandGlassCardModifier: ViewModifier {
                     lineWidth: highContrast ? 1.5 : 0.8
                 )
             )
-            .shadow(color: Theme.ShadowToken.md.color.opacity(0.5), radius: 8, y: 3)
     }
 }
 
@@ -367,8 +341,8 @@ private struct WandSelectionSurfaceModifier: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let highContrast = contrast == .increased
         let fill: Color = {
-            if isSelected { return Theme.wandAccent.opacity(highContrast ? 0.20 : 0.13) }
-            if isHovered { return Theme.surfaceElevated.opacity(reduceTransparency ? 1 : 0.76) }
+            if isSelected { return Theme.textPrimary.opacity(highContrast ? 0.15 : 0.075) }
+            if isHovered { return Theme.textPrimary.opacity(0.045) }
             return .clear
         }()
 
@@ -376,16 +350,11 @@ private struct WandSelectionSurfaceModifier: ViewModifier {
             .background(shape.fill(fill))
             .overlay(
                 shape.stroke(
-                    isSelected
-                        ? Theme.wandAccent.opacity(highContrast ? 0.9 : 0.48)
-                        : Color(nsColor: Theme.borderSubtle).opacity(isHovered ? 1 : 0),
-                    lineWidth: isSelected || highContrast && isHovered ? 1 : 0.5
+                    highContrast && isSelected
+                        ? Theme.textPrimary.opacity(0.55)
+                        : .clear,
+                    lineWidth: highContrast && isSelected ? 1 : 0
                 )
-            )
-            .shadow(
-                color: isSelected && !highContrast ? Theme.wandAccent.opacity(0.10) : .clear,
-                radius: 8,
-                y: 3
             )
     }
 }
@@ -421,6 +390,12 @@ extension View {
     /// 老 SDK 不支持 NSWindow.titlebarAppearsTransparent/titleVisibility 时静默降级。
     func hideNativeTitleBar() -> some View {
         background(NativeTitleBarHider())
+    }
+
+    /// 主窗口用：隐藏原生标题栏并让内容铺满整个窗口（fullSizeContentView），
+    /// 自绘顶栏顶到窗口上沿，红绿灯浮在顶栏左侧；WandTopBar 需自行留出红绿灯安全区。
+    func extendContentUnderTitleBar() -> some View {
+        background(MainWindowTitleBarConfigurator())
     }
 
     /// 挂载后整块 view 都变成可拖动区,拖动时通过 NSWindow.setFrameOrigin 移动窗口。
@@ -542,6 +517,35 @@ private final class SheetTitleBarNSView: NSView {
     }
 }
 
+/// 主窗口版：在 sheet 版基础上再把内容延伸进标题栏区域（fullSizeContentView），
+/// 自绘 WandTopBar 直接铺到窗口上沿，红绿灯浮在顶栏上而不是压一条系统灰条。
+private struct MainWindowTitleBarConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        MainWindowTitleBarNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? MainWindowTitleBarNSView)?.applyToWindow()
+    }
+}
+
+private final class MainWindowTitleBarNSView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyToWindow()
+    }
+
+    func applyToWindow() {
+        guard let window, window.styleMask.contains(.titled) else { return }
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        if !window.styleMask.contains(.fullSizeContentView) {
+            window.styleMask.insert(.fullSizeContentView)
+        }
+        window.isMovableByWindowBackground = true
+    }
+}
+
 // MARK: - 按钮样式
 
 /// 实心珊瑚色主按钮,禁用态自动变淡。
@@ -557,20 +561,15 @@ struct WandPrimaryButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.white)
-                .padding(.vertical, 11)
-                .padding(.horizontal, 18)
+                .padding(.vertical, 9)
+                .padding(.horizontal, 14)
                 .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(isEnabled ? Theme.wandAccent : Theme.wandAccent.opacity(0.45))
                 )
                 .brightness(configuration.isPressed ? -0.06 : 0)
-                .shadow(
-                    color: isEnabled && !configuration.isPressed ? Theme.wandAccent.opacity(0.16) : .clear,
-                    radius: 8,
-                    y: 3
-                )
                 .contentShape(Rectangle())
         }
     }
@@ -589,16 +588,16 @@ struct WandSecondaryButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundColor(Theme.textPrimary)
-                .padding(.vertical, 11)
-                .padding(.horizontal, 18)
+                .padding(.vertical, 9)
+                .padding(.horizontal, 14)
                 .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Theme.surfaceElevated)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(Theme.border, lineWidth: 1)
                 )
                 .opacity(configuration.isPressed ? 0.78 : 1)
@@ -626,7 +625,7 @@ struct WandIconButtonStyle: ButtonStyle {
             configuration.label
                 .foregroundColor(
                     isActive
-                        ? Theme.wandAccent
+                        ? Theme.textPrimary
                         : (isEnabled ? Theme.textSecondary : Theme.textMuted)
                 )
                 .frame(width: 30, height: 30)
@@ -634,15 +633,8 @@ struct WandIconButtonStyle: ButtonStyle {
                     Circle()
                         .fill(
                             configuration.isPressed
-                                ? Theme.wandAccent.opacity(0.17)
-                                : (isActive ? Theme.wandAccent.opacity(0.10) : .clear)
-                        )
-                )
-                .overlay(
-                    Circle()
-                        .stroke(
-                            configuration.isPressed ? Theme.wandAccent.opacity(0.36) : .clear,
-                            lineWidth: 0.7
+                                ? Theme.textPrimary.opacity(0.10)
+                                : (isActive ? Theme.textPrimary.opacity(0.065) : .clear)
                         )
                 )
                 .contentShape(Circle())

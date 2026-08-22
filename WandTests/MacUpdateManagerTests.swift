@@ -243,6 +243,31 @@ final class MacUpdateManagerTests: XCTestCase {
         XCTAssertTrue(result.contains("已恢复旧版"))
     }
 
+    func testSweepRemovesOrphanedStagingButKeepsPendingAndUnrelatedEntries() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let updates = root.appendingPathComponent("Updates", isDirectory: true)
+        let orphan = updates.appendingPathComponent("staging-\(UUID().uuidString)", isDirectory: true)
+        let keep = updates.appendingPathComponent("staging-\(UUID().uuidString)", isDirectory: true)
+        let keepApp = keep.appendingPathComponent("Wand.app", isDirectory: true)
+        let unrelated = updates.appendingPathComponent("not-staging", isDirectory: true)
+        let marker = updates.appendingPathComponent("last-result.txt")
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: keepApp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
+        try "ok".write(to: marker, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        MacUpdateManager.sweepOrphanedStagingDirectories(
+            in: updates,
+            keepingStagedAppPath: keepApp.path
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keep.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suite = "WandTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

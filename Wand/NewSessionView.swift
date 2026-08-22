@@ -1,9 +1,6 @@
 import SwiftUI
 
-/// 新建会话——布局对齐 Web 端「新对话」弹窗：区块头部(field-label) + 模式卡
-/// (Provider / 会话类型 / 模式) + 目录卡(输入 + 浏览 + 最近路径) + 底栏。
-/// 模式用五张选项卡(托管/全权限/自动编辑/标准/原生)替代 Picker 弹窗，跟 Web 的
-/// renderModeCards 一致；Codex 锁定全权限（对齐 getSupportedModes）。
+/// 新建会话保持单列、原生控件优先；只有输入和警告需要独立表面。
 struct NewSessionView: View {
     let api: WandAPI
     let initialCwd: String?
@@ -90,7 +87,7 @@ struct NewSessionView: View {
         }
     }
 
-    enum SessionType: String, CaseIterable, Identifiable {
+    enum SessionType: String, CaseIterable, Identifiable, Hashable {
         case structured, pty
         var id: String { rawValue }
         var label: String { self == .structured ? "结构化" : "PTY" }
@@ -129,7 +126,7 @@ struct NewSessionView: View {
     }
 
     /// 模式选项：id / label / desc，对齐 Web renderModeCards。
-    enum ModeOption: String, CaseIterable, Identifiable {
+    enum ModeOption: String, CaseIterable, Identifiable, Hashable {
         case managed
         case fullAccess
         case autoEdit
@@ -274,23 +271,17 @@ struct NewSessionView: View {
             sheetHeader
             Divider().opacity(0.35)
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    fieldLabel("Provider")
-                    providerCards
+                VStack(alignment: .leading, spacing: 12) {
+                    fieldLabel("助手")
+                    providerPicker
 
                     fieldLabel("会话类型")
-                    sessionTypeCards
+                    sessionTypePicker
                     fieldHint(sessionKindHint)
 
                     fieldLabel("模型与思考")
                     HStack(spacing: 10) {
-                        optionMenuCard(
-                            title: "模型",
-                            value: selectedModelLabel,
-                            icon: "cpu"
-                        ) {
-                            modelMenu
-                        }
+                        modelMenuButton
                         ThinkingEffortSlider(
                             options: thinkingLevels,
                             selection: thinkingEffort,
@@ -298,12 +289,12 @@ struct NewSessionView: View {
                         ) { thinkingEffort = $0 }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(cardBackground(selected: false))
+                        .background(controlBackground)
                         .frame(maxWidth: .infinity)
                     }
 
                     fieldLabel("模式")
-                    modeGrid
+                    modePicker
                     fieldHint(modeHint)
                     if mode == .fullAccess {
                         fullAccessWarning
@@ -311,7 +302,6 @@ struct NewSessionView: View {
 
                     fieldLabel("工作目录")
                     cwdCard
-                    fieldHint("支持输入绝对路径，或点文件夹图标打开目录浏览器。")
 
                     fieldLabel("首条消息（可选）")
                     firstMessageCard
@@ -321,7 +311,7 @@ struct NewSessionView: View {
                     }
                 }
                 .padding(.horizontal, 22)
-                .padding(.vertical, 18)
+                .padding(.vertical, 14)
             }
             .dismissKeyboardOnTap()
             .sheet(isPresented: $showBrowser) {
@@ -333,9 +323,8 @@ struct NewSessionView: View {
             Divider().opacity(0.35)
             sheetFooter
         }
-        // 弹窗最小高度拉到 740,理想 920：保证首条消息、底部创建按钮在 13-15 寸
-        // 笔记本常规分辨率下不滚动即可见。老 760 装不下 7 个分区 + 5 个模式卡。
-        .frame(minWidth: 760, idealWidth: 820, minHeight: 740, idealHeight: 920)
+        // 内容保持紧凑；小屏仍可通过中间滚动区访问全部字段。
+        .frame(minWidth: 720, idealWidth: 780, minHeight: 680, idealHeight: 820)
         .background(WandAmbientBackground())
         // SwiftUI 在 macOS 上 .sheet 会自带 NSWindow 标题栏,跟下面的 sheetHeader 重复,
         // 视觉上「两层标题」很难看。挂这个修饰符把原生标题栏改成透明 + 隐藏文字。
@@ -360,7 +349,7 @@ struct NewSessionView: View {
         Text(text)
             .font(.system(size: 12, weight: .semibold))
             .foregroundColor(Theme.textSecondary)
-            .padding(.top, 4)
+            .padding(.top, 2)
     }
 
     private func fieldHint(_ text: String) -> some View {
@@ -371,133 +360,67 @@ struct NewSessionView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func cardBackground(selected: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(selected ? Theme.wandAccent.opacity(0.10) : Theme.surface)
+    private var controlBackground: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Theme.surface)
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(
-                        selected ? Color(nsColor: Theme.borderFocus) : Theme.border,
-                        lineWidth: selected ? 1.5 : 1
-                    )
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.75)
             )
     }
 
-    /// Provider / 会话类型 / 模式卡：选中态走 brand 软底 + brand 描边。
-    private func optionCard(
-        title: String,
-        desc: String,
-        symbol: String,
-        provider: String? = nil,
-        selected: Bool,
-        enabled: Bool = true,
-        onTap: @escaping () -> Void
-    ) -> some View {
-        Button(action: onTap) {
-            HStack(alignment: .top, spacing: 10) {
-                Group {
-                    if let provider {
-                        BrandLogoShape(provider: provider)
-                            .fill(selected ? Theme.wandAccent : Theme.textSecondary)
-                            .frame(width: 14, height: 14)
-                    } else {
-                        Image(systemName: symbol)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(selected ? Theme.wandAccent : Theme.textSecondary)
-                    }
-                }
-                .frame(width: 24, height: 24)
-                .background(
-                    Circle().fill(
-                        (selected ? Theme.wandAccent : Theme.textSecondary).opacity(0.10)
-                    )
-                )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(selected ? Theme.wandAccent : Theme.textPrimary)
-                        .lineLimit(1)
-                    Text(desc)
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.textSecondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                if selected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(Theme.wandAccent)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(cardBackground(selected: selected))
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
-    }
-
-    private var providerCards: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
-        return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+    private var providerPicker: some View {
+        HStack(spacing: 6) {
             ForEach(Provider.allCases) { tool in
-                optionCard(
-                    title: tool.label,
-                    desc: tool.desc,
-                    symbol: tool.symbol,
-                    provider: tool.rawValue,
-                    selected: provider == tool
-                ) {
+                Button {
                     provider = tool
+                } label: {
+                    HStack(spacing: 6) {
+                        BrandLogoShape(provider: tool.rawValue)
+                            .fill(Theme.providerColor(tool.rawValue))
+                            .frame(width: 13, height: 13)
+                        Text(tool.label)
+                            .font(.system(size: 12, weight: provider == tool ? .semibold : .medium))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(Theme.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(provider == tool ? Theme.textPrimary.opacity(0.07) : .clear)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(
+                                provider == tool ? Theme.border : Color.clear,
+                                lineWidth: 0.75
+                            )
+                    )
                 }
+                .buttonStyle(.plain)
             }
         }
     }
 
-    private var sessionTypeCards: some View {
-        HStack(spacing: 10) {
+    private var sessionTypePicker: some View {
+        Picker("会话类型", selection: $sessionType) {
             ForEach(SessionType.allCases) { kind in
-                optionCard(
-                    title: kind.label,
-                    desc: kind.desc,
-                    symbol: kind.symbol,
-                    selected: sessionType == kind
-                ) {
-                    sessionType = kind
-                }
+                Text(kind.label).tag(kind)
             }
         }
+        .labelsHidden()
+        .pickerStyle(.segmented)
     }
 
-    private var modeGrid: some View {
-        // 2 列网格，按 allCases 顺序排；不在 supportedModes 里的不可点。
-        let columns = [
-            GridItem(.flexible(), spacing: 10),
-            GridItem(.flexible(), spacing: 10),
-        ]
-        return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+    private var modePicker: some View {
+        Picker("模式", selection: $mode) {
             ForEach(modeOptions) { option in
-                optionCard(
-                    title: option.label,
-                    desc: option.desc,
-                    symbol: modeSymbol(option),
-                    selected: mode == option
-                ) {
-                    mode = option
-                }
+                Text(option.label).tag(option)
             }
         }
-    }
-
-    private func modeSymbol(_ option: ModeOption) -> String {
-        switch option {
-        case .managed: return "wand.and.stars"
-        case .fullAccess: return "checkmark.shield"
-        case .autoEdit: return "pencil.line"
-        case .standard: return "slider.horizontal.3"
-        case .native: return "shippingbox"
-        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
     }
 
     private var selectedModelLabel: String {
@@ -531,110 +454,78 @@ struct NewSessionView: View {
         }
     }
 
-    private func optionMenuCard<Content: View>(
-        title: String,
-        value: String,
-        icon: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        Menu(content: content) {
+    private var modelMenuButton: some View {
+        Menu {
+            modelMenu
+        } label: {
             HStack(spacing: 8) {
-                Image(systemName: icon)
+                Image(systemName: "cpu")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Theme.wandAccent)
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Theme.wandAccent.opacity(0.10)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Theme.textSecondary)
-                    Text(value)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(1)
-                }
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 18)
+                Text(selectedModelLabel)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(Theme.textSecondary)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(cardBackground(selected: false))
         }
         .buttonStyle(.plain)
         .menuStyle(.borderlessButton)
+        .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
+        .frame(height: 44)
+        .background(controlBackground)
+        .accessibilityLabel("模型：\(selectedModelLabel)")
     }
 
-    /// 工作目录卡：路径输入 + 右侧浏览按钮 + 最近路径快速选择。
+    /// 工作目录保持单行主路径；最近目录进入菜单，避免把弹窗拉成长列表。
     private var cwdCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                TextField("/path/to/project", text: $cwd)
-                    .font(.system(size: 14, design: .monospaced))
-                    .textFieldStyle(.plain)
-                    .foregroundColor(Theme.textPrimary)
-                    .tint(Theme.wandAccent)
-                    .focused($focusedInput, equals: .cwd)
-                    .padding(.leading, 12)
-                    .padding(.vertical, 11)
-                Button {
-                    showBrowser = true
-                } label: {
-                    Image(systemName: "folder")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Theme.wandAccent)
-                        .frame(width: 38, height: 38)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("浏览目录")
-            }
+        HStack(spacing: 0) {
+            TextField("/path/to/project", text: $cwd)
+                .font(.system(size: 14, design: .monospaced))
+                .textFieldStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .tint(Theme.wandAccent)
+                .focused($focusedInput, equals: .cwd)
+                .padding(.leading, 12)
+                .padding(.vertical, 11)
             if !recentPaths.isEmpty {
-                Divider().opacity(0.6)
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(recentPaths.prefix(5).enumerated()), id: \.element.id) { index, recent in
-                        if index > 0 {
-                            Divider().opacity(0.4)
-                        }
+                Menu {
+                    ForEach(recentPaths.prefix(8)) { recent in
                         Button {
                             cwd = recent.path
                         } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "clock")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(
-                                        cwd == recent.path ? Theme.wandAccent : Theme.textSecondary
-                                    )
-                                    .frame(width: 16)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(recent.displayName)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(
-                                            cwd == recent.path ? Theme.wandAccent : Theme.textPrimary
-                                        )
-                                        .lineLimit(1)
-                                    Text(recent.path)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundColor(Theme.textSecondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer(minLength: 0)
-                                if cwd == recent.path {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(Theme.wandAccent)
-                                }
+                            if cwd == recent.path {
+                                Label(recent.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(recent.displayName)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                     }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                        .frame(width: 38, height: 38)
                 }
+                .menuStyle(.borderlessButton)
+                .help("最近目录")
             }
+            Button {
+                showBrowser = true
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 38, height: 38)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("浏览目录")
         }
         .wandInputSurface(focused: focusedInput == .cwd)
     }
@@ -711,7 +602,6 @@ struct NewSessionView: View {
         // 把 header 转成拖拽区。直接在 .background() 放 NSView 会被 HStack 拦事件，
         // 走 SwiftUI gesture 更稳。
         HStack(alignment: .center, spacing: 12) {
-            WandBrandMark(size: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text("新建对话")
                     .font(.system(size: 17, weight: .semibold))
@@ -726,14 +616,14 @@ struct NewSessionView: View {
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
-        .wandGlass(.chrome)
+        .background(Theme.workspaceBackground)
         .windowDrag()
     }
 
     private var sheetFooter: some View {
         HStack(spacing: 10) {
             Text("\(provider.label) · \(sessionType.label) · \(mode.label) · \((cwd as NSString).lastPathComponent)")
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 11))
                 .foregroundColor(Theme.textSecondary)
                 .lineLimit(1)
                 .help(cwd)
@@ -760,8 +650,8 @@ struct NewSessionView: View {
             }
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 14)
-        .wandGlass(.chrome)
+        .padding(.vertical, 12)
+        .background(Theme.workspaceBackground)
     }
 
     // MARK: - 状态

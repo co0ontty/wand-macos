@@ -20,7 +20,7 @@ struct MainShellView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var filePanelOpen: Bool = true
+    @State private var filePanelOpen: Bool = false
     @State private var rightPanelTab: RightPanelTab = .files
     /// 当前选中的会话 id。
     @State private var selectedSessionId: String?
@@ -52,13 +52,6 @@ struct MainShellView: View {
             }
         }
 
-        var systemImage: String {
-            switch self {
-            case .files: return "folder"
-            case .git: return "arrow.triangle.branch"
-            case .details: return "info.circle"
-            }
-        }
     }
 
     /// 面板属于偶发的空间变化，只保留短促、无回弹的空间提示。
@@ -132,7 +125,6 @@ struct MainShellView: View {
                 onToggleFilePanel: {
                     withAnimation(structuralAnimation) { filePanelOpen.toggle() }
                 },
-                onOpenMissions: { showMissions = true },
                 onOpenSettings: { presentSettings = true },
                 onOpenWebFallback: { showWebFallback = true },
                 onReturnToNative: { showWebFallback = false },
@@ -142,6 +134,11 @@ struct MainShellView: View {
                     NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                 }
             )
+            // fullSizeContentView 会把内容原点放到标题栏上方约 14pt；补回这段
+            // 顶部内边距，让自绘顶栏真正落在窗口内，同时仍由 78pt 左留白避开红绿灯。
+            .padding(.top, 14)
+            // 主窗口标题栏已隐藏(fullSizeContentView)，内容顶到 y=0；
+            // 显式忽略顶部安全区，避免 SwiftUI 在原标题栏位置留下一条空白。
             GeometryReader { geo in
                 content(width: geo.size.width)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -180,6 +177,7 @@ struct MainShellView: View {
             .background(WandAmbientBackground())
         }
         .frame(minWidth: 900, minHeight: 600)
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     private var displayHost: String {
@@ -233,32 +231,37 @@ struct MainShellView: View {
         let compactPanelWidth = min(380, max(320, width * 0.42))
 
         return ZStack(alignment: .trailing) {
-            HStack(spacing: 10) {
+            HStack(spacing: 0) {
                 sidebarColumn
                     .frame(width: Theme.LayoutMetrics.sidebarWidth)
-                    .wandGlass(.panel)
+                    .background(Theme.sidebarBackground)
+                Rectangle()
+                    .fill(Color(nsColor: Theme.borderSubtle))
+                    .frame(width: 0.5)
                 mainColumn
                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                    .background(
-                        RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                            .fill(Theme.surfaceElevated)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+                    .background(Theme.workspaceBackground)
                 if filePanelOpen && usesPersistentRightPanel {
+                    Rectangle()
+                        .fill(Color(nsColor: Theme.borderSubtle))
+                        .frame(width: 0.5)
                     rightColumn
                         .frame(width: Theme.LayoutMetrics.filePanelWidth)
-                        .wandGlass(.panel)
+                        .background(Theme.surfaceElevated)
                         .transition(rightPanelTransition)
                 }
             }
-            .padding(10)
 
             if filePanelOpen && !usesPersistentRightPanel {
                 rightColumn
                     .frame(width: compactPanelWidth)
-                    .wandGlass(.panel)
-                    .shadow(color: Color.black.opacity(0.16), radius: 16, x: -4, y: 4)
-                    .padding(10)
+                    .background(Theme.surfaceElevated)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(Color(nsColor: Theme.borderSubtle))
+                            .frame(width: 0.5)
+                    }
+                    .shadow(color: Color.black.opacity(0.12), radius: 18, x: -5, y: 0)
                     .transition(rightPanelTransition)
                     .zIndex(2)
             }
@@ -273,6 +276,7 @@ struct MainShellView: View {
         SidebarColumn(
             api: api,
             selectedSessionId: $selectedSessionId,
+            onOpenMissions: { showMissions = true },
             onSessionSelected: { session in
                 selectedSessionId = session.id
                 selectedSessionProvider = session.provider ?? "claude"
@@ -329,38 +333,27 @@ struct MainShellView: View {
     }
 
     private var rightColumnTabs: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 16) {
             ForEach(RightPanelTab.allCases) { tab in
                 Button {
                     rightPanelTab = tab
                 } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: tab.systemImage)
-                            .font(.system(size: 11, weight: .medium))
-                        Text(tab.label)
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(rightPanelTab == tab ? Theme.textPrimary : Theme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(rightPanelTab == tab ? Theme.wandAccent.opacity(0.11) : Color.clear)
-                    )
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(
-                                rightPanelTab == tab ? Theme.wandAccent.opacity(0.30) : .clear,
-                                lineWidth: 0.7
-                            )
-                    )
+                    Text(tab.label)
+                        .font(.system(size: 12, weight: rightPanelTab == tab ? .semibold : .regular))
+                        .foregroundColor(rightPanelTab == tab ? Theme.textPrimary : Theme.textSecondary)
+                        .padding(.vertical, 11)
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(rightPanelTab == tab ? Theme.textPrimary : Color.clear)
+                                .frame(height: 1.5)
+                        }
                 }
                 .buttonStyle(.plain)
             }
             Spacer()
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
+        .padding(.leading, 12)
+        .padding(.trailing, 42)
     }
 
     @ViewBuilder
@@ -376,19 +369,16 @@ struct MainShellView: View {
 
 }
 
-// MARK: - 自绘扁平顶栏
+// MARK: - 自绘 Codex 风格顶栏
 
-/// 完全自绘的应用顶栏，取代原生 unified 工具栏。
-/// 左侧承载全局身份和连接状态，右侧承载并行任务 / 文件 / 设置与更多；
-/// web 兜底模式下左侧退化为「返回原生界面」。背景铺 Theme.background，与窗口底色一致，
-/// 底部加一条 0.5pt 暖色细分割线，把顶栏与工作区清晰分层但不喧宾夺主。
+/// 顶栏与下方分栏使用相同的垂直边界：侧栏是中性灰，工作区是近白色。
+/// 视觉上是一块连续的原生窗口，而不是放在背景上的多张圆角卡片。
 private struct WandTopBar: View {
     let connectionState: ShellConnectionState
     let displayHost: String
     let showWebFallback: Bool
     let filePanelOpen: Bool
     let onToggleFilePanel: () -> Void
-    let onOpenMissions: () -> Void
     let onOpenSettings: () -> Void
     let onOpenWebFallback: () -> Void
     let onReturnToNative: () -> Void
@@ -409,14 +399,6 @@ private struct WandTopBar: View {
         case .connecting: return "arrow.triangle.2.circlepath"
         case .connected: return "checkmark.circle.fill"
         case .disconnected: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var connectionShortLabel: String {
-        switch connectionState {
-        case .connecting: return "连接中"
-        case .connected: return "已连接"
-        case .disconnected: return "未连接"
         }
     }
 
@@ -441,30 +423,48 @@ private struct WandTopBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             if showWebFallback {
-                Button(action: onReturnToNative) {
-                    Label("返回原生界面", systemImage: "chevron.backward")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Theme.textPrimary)
+                HStack(spacing: 8) {
+                    Button(action: onReturnToNative) {
+                        Label("返回原生界面", systemImage: "chevron.backward")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(Theme.textPrimary)
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    Label("网页版", systemImage: "safari")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
                 }
-                .buttonStyle(.borderless)
-                .help("返回原生界面")
-                Spacer()
-                Label("网页版", systemImage: "safari")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
+                .padding(.leading, 78)
+                .padding(.trailing, 12)
             } else {
-                identityMenu
-                Spacer(minLength: 0)
-                rightActions
+                HStack(spacing: 8) {
+                    identityMenu
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 78)
+                .padding(.trailing, 12)
+                .frame(width: Theme.LayoutMetrics.sidebarWidth)
+                .frame(maxHeight: .infinity)
+                .background(Theme.sidebarBackground)
+
+                Rectangle()
+                    .fill(Color(nsColor: Theme.borderSubtle))
+                    .frame(width: 0.5)
+
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    rightActions
+                }
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.workspaceBackground)
             }
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 10)
-        .frame(height: 44)
+        .frame(height: 46)
         .frame(maxWidth: .infinity)
-        .background(Theme.background)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color(nsColor: Theme.borderSubtle))
@@ -499,12 +499,15 @@ private struct WandTopBar: View {
                 Label("切换服务器…", systemImage: "server.rack")
             }
         } label: {
-            HStack(spacing: 7) {
-                WandBrandMark(size: 18)
+            HStack(spacing: 6) {
+                WandBrandMark(size: 17)
                 Text("Wand")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                 connectionBadge
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(Theme.textMuted)
             }
             .fixedSize()
         }
@@ -515,18 +518,7 @@ private struct WandTopBar: View {
     }
 
     private var connectionBadge: some View {
-        HStack(spacing: 4) {
-            connectionIndicator
-            Text(connectionShortLabel)
-        }
-        .font(.system(size: 10, weight: .medium))
-        .foregroundColor(connectionTint)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(
-            Capsule(style: .continuous)
-                .fill(connectionTint.opacity(0.12))
-        )
+        connectionIndicator
         // Menu 已提供完整的、可朗读的状态；避免 VoiceOver 在同一控件里重复。
         .accessibilityHidden(true)
     }
@@ -539,31 +531,14 @@ private struct WandTopBar: View {
                 .controlSize(.mini)
                 .tint(connectionTint)
         case .connected, .disconnected:
-            Image(systemName: connectionSystemImage)
-                .font(.system(size: 10, weight: .semibold))
+            Circle()
+                .fill(connectionTint)
+                .frame(width: 6, height: 6)
         }
     }
 
     private var rightActions: some View {
         HStack(spacing: 4) {
-            Button(action: onOpenMissions) {
-                Image(systemName: "square.stack.3d.up")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Theme.textSecondary)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        Circle().fill(Theme.surfaceElevated)
-                    )
-                    .overlay(
-                        Circle().stroke(Theme.border, lineWidth: 0.7)
-                    )
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("2", modifiers: .command)
-            .help("打开并行任务")
-            .accessibilityLabel("打开并行任务")
-
             // 文件面板是唯一的高频全局动作，用图标明确它影响的区域。
             Button(action: onToggleFilePanel) {
                 Image(
@@ -574,15 +549,9 @@ private struct WandTopBar: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
                 .frame(width: 30, height: 30)
-                .background(
-                    Circle().fill(Theme.surfaceElevated)
-                )
-                .overlay(
-                    Circle().stroke(Theme.border, lineWidth: 0.7)
-                )
                 .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WandIconButtonStyle(isActive: filePanelOpen))
             .help(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
             .accessibilityLabel(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
 
@@ -599,12 +568,6 @@ private struct WandTopBar: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(Theme.textSecondary)
                     .frame(width: 30, height: 30)
-                    .background(
-                        Circle().fill(Theme.surfaceElevated)
-                    )
-                    .overlay(
-                        Circle().stroke(Theme.border, lineWidth: 0.7)
-                    )
                     .contentShape(Circle())
             }
             .menuStyle(.borderlessButton)
@@ -651,6 +614,37 @@ private struct ConnectionFailureView: View {
 }
 
 // MARK: - 侧栏容器
+
+private struct SidebarActionRow: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 17)
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(Theme.textPrimary)
+            .padding(.horizontal, 8)
+            .frame(height: 32)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(hovering ? Theme.textPrimary.opacity(0.05) : .clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
 
 struct SidebarColumn: View {
     private enum SidebarViewMode: String {
@@ -742,6 +736,7 @@ struct SidebarColumn: View {
 
     let api: WandAPI
     @Binding var selectedSessionId: String?
+    let onOpenMissions: () -> Void
     let onSessionSelected: (SessionSnapshot) -> Void
 
     @State private var sessions: [SessionSnapshot] = []
@@ -763,8 +758,11 @@ struct SidebarColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            quickActions
+            Rectangle()
+                .fill(Color(nsColor: Theme.borderSubtle))
+                .frame(height: 0.5)
             header
-            Divider().opacity(0.3)
             list
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -826,6 +824,23 @@ struct SidebarColumn: View {
 
     // MARK: - 头部
 
+    private var quickActions: some View {
+        VStack(spacing: 2) {
+            SidebarActionRow(title: "新建会话", systemImage: "square.and.pencil") {
+                newSessionInitialCwd = nil
+                showNewSession = true
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            SidebarActionRow(title: "并行任务", systemImage: "square.stack.3d.up") {
+                onOpenMissions()
+            }
+            .keyboardShortcut("2", modifiers: .command)
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 7)
+        .padding(.bottom, 8)
+    }
+
     private var sidebarViewMode: SidebarViewMode {
         get { SidebarViewMode(rawValue: sidebarViewModeRaw) ?? .sessions }
         nonmutating set {
@@ -861,50 +876,55 @@ struct SidebarColumn: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
-                    .foregroundColor(Theme.textSecondary)
+                        .foregroundColor(Theme.textSecondary)
                 }
                 .buttonStyle(WandIconButtonStyle())
                 .disabled(deleteInProgress)
                 .help("退出多选")
             } else {
-                Picker("侧栏展示方式", selection: Binding(
-                    get: { sidebarViewMode },
-                    set: { sidebarViewMode = $0 }
-                )) {
-                    Text("会话").tag(SidebarViewMode.sessions)
-                    Text("目录").tag(SidebarViewMode.directories)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 126)
+                Text(sidebarViewMode == .sessions ? "会话" : "目录")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.textTertiary)
                 Spacer()
-                if sidebarViewMode == .sessions {
+                Menu {
                     Button {
-                        isSelecting = true
+                        sidebarViewMode = .sessions
                     } label: {
-                        Image(systemName: "checkmark.circle")
-                            .font(.system(size: 16))
-                            .foregroundColor(Theme.textSecondary)
+                        Label(
+                            "会话",
+                            systemImage: sidebarViewMode == .sessions ? "checkmark" : "text.bubble"
+                        )
                     }
-                    .buttonStyle(WandIconButtonStyle())
-                    .disabled(deleteInProgress)
-                    .help("多选")
-                }
-                Button {
-                    newSessionInitialCwd = nil
-                    showNewSession = true
+                    Button {
+                        sidebarViewMode = .directories
+                    } label: {
+                        Label(
+                            "目录",
+                            systemImage: sidebarViewMode == .directories ? "checkmark" : "folder"
+                        )
+                    }
+                    if sidebarViewMode == .sessions {
+                        Divider()
+                        Button {
+                            isSelecting = true
+                        } label: {
+                            Label("选择多个会话", systemImage: "checkmark.circle")
+                        }
+                    }
                 } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(Theme.wandAccent)
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                        .frame(width: 28, height: 28)
                 }
-                .buttonStyle(WandIconButtonStyle())
+                .menuStyle(.borderlessButton)
                 .disabled(deleteInProgress)
-                .help("新建会话")
+                .help("侧栏选项")
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 38)
     }
 
     // MARK: - 列表
@@ -953,7 +973,7 @@ struct SidebarColumn: View {
             }
         } else {
             ScrollView {
-                LazyVStack(spacing: 6) {
+                LazyVStack(spacing: 2) {
                     ForEach(listEntries) { entry in
                         switch entry {
                         case .session(let session):
@@ -963,8 +983,8 @@ struct SidebarColumn: View {
                         }
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
             }
         }
     }
@@ -1009,8 +1029,8 @@ struct SidebarColumn: View {
                         )
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
             }
         } else {
             VStack(spacing: 14) {
@@ -1367,7 +1387,7 @@ private struct SessionDirectoryNodeView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(WandIconButtonStyle())
-                    .opacity(hovering ? 1 : 0.68)
+                    .opacity(hovering ? 1 : 0)
                     .help("在 \(node.path) 新建会话")
                     .accessibilityLabel("在 \(node.path) 新建会话")
                 }
@@ -1522,47 +1542,48 @@ struct SessionTile: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            Color.clear.frame(width: 3)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .top, spacing: 8) {
-                    Group {
-                        if isSelecting {
-                            Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 16))
-                                .foregroundColor(checked ? Theme.wandAccent : Theme.textSecondary)
-                        } else {
-                            BrandLogoShape(provider: provider)
-                                .fill(Theme.providerColor(provider))
-                                .frame(width: 17, height: 17)
-                        }
-                    }
-                    .frame(width: 42, height: 22)
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(alignment: .top, spacing: 9) {
+            Group {
+                if isSelecting {
+                    Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 15))
+                        .foregroundColor(checked ? Theme.wandAccent : Theme.textSecondary)
+                } else {
+                    BrandLogoShape(provider: provider)
+                        .fill(Theme.providerColor(provider))
+                        .frame(width: 15, height: 15)
                 }
-                HStack(spacing: 6) {
-                    Text(recentTime)
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundColor(Theme.textMuted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                        .frame(width: 42)
+            }
+            .frame(width: 18, height: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 5) {
                     if prominentStatus {
-                        HStack(spacing: 4) {
-                            Circle().fill(statusColor).frame(width: 5, height: 5)
-                            Text(statusLabel)
-                                .font(.system(size: 9.5, weight: .semibold))
-                                .foregroundColor(statusColor)
-                                .lineLimit(1)
-                        }
-                    } else {
+                        Circle().fill(statusColor).frame(width: 5, height: 5)
+                        Text(statusLabel)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundColor(statusColor)
+                            .lineLimit(1)
+                    } else if !recentTime.isEmpty {
+                        Text(recentTime)
+                            .font(.system(size: 9.5, weight: .regular))
+                            .foregroundColor(Theme.textMuted)
+                    }
+                    if !prominentStatus && recentTime.isEmpty {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                     }
                     if let cwd = session.cwd, !cwd.isEmpty {
+                        if prominentStatus || !recentTime.isEmpty {
+                            Text("·")
+                                .foregroundColor(Theme.textMuted.opacity(0.7))
+                        }
                         WandPathText(path: cwd, fontSize: 9.5, color: Theme.textMuted)
                             .frame(maxWidth: .infinity)
                     } else {
@@ -1572,18 +1593,11 @@ struct SessionTile: View {
                     }
                 }
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
         }
-        .overlay(alignment: .leading) {
-            if isSelected && !isSelecting {
-                Capsule()
-                    .fill(Theme.wandAccent)
-                    .frame(width: 3)
-                    .padding(.vertical, 9)
-            }
-        }
-        .wandSelectionSurface(isSelected: isSelected && !isSelecting, isHovered: hovering, cornerRadius: 12)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(minHeight: 46)
+        .wandSelectionSurface(isSelected: isSelected && !isSelecting, isHovered: hovering, cornerRadius: 7)
         .onHover { hovering = $0 }
     }
 }
@@ -1604,41 +1618,36 @@ struct HistoryTile: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: 8) {
-                BrandLogoShape(provider: history.provider)
-                    .fill(Theme.providerColor(history.provider))
-                    .frame(width: 17, height: 17)
-                    .frame(width: 42, height: 22)
+        HStack(alignment: .top, spacing: 9) {
+            BrandLogoShape(provider: history.provider)
+                .fill(Theme.providerColor(history.provider))
+                .frame(width: 15, height: 15)
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(displayTitle)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12.5, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack(spacing: 6) {
-                Text(dateText)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundColor(Theme.textMuted)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                    .frame(width: 42)
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundColor(Theme.providerColor(history.provider))
-                Text("可恢复")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundColor(Theme.textSecondary)
-                if !history.cwd.isEmpty {
-                    Text("·").foregroundColor(Theme.textMuted.opacity(0.55))
-                    WandPathText(path: history.cwd, fontSize: 9.5, color: Theme.textMuted)
-                        .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 5) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Theme.providerColor(history.provider))
+                    Text(dateText.isEmpty ? "可恢复" : "\(dateText) · 可恢复")
+                        .font(.system(size: 9.5, weight: .regular))
+                        .foregroundColor(Theme.textMuted)
+                    if !history.cwd.isEmpty {
+                        Text("·").foregroundColor(Theme.textMuted.opacity(0.55))
+                        WandPathText(path: history.cwd, fontSize: 9.5, color: Theme.textMuted)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
             }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .wandSelectionSurface(isSelected: false, isHovered: hovering, cornerRadius: 12)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(minHeight: 46)
+        .wandSelectionSurface(isSelected: false, isHovered: hovering, cornerRadius: 7)
         .onHover { hovering = $0 }
     }
 }
@@ -1649,17 +1658,16 @@ struct EmptyMainColumn: View {
     let api: WandAPI
 
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            WandBrandMark(size: 72)
-            Text("Wand")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(Theme.textPrimary)
-            Text("从左侧选择会话,或新建一个会话开始")
-                .font(.system(size: 13))
+        VStack(spacing: 9) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 22, weight: .regular))
                 .foregroundColor(Theme.textSecondary)
-            Spacer()
+                .frame(width: 32, height: 32)
+            Text("选择会话或新建一个")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(Theme.textPrimary)
         }
+        .padding(.bottom, 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -1728,56 +1736,32 @@ struct SessionHeaderView: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 9) {
             BrandLogoShape(provider: provider)
                 .fill(providerColor)
-                .frame(width: 15, height: 15)
-                .frame(width: 30, height: 30)
-                .background(
-                    Circle()
-                        .fill(providerColor.opacity(0.14))
-                )
-            VStack(alignment: .leading, spacing: 4) {
-                Text(displayTitle)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                HStack(spacing: 6) {
-                    HStack(spacing: 4) {
-                        BrandLogoShape(provider: provider)
-                            .fill(providerColor)
-                            .frame(width: 9, height: 9)
-                        Text(providerLabel)
-                    }
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(providerColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(providerColor.opacity(0.14))
-                    )
-
-                    if let workingDirectoryName {
-                        HStack(spacing: 4) {
-                            Image(systemName: "folder")
-                                .font(.system(size: 9, weight: .medium))
-                            Text(workingDirectoryName)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundColor(Theme.textSecondary)
-                        .help(workingDirectory ?? workingDirectoryName)
-                    }
+                .frame(width: 14, height: 14)
+            Text(displayTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let workingDirectoryName {
+                HStack(spacing: 4) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 9, weight: .medium))
+                    Text(workingDirectoryName)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
+                .font(.system(size: 10.5, weight: .regular))
+                .foregroundColor(Theme.textSecondary)
+                .help(workingDirectory ?? workingDirectoryName)
             }
             Spacer()
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 11)
-        .wandGlass(.chrome)
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(Theme.workspaceBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color(nsColor: Theme.borderSubtle))
@@ -1806,7 +1790,7 @@ struct WebFallbackContainer: View {
 
 extension Theme {
     enum LayoutMetrics {
-        static let sidebarWidth: CGFloat = 300
+        static let sidebarWidth: CGFloat = 272
         static let filePanelWidth: CGFloat = 320
     }
 }

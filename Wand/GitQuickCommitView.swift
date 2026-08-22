@@ -102,9 +102,6 @@ struct GitQuickCommitView: View {
     /// 快捷提交是单页任务，用固定的 sheet chrome 保持内容宽度和操作层级稳定。
     private var sheetHeader: some View {
         HStack(spacing: 12) {
-            Image(systemName: "arrow.triangle.branch.circle.fill")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundColor(Theme.brand)
             VStack(alignment: .leading, spacing: 2) {
                 Text("快捷提交")
                     .font(.system(size: 17, weight: .semibold))
@@ -143,24 +140,10 @@ struct GitQuickCommitView: View {
             Text(statusError)
                 .font(.footnote)
                 .foregroundColor(Theme.danger)
-        } else if let s = status {
-            if !s.isGit {
-                Text("当前会话目录不是 git 仓库")
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.textSecondary)
-            } else {
-                let count = s.modifiedCount ?? 0
-                let parts: [String] = [
-                    s.branch ?? "(no branch)",
-                    count > 0 ? "\(count) 个改动" : "工作区干净",
-                ]
-                + ((s.ahead ?? 0) > 0 ? ["↑\(s.ahead ?? 0)"] : [])
-                + ((s.behind ?? 0) > 0 ? ["↓\(s.behind ?? 0)"] : [])
-                Text(parts.joined(separator: " · "))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(Theme.textSecondary)
-                    .lineLimit(1)
-            }
+        } else if let s = status, !s.isGit {
+            Text("当前会话目录不是 git 仓库")
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textSecondary)
         }
     }
 
@@ -218,26 +201,26 @@ struct GitQuickCommitView: View {
                 .foregroundColor(Theme.textSecondary)
             Spacer()
             Button(action: generateAI) {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     if generating {
                         ProgressView().controlSize(.small)
                     } else {
-                        Text("✦").font(.system(size: 12))
+                        Image(systemName: "sparkles")
                     }
-                    Text(generating ? "生成中…" : "AI").font(.system(size: 12, weight: .medium))
+                    Text(generating ? "生成中…" : "AI 生成")
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(Capsule().stroke(Theme.border, lineWidth: 1))
+                .font(.system(size: 12, weight: .medium))
             }
-            .foregroundColor(Theme.brand)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .foregroundColor(Theme.textSecondary)
             .disabled(generating || committing || !hasChanges)
         }
 
         // Commit：上一笔 → 新 message
         VStack(alignment: .leading, spacing: 6) {
-            pairOldLine(label: "Commit", old: oldCommitLine)
-            Text("新的 Commit 信息")
+            pairOldLine(label: "上次提交", old: oldCommitLine)
+            Text("新提交")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
             TextField("留空由 AI 根据改动生成", text: $message)
@@ -254,8 +237,8 @@ struct GitQuickCommitView: View {
 
         // Tag：最新 tag → 新 tag
         VStack(alignment: .leading, spacing: 6) {
-            pairOldLine(label: "Tag", old: status?.latestTag ?? "无 tag")
-            Text("Tag（可选）")
+            pairOldLine(label: "当前 Tag", old: status?.latestTag ?? "无 tag")
+            Text("新 Tag（可选）")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
             TextField("留空则 AI 生成（拖入 Tag 球时生效）", text: $tagName)
@@ -318,7 +301,7 @@ struct GitQuickCommitView: View {
             Button(action: pushCommitsOnly) {
                 HStack(spacing: 8) {
                     if pushing { ProgressView().controlSize(.small) }
-                    Text(pushing ? "推送中…" : "推送 ↑\(ahead) 个待推 commit")
+                    Text(pushing ? "推送中…" : "推送 \(ahead) 个待推 commit")
                         .font(.system(size: 13, weight: .medium))
                 }
                 .frame(maxWidth: .infinity)
@@ -399,7 +382,6 @@ struct GitQuickCommitView: View {
         let changeCount = status?.modifiedCount ?? 0
         let ahead = status?.ahead ?? 0
         let hasPendingChanges = changeCount > 0
-        let tone: Color = hasPendingChanges ? Theme.brand : Theme.success
         let stateText = hasPendingChanges
             ? "\(changeCount) 个改动待处理"
             : (ahead > 0 ? "\(ahead) 个 commit 待推送" : "工作区干净")
@@ -407,9 +389,8 @@ struct GitQuickCommitView: View {
         return HStack(spacing: 10) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(tone)
-                .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(tone.opacity(0.13)))
+                .foregroundColor(Theme.textSecondary)
+                .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(status?.branch ?? "未识别分支")
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
@@ -422,17 +403,14 @@ struct GitQuickCommitView: View {
             }
             Spacer(minLength: 0)
             if ahead > 0 && hasPendingChanges {
-                Text("↑\(ahead)")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(Theme.success)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Theme.success.opacity(0.12)))
+                Label("领先 \(ahead)", systemImage: "arrow.up")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.surface))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(tone.opacity(0.30), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.border, lineWidth: 0.75))
     }
 
     /// 拼接非空片段；全空时回退占位文案。
@@ -446,14 +424,14 @@ struct GitQuickCommitView: View {
             Text(label)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(Theme.textSecondary)
+                .frame(width: 54, alignment: .leading)
             Text(old)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(Theme.textSecondary.opacity(0.75))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Text("→")
-                .font(.system(size: 12))
-                .foregroundColor(Theme.textSecondary.opacity(0.75))
+                .help(old)
+            Spacer(minLength: 0)
         }
     }
 
@@ -530,8 +508,8 @@ struct GitQuickCommitView: View {
                     .foregroundColor(Theme.textSecondary.opacity(0.75))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text("→")
-                    .font(.system(size: 12))
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundColor(Theme.textSecondary.opacity(0.75))
                 Text(new)
                     .font(.system(size: 12, design: .monospaced))

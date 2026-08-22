@@ -72,7 +72,12 @@ struct ConnectView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .wandGlass(.chrome)
+        .background(Theme.workspaceBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color(nsColor: Theme.borderSubtle))
+                .frame(height: 0.5)
+        }
     }
 
     @ViewBuilder
@@ -85,61 +90,36 @@ struct ConnectView: View {
     }
 
     private var desktopCard: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                WandBrandMark(size: 72)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("连接到 Wand")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundColor(Theme.textPrimary)
-                    Text("连接你的开发主机，在桌面端并排管理会话、聊天、文件与 Git 状态。")
-                        .font(.system(size: 14))
-                        .foregroundColor(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 24)
-                Label("连接码会安全绑定服务器地址与认证信息", systemImage: "lock.shield")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(width: 280, alignment: .leading)
-            .padding(32)
-            .background(Theme.wandAccent.opacity(0.07))
-
-            Rectangle()
-                .fill(Theme.border)
-                .frame(width: 1)
-
-            formContent
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(32)
-        }
-        .frame(minHeight: 430)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .wandGlassCard(cornerRadius: 20)
+        connectionCard
+            .frame(maxWidth: 500)
     }
 
     private var compactCard: some View {
-        VStack(spacing: 22) {
+        connectionCard
+    }
+
+    private var connectionCard: some View {
+        VStack(alignment: .leading, spacing: 22) {
             intro
             formContent
         }
         .padding(28)
-        .wandGlassCard(cornerRadius: 20)
+        .wandGlassCard(cornerRadius: Theme.Radius.lg)
     }
 
     private var intro: some View {
-        VStack(spacing: 14) {
-            WandBrandMark(size: 64)
-            VStack(spacing: 6) {
+        HStack(spacing: 12) {
+            Image(systemName: "network")
+                .font(.system(size: 19, weight: .medium))
+                .foregroundColor(Theme.wandAccent)
+                .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 3) {
                 Text("连接到 Wand")
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(size: 19, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                 Text("粘贴设置页的连接码，或直接输入服务器地址")
-                    .font(.system(size: 13))
+                    .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
-                    .multilineTextAlignment(.center)
             }
         }
     }
@@ -306,9 +286,9 @@ struct ConnectView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if info.isCode {
-                    Text("🔑 已绑定连接码")
-                        .font(.system(size: 10))
-                        .foregroundColor(Theme.textSecondary)
+                    Label("已绑定连接码", systemImage: "key.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Theme.textTertiary)
                 }
             }
             Spacer(minLength: 4)
@@ -337,7 +317,10 @@ struct ConnectView: View {
     }
 
     private var footerHint: some View {
-        Text("在电脑端 Wand 的「设置 → 连接 App」里获取连接码")
+        Label(
+            "在电脑端 Wand 的“设置 → 连接 App”中获取连接码",
+            systemImage: "info.circle"
+        )
             .font(.system(size: 11))
             .foregroundColor(Theme.textSecondary)
             .multilineTextAlignment(.center)

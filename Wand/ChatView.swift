@@ -9,6 +9,13 @@ private enum ComposerMetrics {
     static let actionSpacing: CGFloat = 0
 }
 
+/// Codex Desktop 的会话正文不会随窗口无限拉宽；消息和输入器共享同一条阅读轴，
+/// 宽窗口留出安静的两侧空白，窄窗口则自然吃满可用空间。
+private enum ChatLayoutMetrics {
+    static let contentMaxWidth: CGFloat = 840
+    static let horizontalInset: CGFloat = 20
+}
+
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
 /// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
@@ -29,7 +36,6 @@ struct ChatView: View {
     @State private var observedLastUserAbsoluteIndex = Int.min
     @State private var observedLatestAssistantAbsoluteIndex = Int.min
     @State private var showModelThinkingPanel = false
-    @State private var showSessionSettingsPanel = false
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
     @State private var showTroubleshooting = false
@@ -153,8 +159,9 @@ struct ChatView: View {
                     }
                     Color.clear.frame(height: 1).id("chat-bottom")
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
+                .frame(maxWidth: ChatLayoutMetrics.contentMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 12)
                 .padding(.bottom, 6)
             }
@@ -420,27 +427,28 @@ struct ChatView: View {
     // MARK: - 顶部状态
 
     private var sessionLaunchPanel: some View {
-        VStack(spacing: 18) {
-            WandBrandMark(size: 52)
-            Text(emptySessionTitle)
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(Theme.textPrimary)
-            Text(emptySessionMessage)
-                .font(.system(size: 12))
+        VStack(spacing: 9) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 22, weight: .regular))
                 .foregroundColor(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 32, height: 32)
+            Text(emptySessionTitle)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(Theme.textPrimary)
+            if store.sessionEnded || !store.isStructured {
+                Text(emptySessionMessage)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 24)
-        .frame(maxWidth: 340)
-        .wandGlassCard(cornerRadius: 20)
         .padding(.horizontal, 24)
     }
 
     private var emptySessionTitle: String {
         if store.sessionEnded { return "会话已结束" }
-        return store.isStructured ? "会话尚无消息" : "终端尚无输出"
+        return store.isStructured ? "输入消息开始对话" : "终端尚无输出"
     }
 
     private var emptySessionMessage: String {
@@ -513,9 +521,10 @@ struct ChatView: View {
             }
             inputBar
         }
+        .frame(maxWidth: ChatLayoutMetrics.contentMaxWidth)
+        .frame(maxWidth: .infinity)
         .background(
-            Theme.background
-                .opacity(0.97)
+            Theme.workspaceBackground
                 .ignoresSafeArea(edges: .bottom)
         )
     }
@@ -523,7 +532,7 @@ struct ChatView: View {
     private var inputBar: some View {
         // macOS 有稳定的桌面空间：输入区始终保持“正文 + 工具栏”两层，
         // 鼠标或键盘聚焦只改变描边颜色，不再触发布局放大/缩小。
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .bottom, spacing: ComposerMetrics.actionSpacing) {
@@ -540,18 +549,12 @@ struct ChatView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .wandGlass(.panel)
+        .background(shape.fill(Theme.surface))
         .overlay(
             shape.stroke(
                 inputFocused ? Theme.wandAccent.opacity(contrast == .increased ? 1 : 0.62) : Theme.border,
-                lineWidth: contrast == .increased ? 2 : (inputFocused ? 1.35 : 1)
+                lineWidth: contrast == .increased ? 2 : (inputFocused ? 1.2 : 0.75)
             )
-        )
-        .shadow(
-            color: inputFocused ? Theme.wandAccent.opacity(0.05) : Color.black.opacity(0.025),
-            radius: 6,
-            x: 0,
-            y: 2
         )
         .padding(.horizontal, 12)
         .padding(.top, 6)
@@ -644,11 +647,9 @@ struct ChatView: View {
                     .font(.system(size: 8, weight: .semibold))
                     .opacity(0.65)
             }
-            .foregroundColor(thinkingTint)
-            .padding(.horizontal, 9)
+            .foregroundColor(Theme.textSecondary)
+            .padding(.horizontal, 6)
             .padding(.vertical, 7)
-            .background(Capsule().fill(thinkingTint.opacity(0.10)))
-            .overlay(Capsule().stroke(thinkingTint.opacity(0.22), lineWidth: 1))
             .frame(minHeight: ComposerMetrics.actionTouchSize)
         }
         .accessibilityLabel("模型与思考深度")
@@ -696,39 +697,23 @@ struct ChatView: View {
     /// 非结构化(终端)会话不显示设置入口；正在加载或出错时整行隐藏，避免抢占焦点。
     @ViewBuilder
     private var sessionActionBar: some View {
-        if !store.loading && store.loadError == nil {
-            HStack(spacing: 8) {
+        if !store.loading && store.loadError == nil && hasGitChanges {
+            HStack {
                 gitChangesButton
                     .buttonStyle(.plain)
-                if store.isStructured {
-                    sessionSettingsMenu
-                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
+            .frame(maxWidth: ChatLayoutMetrics.contentMaxWidth)
+            .frame(maxWidth: .infinity)
             .frame(height: 34)
-            .background(Theme.background)
+            .background(Theme.workspaceBackground)
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(Color(nsColor: Theme.borderSubtle))
                     .frame(height: 0.5)
             }
-        }
-    }
-
-    private var sessionSettingsMenu: some View {
-        Button {
-            showSessionSettingsPanel = true
-        } label: {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(Theme.brand)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("会话设置")
-        .popover(isPresented: $showSessionSettingsPanel, arrowEdge: .bottom) {
-            modelThinkingPanel
         }
     }
 
@@ -794,6 +779,11 @@ struct ChatView: View {
             }
         }
         return counts
+    }
+
+    private var hasGitChanges: Bool {
+        let counts = gitChangeCounts
+        return counts.modified + counts.deleted + counts.added > 0
     }
 
     private func refreshGitStatus() {
@@ -2674,12 +2664,16 @@ private struct TurnView: View {
                     Spacer(minLength: 48)
                     Text(parsed.body)
                         .font(.system(size: 16))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.textPrimary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Theme.brand)
+                                .fill(Theme.surface)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Theme.border, lineWidth: 0.75)
                         )
                         .textSelection(.enabled)
                 }
@@ -2709,12 +2703,16 @@ private struct TurnView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.textPrimary)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Theme.brand.opacity(0.88))
+                            .fill(Theme.surface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 0.75)
                     )
                     .accessibilityLabel("文件附件 \((path as NSString).lastPathComponent)")
                 }
@@ -2997,9 +2995,17 @@ private struct MarkdownText: View {
                 .padding(.top, level <= 2 ? 3 : 1)
         case .listItem(let marker, let content, let indent, let checked):
             HStack(alignment: .top, spacing: 7) {
-                Text(checked.map { $0 ? "☑" : "☐" } ?? marker)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(checked == true ? .green : Theme.brand)
+                Group {
+                    if let checked {
+                        Image(systemName: checked ? "checkmark.square.fill" : "square")
+                            .foregroundColor(checked ? chatSuccess : Theme.textMuted)
+                    } else {
+                        Text(marker)
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                }
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 14)
                     .padding(.top, 2)
                 inlineText(content, size: 16)
             }
@@ -4263,14 +4269,17 @@ struct TodoProgressBar: View {
             Group {
                 switch todo.status {
                 case "completed":
-                    Text("✓").foregroundColor(chatSuccess)
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(chatSuccess)
                 case "in_progress":
-                    Text("›").foregroundColor(Theme.brand)
+                    Image(systemName: "circle.inset.filled")
+                        .foregroundColor(Theme.wandAccent)
                 default:
-                    Text("○").foregroundColor(Theme.textSecondary)
+                    Image(systemName: "circle")
+                        .foregroundColor(Theme.textMuted)
                 }
             }
-            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .font(.system(size: 11, weight: .semibold))
             .frame(width: 14)
             Text(todo.content)
                 .font(.system(size: 12))

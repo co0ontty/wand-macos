@@ -189,8 +189,8 @@ struct MissionsView: View {
     private var toolbar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "square.stack.3d.up.fill")
-                    .foregroundColor(Theme.wandAccent)
+                Image(systemName: "square.stack.3d.up")
+                    .foregroundColor(Theme.textSecondary)
                 Text("并行任务")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
@@ -210,11 +210,12 @@ struct MissionsView: View {
             }
             .buttonStyle(WandPrimaryButtonStyle())
             Button("关闭", action: onDismiss)
-                .buttonStyle(WandSecondaryButtonStyle())
+                .buttonStyle(.borderless)
+                .foregroundColor(Theme.textSecondary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Theme.surface.opacity(0.68))
+        .background(Theme.workspaceBackground)
     }
 
     @ViewBuilder private var missionsWorkspace: some View {
@@ -222,9 +223,7 @@ struct MissionsView: View {
             MissionEmptyState(
                 icon: "point.3.connected.trianglepath.dotted",
                 title: "还没有并行任务",
-                detail: "把同一个目标分派给多个 Agent，在独立 worktree 中并行推进。",
-                actionTitle: "新建任务",
-                action: { showCreate = true }
+                detail: "把同一个目标分派给多个 Agent，在独立 worktree 中并行推进。"
             )
         } else {
             HSplitView {
@@ -559,7 +558,7 @@ private struct MissionSidebarRow: View {
         }
         .padding(11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .wandSelectionSurface(isSelected: selected, isHovered: hovered, cornerRadius: 12)
+        .wandSelectionSurface(isSelected: selected, isHovered: hovered, cornerRadius: 8)
         .onHover { hovered = $0 }
     }
 }
@@ -585,11 +584,11 @@ private struct MissionAttemptChip: View {
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? Theme.wandAccent.opacity(0.12) : Theme.surfaceElevated.opacity(0.72))
+                .fill(selected ? Theme.textPrimary.opacity(0.07) : Theme.surfaceElevated.opacity(0.72))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(selected ? Theme.wandAccent.opacity(0.46) : Theme.border.opacity(0.55), lineWidth: 1)
+                .stroke(selected ? Theme.border : Theme.border.opacity(0.55), lineWidth: 0.75)
         )
     }
 }
@@ -696,10 +695,13 @@ private struct MissionCreateView: View {
                                         Text(provider.title)
                                     }
                                     .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(providers.contains(provider.id) ? Theme.wandAccent : Theme.textSecondary)
+                                    .foregroundColor(providers.contains(provider.id) ? Theme.textPrimary : Theme.textSecondary)
                                     .padding(.horizontal, 9)
                                     .padding(.vertical, 7)
-                                    .background(RoundedRectangle(cornerRadius: 9).fill(Theme.surfaceElevated))
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(providers.contains(provider.id) ? Theme.textPrimary.opacity(0.07) : Theme.surfaceElevated)
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -814,12 +816,12 @@ private struct MissionEmptyState: View {
     var action: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 9) {
             Image(systemName: icon)
-                .font(.system(size: 36, weight: .medium))
+                .font(.system(size: 24, weight: .medium))
                 .foregroundColor(Theme.textMuted)
             Text(title)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
             Text(detail)
                 .font(.system(size: 12))
