@@ -1743,8 +1743,7 @@ struct SessionTile: View {
                         .font(.system(size: 15))
                         .foregroundColor(checked ? Theme.wandAccent : Theme.textSecondary)
                 } else {
-                    BrandLogoShape(provider: provider)
-                        .fill(Theme.providerColor(provider))
+                    BrandLogo(provider: provider, color: Theme.textPrimary)
                         .frame(width: 15, height: 15)
                 }
             }
@@ -1816,8 +1815,7 @@ struct HistoryTile: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            BrandLogoShape(provider: history.provider)
-                .fill(Theme.providerColor(history.provider))
+            BrandLogo(provider: history.provider, color: Theme.textPrimary)
                 .frame(width: 15, height: 15)
                 .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 3) {
@@ -1952,8 +1950,7 @@ struct SessionHeaderView: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            BrandLogoShape(provider: provider)
-                .fill(providerColor)
+            BrandLogo(provider: provider, color: Theme.textPrimary)
                 .frame(width: 14, height: 14)
             Text(displayTitle)
                 .font(.system(size: 13, weight: .semibold))

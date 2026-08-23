@@ -74,6 +74,9 @@ struct NewTaskSheetBody: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .tint(Theme.wandAccent)
+                        .onChange(of: worktreeEnabled) { _, enabled in
+                            store.rememberCreationChoice(worktree: enabled)
+                        }
                 }
                 .padding(10)
                 .background(
@@ -105,6 +108,11 @@ struct NewTaskSheetBody: View {
         .hideNativeTitleBar()
         .onAppear {
             cwd = request.cwd
+            worktreeEnabled = store.defaultTaskWorktree
+            Task {
+                await store.loadCreationDefaults()
+                worktreeEnabled = store.defaultTaskWorktree
+            }
         }
     }
 

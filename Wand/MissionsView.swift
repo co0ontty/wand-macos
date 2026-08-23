@@ -22,8 +22,7 @@ private struct MissionProviderMark: View {
     let size: CGFloat
 
     var body: some View {
-        BrandLogoShape(provider: provider)
-            .fill(color)
+        BrandLogo(provider: provider, color: color)
             .frame(width: size, height: size)
             .accessibilityLabel(provider.capitalized)
     }

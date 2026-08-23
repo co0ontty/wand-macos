@@ -15,6 +15,9 @@ struct WorkspaceTargetPicker: View {
                     ForEach(WorkspaceSessionTarget.allCases) { target in
                         targetRow(target)
                     }
+                    if store.selectedTarget != .shell {
+                        kindPicker
+                    }
                     if let error = store.creationError {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.footnote)
@@ -44,7 +47,7 @@ struct WorkspaceTargetPicker: View {
         let selected = store.selectedTarget == target
         return Button {
             guard !store.creating else { return }
-            store.selectedTarget = target
+            store.rememberCreationChoice(provider: target)
         } label: {
             HStack(spacing: 12) {
                 BrandLogo(
@@ -85,6 +88,45 @@ struct WorkspaceTargetPicker: View {
         }
         .buttonStyle(.plain)
         .disabled(store.creating)
+    }
+
+    private var kindPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("会话类型")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textSecondary)
+                .padding(.top, 6)
+            HStack(spacing: 8) {
+                ForEach(WorkspaceSessionKind.allCases) { option in
+                    let selected = store.selectedKind == option
+                    Button {
+                        guard !store.creating else { return }
+                        store.rememberCreationChoice(kind: option)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(selected ? Theme.wandAccent : Theme.textPrimary)
+                            Text(option.summary)
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(selected ? Theme.wandAccent.opacity(0.08) : Theme.surface.opacity(0.88))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(selected ? Theme.wandAccent : Theme.border, lineWidth: selected ? 1.5 : 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.creating)
+                }
+            }
+        }
     }
 
     private var sheetHeader: some View {

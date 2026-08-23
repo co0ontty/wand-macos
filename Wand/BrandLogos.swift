@@ -1,15 +1,18 @@
 import SwiftUI
 
 // MARK: - 品牌 logo 矢量 Shape
-// Claude / Codex / Grok 路径来自 simple-icons（CC0）的 24x24 viewBox；OpenCode / Qoder
-// 使用本地几何字形，Pi 使用 pi.dev/logo-auto.svg 的官方像素标。
-// 填充色由调用方 .fill(color) 决定。
-// 用法：BrandLogoShape(provider: session.provider).fill(tint).frame(width: 21, height: 21)
+// Claude / Codex / Grok 路径来自 simple-icons（CC0）的 24x24 viewBox；
+// OpenCode / Qoder 使用官方多色标，Pi 使用 pi.dev/logo-auto.svg 的官方像素标。
+// 尽量保留各工具原生配色，不再套 Wand 橙色。color 只供终端 / 未知 provider 使用。
+// 用法：BrandLogo(provider: session.provider).frame(width: 21, height: 21)
 
-/// 工作区 / 任务窗口使用的着色 logo。终端窗口没有品牌标，回落到系统终端图标。
+/// 工作区 / 任务窗口使用的原生 logo。终端窗口没有品牌标，回落到系统终端图标。
 struct BrandLogo: View {
     let provider: String?
-    let color: Color
+    var color: Color = .primary
+    var onDark: Bool? = nil
+
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let normalized = provider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -19,9 +22,61 @@ struct BrandLogo: View {
                 .aspectRatio(contentMode: .fit)
                 .foregroundColor(color)
         } else {
-            BrandLogoShape(provider: provider)
-                .fill(color)
+            officialMark
         }
+    }
+
+    @ViewBuilder
+    private var officialMark: some View {
+        switch WandProvider(normalizing: provider) {
+        case .qoder:
+            Image("QoderLogo")
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+        case .opencode:
+            OfficialOpenCodeLogo()
+        case .claude:
+            BrandLogoShape(provider: provider)
+                .fill(BrandLogoPalette.claude)
+        case .codex, .grok, .pi:
+            BrandLogoShape(provider: provider)
+                .fill(monoFill)
+        }
+    }
+
+    private var monoFill: Color {
+        (onDark ?? (colorScheme == .dark)) ? .white : .black
+    }
+}
+
+enum BrandLogoPalette {
+    /// Anthropic / Claude 官方 brand orange。
+    static let claude = Color(red: 217 / 255, green: 119 / 255, blue: 87 / 255)
+}
+
+/// OpenCode 官方三色标，与 Android / Web 的 mark.svg 一致。
+private struct OfficialOpenCodeLogo: View {
+    var body: some View {
+        Canvas { context, size in
+            let sx = size.width / 512
+            let sy = size.height / 512
+            func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> Path {
+                Path(CGRect(x: x * sx, y: y * sy, width: w * sx, height: h * sy))
+            }
+            context.fill(
+                rect(0, 0, 512, 512),
+                with: .color(Color(red: 19 / 255, green: 16 / 255, blue: 16 / 255))
+            )
+            context.fill(
+                rect(192, 224, 128, 128),
+                with: .color(Color(red: 90 / 255, green: 88 / 255, blue: 88 / 255))
+            )
+            var window = Path(CGRect(x: 128 * sx, y: 96 * sy, width: 256 * sx, height: 320 * sy))
+            window.addRect(CGRect(x: 192 * sx, y: 160 * sy, width: 128 * sx, height: 192 * sy))
+            context.fill(window, with: .color(.white), style: FillStyle(eoFill: true))
+        }
+        .aspectRatio(1, contentMode: .fit)
     }
 }
 

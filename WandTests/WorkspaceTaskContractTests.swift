@@ -2,6 +2,24 @@ import XCTest
 
 /// 任务一级容器契约的对齐测试（与 iOS WorkspaceWorktreeTests 同源，防两端漂移）。
 final class WorkspaceTaskContractTests: XCTestCase {
+    func testTaskListPresentationShortensPathsAndAvoidsSharedDirectoryLabel() {
+        XCTAssertEqual(
+            TaskListPresentation.shortenWorkspacePath("/Users/me/Self/vibe_coding/wand"),
+            "…/vibe_coding/wand"
+        )
+        XCTAssertEqual(TaskListPresentation.taskIsolationCaption(isolated: false), "共享")
+        XCTAssertEqual(
+            TaskListPresentation.listSessionLabel(
+                title: "wand",
+                providerLabel: "Pi",
+                cwd: "/Users/me/wand",
+                index: 0,
+                parentNames: ["wand"]
+            ),
+            "Pi 1"
+        )
+    }
+
     func testCreateTaskWorktreeFlagOmitsByDefaultAndSendsFalseExplicitly() {
         // 缺省不传 worktree，交由服务端默认（git 仓库自动隔离）。
         let defaultTask = createWorkspaceTaskRequest(

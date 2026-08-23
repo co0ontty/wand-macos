@@ -8,6 +8,7 @@ struct WorkspaceTaskView: View {
     let api: WandAPI
     @ObservedObject var store: WorkspaceStore
     @ObservedObject var gitStatusStore: GitStatusStore
+    @State private var pendingDeleteSession: WorkspaceSessionSummary?
 
     var body: some View {
         ZStack {
@@ -19,6 +20,20 @@ struct WorkspaceTaskView: View {
         }
         .task(id: task.id) {
             await store.openTask(workspace: workspace, task: task)
+        }
+        .alert("删除终端？", isPresented: Binding(
+            get: { pendingDeleteSession != nil },
+            set: { if !$0 { pendingDeleteSession = nil } }
+        )) {
+            Button("取消", role: .cancel) { pendingDeleteSession = nil }
+            Button("删除", role: .destructive) {
+                if let id = pendingDeleteSession?.id {
+                    Task { try? await store.deleteSessions([id]) }
+                }
+                pendingDeleteSession = nil
+            }
+        } message: {
+            Text("终端会结束并被删除，此操作无法撤销。")
         }
     }
 
@@ -64,7 +79,7 @@ struct WorkspaceTaskView: View {
             Text(detail.name)
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
-            Text(detail.isIsolated ? "独立 worktree 已就绪" : "使用项目共享目录")
+            Text(detail.isIsolated ? "独立 worktree 已就绪" : "在任务目录中运行")
                 .font(.system(size: 13))
                 .foregroundColor(Theme.textSecondary)
             Button {
@@ -127,33 +142,54 @@ struct WorkspaceTaskView: View {
             HStack(spacing: 6) {
                 ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                     let selected = store.visibleSessionID == session.id
-                    Button {
-                        Task { await store.selectSession(id: session.id) }
-                    } label: {
-                        HStack(spacing: 7) {
-                            BrandLogo(
-                                provider: session.provider ?? "terminal",
-                                color: selected ? Theme.wandAccent : Theme.textSecondary
-                            )
-                            .frame(width: 13, height: 13)
-                            Text(sessionLabel(session, index: index))
-                                .font(.system(size: 12, weight: selected ? .semibold : .medium))
-                                .lineLimit(1)
-                            if ["initializing", "running", "thinking"].contains(session.status ?? "") {
-                                Circle()
-                                    .fill(Theme.success)
-                                    .frame(width: 6, height: 6)
+                    HStack(spacing: 0) {
+                        Button {
+                            Task { await store.selectSession(id: session.id) }
+                        } label: {
+                            HStack(spacing: 7) {
+                                BrandLogo(
+                                    provider: session.provider ?? "terminal",
+                                    color: selected ? Theme.wandAccent : Theme.textSecondary
+                                )
+                                .frame(width: 13, height: 13)
+                                Text(sessionLabel(session, index: index))
+                                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                                    .lineLimit(1)
+                                if ["initializing", "running", "thinking"].contains(session.status ?? "") {
+                                    Circle()
+                                        .fill(Theme.success)
+                                        .frame(width: 6, height: 6)
+                                }
                             }
+                            .foregroundColor(selected ? Theme.textPrimary : Theme.textSecondary)
+                            .padding(.leading, 10)
+                            .padding(.trailing, 4)
+                            .frame(height: 30)
                         }
-                        .foregroundColor(selected ? Theme.textPrimary : Theme.textSecondary)
-                        .padding(.horizontal, 10)
-                        .frame(height: 30)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(selected ? Theme.textPrimary.opacity(0.08) : Color.clear)
-                        )
+                        .buttonStyle(.plain)
+
+                        Button {
+                            pendingDeleteSession = session
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundColor(Theme.textMuted)
+                                .frame(width: 20, height: 30)
+                        }
+                        .buttonStyle(.plain)
+                        .help("删除终端")
                     }
-                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(selected ? Theme.textPrimary.opacity(0.08) : Color.clear)
+                    )
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            pendingDeleteSession = session
+                        } label: {
+                            Label("删除终端", systemImage: "trash")
+                        }
+                    }
                 }
 
                 Button { store.presentTargetPicker() } label: {
@@ -208,8 +244,13 @@ struct WorkspaceTaskView: View {
     }
 
     private func sessionLabel(_ session: WorkspaceSessionSummary, index: Int) -> String {
-        let title = session.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return title.isEmpty ? "\(session.providerLabel) \(index + 1)" : title
+        TaskListPresentation.listSessionLabel(
+            title: session.title,
+            providerLabel: session.providerLabel,
+            cwd: session.cwd,
+            index: index,
+            parentNames: [workspace.name, task.name]
+        )
     }
 
     private func warningBanner(_ message: String) -> some View {

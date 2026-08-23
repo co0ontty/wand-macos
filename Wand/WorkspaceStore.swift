@@ -13,7 +13,8 @@ protocol WorkspaceServing: AnyObject {
     ) async throws -> TaskWindowLayout?
     func createWorkspaceTaskWindow(
         target: WorkspaceSessionTarget,
-        binding: WorkspaceBinding
+        binding: WorkspaceBinding,
+        kind: WorkspaceSessionKind
     ) async throws -> SessionSnapshot
     func getSession(id: String, blockBudget: Int) async throws -> SessionSnapshot
     func workspaceDefaultProvider() async throws -> WandProvider
@@ -32,6 +33,7 @@ protocol WorkspaceServing: AnyObject {
         worktree: Bool?
     ) async throws -> WorkspaceTaskCreation
     func listTaskGroups() async throws -> [TaskDirectoryGroup]
+    func deleteWorkspaceSessions(sessionIds: [String]) async throws -> Int
     func workspaceWorktreeOverview(workspaceId: String) async throws -> WorkspaceWorktreeOverview
     func startWorktreeMergeAgent(
         workspace: Workspace,
@@ -88,6 +90,8 @@ final class WorkspaceStore: ObservableObject {
 
     @Published var pickerPresented = false
     @Published var selectedTarget: WorkspaceSessionTarget = .claude
+    @Published var selectedKind: WorkspaceSessionKind = .structured
+    @Published private(set) var defaultTaskWorktree = true
     @Published private(set) var creating = false
     @Published private(set) var creationError: String?
 
@@ -363,6 +367,14 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    func deleteSessions(_ sessionIds: [String]) async throws {
+        _ = try await api.deleteWorkspaceSessions(sessionIds: sessionIds)
+        await loadTaskGroups(force: true)
+        if let workspace = currentWorkspace, let task = currentTask {
+            await openTask(workspace: workspace, task: task)
+        }
+    }
+
     func openTask(workspace: Workspace, task: WorkspaceTask) async {
         taskGeneration &+= 1
         sessionGeneration &+= 1
@@ -380,6 +392,7 @@ final class WorkspaceStore: ObservableObject {
         selectedTarget = WorkspaceSessionTarget(
             provider: workspace.defaultProvider ?? serverDefaultProvider
         )
+        selectedKind = .structured
 
         do {
             let detail = try await api.getWorkspaceTask(taskId: task.id)
@@ -422,10 +435,40 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    func loadCreationDefaults() async {
+        guard let api = api as? WandAPI, let config = try? await api.serverConfig() else { return }
+        defaultTaskWorktree = config.defaultTaskWorktree != false
+        selectedKind = config.defaultSessionKind == "pty" ? .pty : .structured
+        if let raw = config.defaultProvider,
+           let target = WorkspaceSessionTarget(rawValue: raw),
+           target != .shell {
+            selectedTarget = target
+        }
+    }
+
+    func rememberCreationChoice(
+        provider: WorkspaceSessionTarget? = nil,
+        kind: WorkspaceSessionKind? = nil,
+        worktree: Bool? = nil
+    ) {
+        if let provider, provider != .shell { selectedTarget = provider }
+        if let kind { selectedKind = kind }
+        if let worktree { defaultTaskWorktree = worktree }
+        Task {
+            guard let api = api as? WandAPI else { return }
+            try? await api.updateCreationDefaults(
+                defaultProvider: provider.flatMap { $0 == .shell ? nil : $0.rawValue },
+                defaultSessionKind: kind?.rawValue,
+                defaultTaskWorktree: worktree
+            )
+        }
+    }
+
     func presentTargetPicker() {
         guard taskState.detail != nil, !creating else { return }
         creationError = nil
         pickerPresented = true
+        Task { await loadCreationDefaults() }
     }
 
     func dismissTargetPicker() {
@@ -453,7 +496,11 @@ final class WorkspaceStore: ObservableObject {
         layoutWarning = nil
 
         do {
-            let created = try await api.createWorkspaceTaskWindow(target: target, binding: binding)
+            let created = try await api.createWorkspaceTaskWindow(
+                target: target,
+                binding: binding,
+                kind: target == .shell ? .pty : selectedKind
+            )
             guard isCurrentTask(task.id, generation: generation), !Task.isCancelled else {
                 creating = false
                 return

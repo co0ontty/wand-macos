@@ -113,6 +113,17 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
         case .pi: return "Pi"
         }
     }
+
+    var structuredRunner: String {
+        switch self {
+        case .claude: return "claude-cli-print"
+        case .codex: return "codex-cli-exec"
+        case .opencode: return "opencode-cli-run"
+        case .grok: return "grok-cli-headless"
+        case .qoder: return "qoder-cli-print"
+        case .pi: return "pi-cli-json"
+        }
+    }
 }
 
 // MARK: - 特殊工具卡片的 input 模型
@@ -837,6 +848,7 @@ struct ServerConfigInfo: Decodable {
     let defaultCwd: String?
     let defaultProvider: String?
     let defaultSessionKind: String?
+    let defaultTaskWorktree: Bool?
     let defaultMode: String?
     let defaultModel: String?
     let defaultCodexModel: String?

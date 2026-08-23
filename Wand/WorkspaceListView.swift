@@ -349,10 +349,12 @@ struct WorkspaceListView: View {
                                     .foregroundColor(Theme.textMuted)
                             }
                         }
-                        Text((group.workspaceCwd as NSString).lastPathComponent)
-                            .font(.system(size: 10))
-                            .foregroundColor(Theme.textMuted)
-                            .lineLimit(1)
+                        if let caption = TaskListPresentation.directoryPathCaption(name: group.workspaceName, cwd: group.workspaceCwd) {
+                            Text(caption)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.textMuted)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer(minLength: 0)
                     let sessionTotal = group.tasks.reduce(0) { $0 + $1.sessions.count } + group.standaloneSessions.count
@@ -405,7 +407,7 @@ struct WorkspaceListView: View {
                         .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
-                    Text(summary.isIsolated ? (summary.worktree?.branch ?? "独立 worktree") : "共享目录")
+                    Text(TaskListPresentation.taskIsolationCaption(isolated: summary.isIsolated))
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(Theme.textMuted)
                         .lineLimit(1)
@@ -589,7 +591,13 @@ struct WorkspaceListView: View {
                 BrandLogo(provider: session.provider ?? "terminal", color: Theme.textSecondary)
                     .frame(width: 13, height: 13)
                     .frame(width: 18, height: 18)
-                Text(session.title?.isEmpty == false ? session.title! : "未命名会话")
+                Text(TaskListPresentation.listSessionLabel(
+                    title: session.title,
+                    providerLabel: session.providerLabel,
+                    cwd: session.cwd,
+                    index: 0,
+                    parentNames: [workspace.name]
+                ))
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
                     .lineLimit(1)
@@ -604,6 +612,13 @@ struct WorkspaceListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                Task { try? await store.deleteSessions([session.id]) }
+            } label: {
+                Label("删除终端", systemImage: "trash")
+            }
+        }
     }
 
     private func taskRow(_ task: WorkspaceTask, workspace: Workspace) -> some View {
@@ -621,7 +636,7 @@ struct WorkspaceListView: View {
                         .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
-                    Text(task.worktree == nil ? "共享目录" : (task.worktree?.branch ?? "独立 worktree"))
+                    Text(TaskListPresentation.taskIsolationCaption(isolated: task.worktree != nil))
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(Theme.textMuted)
                         .lineLimit(1)

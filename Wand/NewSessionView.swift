@@ -376,8 +376,7 @@ struct NewSessionView: View {
                     provider = tool
                 } label: {
                     HStack(spacing: 6) {
-                        BrandLogoShape(provider: tool.rawValue)
-                            .fill(Theme.providerColor(tool.rawValue))
+                        BrandLogo(provider: tool.rawValue, color: Theme.textPrimary)
                             .frame(width: 13, height: 13)
                         Text(tool.label)
                             .font(.system(size: 12, weight: provider == tool ? .semibold : .medium))

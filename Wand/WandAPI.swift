@@ -647,6 +647,19 @@ final class WandAPI {
         _ = try await requestData(method: "POST", path: "/api/settings/config", body: body)
     }
 
+    func updateCreationDefaults(
+        defaultProvider: String? = nil,
+        defaultSessionKind: String? = nil,
+        defaultTaskWorktree: Bool? = nil
+    ) async throws {
+        var body: [String: Any] = [:]
+        if let defaultProvider { body["defaultProvider"] = defaultProvider }
+        if let defaultSessionKind { body["defaultSessionKind"] = defaultSessionKind }
+        if let defaultTaskWorktree { body["defaultTaskWorktree"] = defaultTaskWorktree }
+        guard !body.isEmpty else { return }
+        _ = try await requestData(method: "POST", path: "/api/settings/config", body: body)
+    }
+
     func macUpdate(currentVersion: String) async throws -> MacUpdateInfo {
         try await request(
             MacUpdateInfo.self,
