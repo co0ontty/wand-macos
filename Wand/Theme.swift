@@ -393,7 +393,7 @@ extension View {
     }
 
     /// 主窗口用：隐藏原生标题栏并让内容铺满整个窗口（fullSizeContentView），
-    /// 自绘顶栏顶到窗口上沿，红绿灯浮在顶栏左侧；WandTopBar 需自行留出红绿灯安全区。
+    /// 自绘顶栏顶到窗口上沿，红绿灯浮在侧栏首行左侧；侧栏首行需自行留出红绿灯安全区。
     func extendContentUnderTitleBar() -> some View {
         background(MainWindowTitleBarConfigurator())
     }
@@ -518,7 +518,8 @@ private final class SheetTitleBarNSView: NSView {
 }
 
 /// 主窗口版：在 sheet 版基础上再把内容延伸进标题栏区域（fullSizeContentView），
-/// 自绘 WandTopBar 直接铺到窗口上沿，红绿灯浮在顶栏上而不是压一条系统灰条。
+/// 主窗口版：在 sheet 版基础上再把内容延伸进标题栏区域（fullSizeContentView），
+/// 内容直接铺到窗口上沿，红绿灯浮在侧栏首行上而不是压一条系统灰条。
 private struct MainWindowTitleBarConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         MainWindowTitleBarNSView()

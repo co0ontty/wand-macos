@@ -14,7 +14,7 @@ struct WandApp: App {
         WindowGroup("Wand") {
             ContentView()
                 .environmentObject(store)
-                // 隐藏原生标题栏：自绘 WandTopBar 铺到窗口上沿，红绿灯浮在顶栏左侧。
+                // 隐藏原生标题栏：内容铺满整个窗口，红绿灯浮在侧栏首行左侧。
                 .extendContentUnderTitleBar()
                 .frame(
                     // 横屏布局:ideal 1440 × 880,最小 900 × 600;
@@ -23,8 +23,8 @@ struct WandApp: App {
                     minHeight: 600, idealHeight: 880, maxHeight: .infinity
                 )
         }
-        // 顶部不再使用系统统一工具栏；应用顶栏完全由 MainShellView 内的
-        // WandTopBar 自绘，与暖米色主题和扁平面板统一。
+        // 顶部不再使用系统统一工具栏，也不设横贯窗口的自绘顶栏；
+        // 全局操作收进 MainShellView 的侧栏首行，与暖米色主题和扁平面板统一。
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {
