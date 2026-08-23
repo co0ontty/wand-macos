@@ -516,6 +516,7 @@ final class WandAPI {
         title: String?,
         prompt: String,
         cwd: String,
+        taskId: String? = nil,
         providers: [String],
         baseRef: String?,
         sharedDirectories: [String],
@@ -529,6 +530,7 @@ final class WandAPI {
             "copyPaths": copyPaths,
         ]
         if let title, !title.isEmpty { body["title"] = title }
+        if let taskId, !taskId.isEmpty { body["taskId"] = taskId }
         if let baseRef, !baseRef.isEmpty { body["baseRef"] = baseRef }
         return try await request(MissionInfo.self, method: "POST", path: "/api/missions", body: body)
     }

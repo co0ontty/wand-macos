@@ -108,6 +108,9 @@ private func missionStatePresentation(_ state: String) -> (String, String, Color
 
 struct MissionsView: View {
     let api: WandAPI
+    var linkedTaskId: String? = nil
+    var linkedTaskName: String? = nil
+    var linkedTaskCwd: String? = nil
     let onOpenSession: (String) -> Void
     let onDismiss: () -> Void
 
@@ -154,7 +157,12 @@ struct MissionsView: View {
         .frame(minWidth: 960, minHeight: 660)
         .background(WandAmbientBackground())
         .sheet(isPresented: $showCreate) {
-            MissionCreateView(api: api) { mission in
+            MissionCreateView(
+                api: api,
+                linkedTaskId: linkedTaskId,
+                linkedTaskName: linkedTaskName,
+                linkedTaskCwd: linkedTaskCwd
+            ) { mission in
                 missions.removeAll { $0.id == mission.id }
                 missions.insert(mission, at: 0)
                 selectMission(mission)
@@ -643,6 +651,9 @@ private struct MissionReviewComposer: View {
 
 private struct MissionCreateView: View {
     let api: WandAPI
+    var linkedTaskId: String? = nil
+    var linkedTaskName: String? = nil
+    var linkedTaskCwd: String? = nil
     let onCreated: (MissionInfo) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -670,6 +681,17 @@ private struct MissionCreateView: View {
             Divider().opacity(0.3)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let linkedTaskName, !linkedTaskName.isEmpty {
+                        Text("将关联任务「\(linkedTaskName)」。派发会话会落在该任务目录，不再叠加隔离 worktree。")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Theme.wandAccent.opacity(0.08))
+                            )
+                    }
                     MissionFormField(title: "标题", detail: "可选；留空时取提示词第一行") {
                         TextField("例如：重构上传流程", text: $title)
                             .textFieldStyle(.roundedBorder)
@@ -743,7 +765,13 @@ private struct MissionCreateView: View {
         .frame(width: 760, height: 660)
         .background(WandAmbientBackground())
         .task {
-            if cwd.isEmpty { cwd = (try? await api.serverConfig().defaultCwd) ?? "" }
+            if cwd.isEmpty {
+                if let linkedTaskCwd, !linkedTaskCwd.isEmpty {
+                    cwd = linkedTaskCwd
+                } else {
+                    cwd = (try? await api.serverConfig().defaultCwd) ?? ""
+                }
+            }
         }
         .alert("无法创建任务", isPresented: Binding(
             get: { errorMessage != nil },
@@ -772,6 +800,7 @@ private struct MissionCreateView: View {
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
                 cwd: cwd.trimmingCharacters(in: .whitespacesAndNewlines),
+                taskId: linkedTaskId,
                 providers: MissionProviderOption.all.map(\.id).filter { providers.contains($0) },
                 baseRef: baseRef.trimmingCharacters(in: .whitespacesAndNewlines),
                 sharedDirectories: paths(sharedPaths),

@@ -371,11 +371,22 @@ final class WorkspaceStore: ObservableObject {
         _ = try await api.deleteWorkspaceSessions(sessionIds: sessionIds)
         await loadTaskGroups(force: true)
         if let workspace = currentWorkspace, let task = currentTask {
-            await openTask(workspace: workspace, task: task)
+            await openTask(workspace: workspace, task: task, preferredSessionId: visibleSessionID)
         }
     }
 
-    func openTask(workspace: Workspace, task: WorkspaceTask) async {
+    func clearTaskSessions(taskId: String) async throws {
+        let detail = try await api.getWorkspaceTask(taskId: taskId)
+        let ids = detail.sessions.map(\.id)
+        guard !ids.isEmpty else { return }
+        try await deleteSessions(ids)
+    }
+
+    func openTask(
+        workspace: Workspace,
+        task: WorkspaceTask,
+        preferredSessionId: String? = nil
+    ) async {
         taskGeneration &+= 1
         sessionGeneration &+= 1
         let generation = taskGeneration
@@ -397,11 +408,16 @@ final class WorkspaceStore: ObservableObject {
         do {
             let detail = try await api.getWorkspaceTask(taskId: task.id)
             guard isCurrentTask(task.id, generation: generation), !Task.isCancelled else { return }
-            await applyLoadedDetail(detail, preferredSessionId: nil, generation: generation)
+            await applyLoadedDetail(detail, preferredSessionId: preferredSessionId, generation: generation)
         } catch {
             guard isCurrentTask(task.id, generation: generation), !Task.isCancelled else { return }
             taskState = .failed(error.localizedDescription)
         }
+    }
+
+    func openTaskAndPresentPicker(workspace: Workspace, task: WorkspaceTask) async {
+        await openTask(workspace: workspace, task: task)
+        presentTargetPicker()
     }
 
     func reloadCurrentTask() async {

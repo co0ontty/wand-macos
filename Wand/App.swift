@@ -37,14 +37,10 @@ struct WandApp: App {
                     NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                 }
                 .keyboardShortcut(",", modifiers: [.command, .shift])
-                Button("显示会话") {
-                    NotificationCenter.default.post(name: .wandRequestSidebarSection, object: SidebarSection.sessions)
-                }
-                .keyboardShortcut("1", modifiers: .command)
-                Button("显示项目") {
+                Button("显示任务") {
                     NotificationCenter.default.post(name: .wandRequestSidebarSection, object: SidebarSection.workspaces)
                 }
-                .keyboardShortcut("2", modifiers: .command)
+                .keyboardShortcut("1", modifiers: .command)
                 Button("并行任务") {
                     NotificationCenter.default.post(name: .wandRequestOpenMissions, object: nil)
                 }

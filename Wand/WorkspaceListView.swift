@@ -1,14 +1,5 @@
 import SwiftUI
 
-/// 任务面板的显示模式：任务聚合为默认，项目树保留为高级入口。
-enum WorkspaceListDisplayMode: String, CaseIterable, Identifiable {
-    case tasks
-    case projects
-
-    var id: String { rawValue }
-    var title: String { self == .tasks ? "任务" : "项目" }
-}
-
 struct WorkspaceTaskSelection: Equatable {
     let workspace: Workspace
     let task: WorkspaceTask
@@ -26,11 +17,15 @@ struct WorkspaceListView: View {
     @ObservedObject var store: WorkspaceStore
     let api: WandAPI
     let selectedTaskId: String?
+    var selectedSessionId: String? = nil
     let query: String
     let onOpenTask: (Workspace, WorkspaceTask) -> Void
     var onTaskRenamed: ((WorkspaceTask) -> Void)? = nil
     var onTaskDeleted: ((String) -> Void)? = nil
     var onOpenSession: ((Workspace, WorkspaceSessionSummary) -> Void)? = nil
+    var onOpenTaskSession: ((Workspace, WorkspaceTask, WorkspaceSessionSummary) -> Void)? = nil
+    var onRequestNewSession: ((Workspace, WorkspaceTask) -> Void)? = nil
+    var onOpenParallel: ((Workspace, WorkspaceTask) -> Void)? = nil
     var onMergeAgentStarted: ((Workspace, SessionSnapshot) -> Void)? = nil
     var onWorkspaceDeleted: ((String) -> Void)? = nil
     var onCreateWorkspace: (() -> Void)? = nil
@@ -43,10 +38,11 @@ struct WorkspaceListView: View {
     @State private var deleteTarget: WorkspaceTask?
     @State private var deleteBusy = false
     @State private var deleteError: String?
-    /// 任务一级视图（GET /api/tasks 聚合）与项目树的显示切换。
-    @State private var displayMode: WorkspaceListDisplayMode = .tasks
     @State private var expandedTaskGroups = Set<String>()
+    @State private var expandedTaskIds = Set<String>()
     @State private var expandedLooseGroups = Set<String>()
+    @State private var clearTarget: WorkspaceTaskSummary?
+    @State private var clearBusy = false
     @State private var renameWorkspaceTarget: Workspace?
     @State private var renameWorkspaceDraft = ""
     @State private var renameWorkspaceError: String?
@@ -61,7 +57,6 @@ struct WorkspaceListView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                displayModePicker
                 stateContent
             }
             if let toastMessage {
@@ -83,6 +78,9 @@ struct WorkspaceListView: View {
                 await store.loadWorkspaceIndex()
             }
             await store.loadTaskGroups()
+        }
+        .onChange(of: selectedTaskId) { taskId in
+            if let taskId { expandedTaskIds.insert(taskId) }
         }
         .onChange(of: store.workspaces.map(\.id).joined(separator: ",")) { ids in
             if expandedWorkspaceIds.isEmpty {
@@ -157,6 +155,23 @@ struct WorkspaceListView: View {
         } message: {
             Text(deleteError ?? deleteWorkspaceError ?? "")
         }
+        .confirmationDialog(
+            "清空全部终端？",
+            isPresented: Binding(
+                get: { clearTarget != nil },
+                set: { if !$0 { clearTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(clearBusy ? "清空中…" : "确认清空", role: .destructive) {
+                Task { await confirmClearSessions() }
+            }
+            Button("取消", role: .cancel) { clearTarget = nil }
+        } message: {
+            if let target = clearTarget {
+                Text("将结束并删除「\(target.name)」的 \(target.listedSessionCount) 个终端，此操作无法撤销。")
+            }
+        }
     }
 
     private var expandedWorkspaceIdsDescription: String {
@@ -183,20 +198,6 @@ struct WorkspaceListView: View {
         }
     }
 
-    /// 任务/项目模式切换条（对齐 iOS TaskDisplayMode）。
-    private var displayModePicker: some View {
-        Picker("显示方式", selection: $displayMode) {
-            ForEach(WorkspaceListDisplayMode.allCases) { mode in
-                Text(mode.title).tag(mode)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .controlSize(.small)
-        .padding(.horizontal, 8)
-        .padding(.bottom, 6)
-    }
-
     private var visibleWorkspaces: [Workspace] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return store.workspaces }
@@ -209,9 +210,12 @@ struct WorkspaceListView: View {
 
     @ViewBuilder
     private var workspaceContent: some View {
-        if displayMode == .tasks {
-            taskGroupsContent
-        } else if visibleWorkspaces.isEmpty {
+        taskGroupsContent
+    }
+
+    @ViewBuilder
+    private var projectTreeContent: some View {
+        if visibleWorkspaces.isEmpty {
             VStack(spacing: 12) {
                 Spacer()
                 Image(systemName: "folder")
@@ -357,7 +361,7 @@ struct WorkspaceListView: View {
                         }
                     }
                     Spacer(minLength: 0)
-                    let sessionTotal = group.tasks.reduce(0) { $0 + $1.sessions.count } + group.standaloneSessions.count
+                    let sessionTotal = group.tasks.reduce(0) { $0 + $1.listedSessionCount } + group.standaloneSessions.count
                     Text("\(group.tasks.count)/\(sessionTotal)")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(Theme.textMuted)
@@ -366,18 +370,16 @@ struct WorkspaceListView: View {
             }
             .buttonStyle(.plain)
 
-            if !group.isSynthetic {
-                Button {
-                    newTaskRequest = NewTaskSheetRequest(cwd: group.workspaceCwd, projectHint: group.workspaceName)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(Theme.textSecondary)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(WandIconButtonStyle())
-                .help("在此目录新建任务")
+            Button {
+                newTaskRequest = NewTaskSheetRequest(cwd: group.workspaceCwd, projectHint: group.workspaceName)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 24, height: 24)
             }
+            .buttonStyle(WandIconButtonStyle())
+            .help("在此目录新建任务")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 5)
@@ -385,80 +387,190 @@ struct WorkspaceListView: View {
 
     private func taskSummaryRow(_ summary: WorkspaceTaskSummary, group: TaskDirectoryGroup) -> some View {
         let selected = selectedTaskId == summary.id
-        return Button {
-            onOpenTask(workspace(from: group), WorkspaceTask(
-                id: summary.id,
-                workspaceId: summary.workspaceId,
-                name: summary.name,
-                worktree: summary.worktree,
-                layout: summary.layout,
-                status: summary.status,
-                createdAt: summary.createdAt,
-                lastOpenedAt: summary.lastOpenedAt
-            ))
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: summary.status == "done" ? "checkmark.circle.fill" : "arrow.triangle.branch")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(summary.status == "done" ? Theme.success : Theme.textSecondary)
-                    .frame(width: 18, height: 18)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(summary.name)
-                        .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(1)
-                    Text(TaskListPresentation.taskIsolationCaption(isolated: summary.isIsolated))
-                        .font(.system(size: 10, design: .monospaced))
+        let expanded = expandedTaskIds.contains(summary.id) || selected
+        let workspace = workspace(from: group)
+        let task = summary.asTask()
+        return VStack(spacing: 1) {
+            HStack(spacing: 4) {
+                Button {
+                    if expandedTaskIds.contains(summary.id) {
+                        expandedTaskIds.remove(summary.id)
+                    } else {
+                        expandedTaskIds.insert(summary.id)
+                    }
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
                         .foregroundColor(Theme.textMuted)
-                        .lineLimit(1)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 16, height: 18)
                 }
-                Spacer(minLength: 0)
-                if !summary.sessions.isEmpty {
-                    Text("\(summary.sessions.count)")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(Theme.textMuted)
+                .buttonStyle(.plain)
+                .help(expanded ? "收起终端" : "展开终端")
+
+                Button {
+                    expandedTaskIds.insert(summary.id)
+                    onOpenTask(workspace, task)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: summary.status == "done" ? "checkmark.circle.fill" : "arrow.triangle.branch")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(summary.status == "done" ? Theme.success : Theme.textSecondary)
+                            .frame(width: 18, height: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(summary.name)
+                                .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
+                                .foregroundColor(Theme.textPrimary)
+                                .lineLimit(1)
+                            Text(TaskListPresentation.taskIsolationCaption(isolated: summary.isIsolated))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(Theme.textMuted)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        if summary.listedSessionCount > 0 {
+                            Text("\(summary.listedSessionCount)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(Theme.textMuted)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    expandedTaskIds.insert(summary.id)
+                    onRequestNewSession?(workspace, task)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Theme.textSecondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(WandIconButtonStyle())
+                .help("在「\(summary.name)」中新建终端")
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 4)
+            .padding(.vertical, 4)
+            .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: 7)
+            .contextMenu {
+                Button {
+                    expandedTaskIds.insert(summary.id)
+                    onOpenTask(workspace, task)
+                } label: {
+                    Label("打开任务", systemImage: "arrow.forward")
+                }
+                Button {
+                    expandedTaskIds.insert(summary.id)
+                    onRequestNewSession?(workspace, task)
+                } label: {
+                    Label("新建终端", systemImage: "plus")
+                }
+                Button {
+                    renameDraft = summary.name
+                    renameError = nil
+                    renameTarget = task
+                } label: {
+                    Label("重命名", systemImage: "pencil")
+                }
+                if summary.listedSessionCount > 0 {
+                    Button(role: .destructive) {
+                        clearTarget = summary
+                    } label: {
+                        Label("清空会话(\(summary.listedSessionCount))", systemImage: "trash")
+                    }
+                }
+                if onOpenParallel != nil {
+                    Button {
+                        onOpenParallel?(workspace, task)
+                    } label: {
+                        Label("并行任务", systemImage: "square.stack.3d.up")
+                    }
+                }
+                Button(role: .destructive) {
+                    deleteError = nil
+                    deleteTarget = task
+                } label: {
+                    Label("删除", systemImage: "trash")
                 }
             }
-            .padding(.leading, 28)
+
+            if expanded {
+                if summary.sessions.isEmpty {
+                    Text("还没有终端。点右侧「＋」新建。")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                        .padding(.leading, 48)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(Array(summary.sessions.enumerated()), id: \.element.id) { index, session in
+                        taskOwnedSessionRow(session, summary: summary, workspace: workspace, index: index)
+                    }
+                    if summary.listedSessionCount > summary.sessions.count {
+                        Text("列表仅显示 \(summary.sessions.count)/\(summary.listedSessionCount) 个会话，打开任务可查看全部。")
+                            .font(.system(size: 10))
+                            .foregroundColor(Theme.textMuted)
+                            .padding(.leading, 48)
+                            .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+    }
+
+    private func taskOwnedSessionRow(
+        _ session: WorkspaceSessionSummary,
+        summary: WorkspaceTaskSummary,
+        workspace: Workspace,
+        index: Int
+    ) -> some View {
+        let selected = selectedSessionId == session.id
+        let label = TaskListPresentation.listSessionLabel(
+            title: session.title,
+            providerLabel: session.providerLabel,
+            cwd: session.cwd,
+            index: index,
+            parentNames: [groupName(workspace), summary.name]
+        )
+        return Button {
+            onOpenTaskSession?(workspace, summary.asTask(), session)
+        } label: {
+            HStack(spacing: 8) {
+                BrandLogo(provider: session.provider ?? "terminal", color: selected ? Theme.wandAccent : Theme.textSecondary)
+                    .frame(width: 13, height: 13)
+                    .frame(width: 18, height: 18)
+                Text(label)
+                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                if session.sessionKind == "pty" {
+                    Text("终端")
+                        .font(.system(size: 9))
+                        .foregroundColor(Theme.textMuted)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 48)
             .padding(.trailing, 8)
-            .padding(.vertical, 6)
+            .padding(.vertical, 5)
             .contentShape(Rectangle())
             .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: 7)
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button {
-                renameDraft = summary.name
-                renameError = nil
-                renameTarget = WorkspaceTask(
-                    id: summary.id,
-                    workspaceId: summary.workspaceId,
-                    name: summary.name,
-                    worktree: summary.worktree,
-                    layout: summary.layout,
-                    status: summary.status,
-                    createdAt: summary.createdAt,
-                    lastOpenedAt: summary.lastOpenedAt
-                )
-            } label: {
-                Label("重命名", systemImage: "pencil")
-            }
             Button(role: .destructive) {
-                deleteError = nil
-                deleteTarget = WorkspaceTask(
-                    id: summary.id,
-                    workspaceId: summary.workspaceId,
-                    name: summary.name,
-                    worktree: summary.worktree,
-                    layout: summary.layout,
-                    status: summary.status,
-                    createdAt: summary.createdAt,
-                    lastOpenedAt: summary.lastOpenedAt
-                )
+                Task { try? await store.deleteSessions([session.id]) }
             } label: {
-                Label("删除", systemImage: "trash")
+                Label("删除终端", systemImage: "trash")
             }
         }
+    }
+
+    private func groupName(_ workspace: Workspace) -> String {
+        workspace.name
     }
 
     /// 聚合行只有 workspaceId/name/cwd；打开任务需要完整 Workspace，按组信息重建。
@@ -850,6 +962,19 @@ struct WorkspaceListView: View {
             deleteError = error.localizedDescription
         }
         deleteBusy = false
+    }
+
+    private func confirmClearSessions() async {
+        guard let target = clearTarget, !clearBusy else { return }
+        clearBusy = true
+        do {
+            try await store.clearTaskSessions(taskId: target.id)
+            showToast("已清空「\(target.name)」的会话")
+            clearTarget = nil
+        } catch {
+            deleteError = error.localizedDescription
+        }
+        clearBusy = false
     }
 
     private func confirmDeleteWorkspace(_ target: Workspace) async {

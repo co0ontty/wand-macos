@@ -30,7 +30,7 @@ struct MainShellView: View {
     @State private var selectedSessionProvider: String = "claude"
     @State private var selectedSession: SessionSnapshot?
     @State private var selectedWorkspaceTask: WorkspaceTaskSelection?
-    @AppStorage("wand.sidebar.section") private var sidebarSectionRaw = SidebarSection.sessions.rawValue
+    @AppStorage("wand.sidebar.section") private var sidebarSectionRaw = SidebarSection.workspaces.rawValue
     @State private var sidebarQuery = ""
     @State private var showCreateWorkspace = false
     @State private var newTaskSheetRequest: NewTaskSheetRequest?
@@ -144,6 +144,9 @@ struct MainShellView: View {
         .sheet(isPresented: $showMissions) {
             MissionsView(
                 api: api,
+                linkedTaskId: selectedWorkspaceTask?.task.id,
+                linkedTaskName: selectedWorkspaceTask?.task.name,
+                linkedTaskCwd: workspaceStore.taskState.detail?.cwd ?? selectedWorkspaceTask?.workspace.cwd,
                 onOpenSession: openSessionFromMissions,
                 onDismiss: { showMissions = false }
             )
@@ -353,63 +356,72 @@ struct MainShellView: View {
         VStack(spacing: 0) {
             sidebarTitleBar
             sidebarChrome
-            if sidebarSection == .workspaces {
-                WorkspaceListView(
-                    store: workspaceStore,
-                    api: api,
-                    selectedTaskId: selectedWorkspaceTask?.task.id,
-                    query: sidebarQuery,
-                    onOpenTask: { workspace, task in
+            WorkspaceListView(
+                store: workspaceStore,
+                api: api,
+                selectedTaskId: selectedWorkspaceTask?.task.id,
+                selectedSessionId: selectedSessionId,
+                query: sidebarQuery,
+                onOpenTask: { workspace, task in
+                    selectedWorkspaceTask = WorkspaceTaskSelection(
+                        workspace: workspace,
+                        task: task
+                    )
+                },
+                onTaskRenamed: { updated in
+                    if var selection = selectedWorkspaceTask, selection.task.id == updated.id {
                         selectedWorkspaceTask = WorkspaceTaskSelection(
-                            workspace: workspace,
-                            task: task
+                            workspace: selection.workspace,
+                            task: updated
                         )
-                    },
-                    onTaskRenamed: { updated in
-                        if var selection = selectedWorkspaceTask, selection.task.id == updated.id {
-                            selectedWorkspaceTask = WorkspaceTaskSelection(
-                                workspace: selection.workspace,
-                                task: updated
-                            )
-                        }
-                    },
-                    onTaskDeleted: { taskId in
-                        if selectedWorkspaceTask?.task.id == taskId {
-                            selectedWorkspaceTask = nil
-                        }
-                    },
-                    onOpenSession: { _, session in
-                        Task {
-                            do {
-                                let snapshot = try await api.getSession(id: session.id)
-                                presentSession(snapshot, keepWorkspaceContext: true)
-                            } catch {
-                                connectionState = .disconnected(error.localizedDescription)
-                            }
-                        }
-                    },
-                    onMergeAgentStarted: { _, started in
-                        presentSession(started, keepWorkspaceContext: true)
-                    },
-                    onWorkspaceDeleted: { workspaceId in
-                        if selectedWorkspaceTask?.workspace.id == workspaceId {
-                            selectedWorkspaceTask = nil
-                        }
-                    },
-                    onCreateWorkspace: { showCreateWorkspace = true }
-                )
-            } else {
-                SidebarColumn(
-                    api: api,
-                    selectedSessionId: $selectedSessionId,
-                    query: sidebarQuery,
-                    presentNewSession: $presentNewSession,
-                    onOpenMissions: { showMissions = true },
-                    onSessionSelected: { session in
-                        presentSession(session)
                     }
-                )
-            }
+                },
+                onTaskDeleted: { taskId in
+                    if selectedWorkspaceTask?.task.id == taskId {
+                        selectedWorkspaceTask = nil
+                    }
+                },
+                onOpenSession: { _, session in
+                    Task {
+                        do {
+                            let snapshot = try await api.getSession(id: session.id)
+                            presentSession(snapshot, keepWorkspaceContext: true)
+                        } catch {
+                            connectionState = .disconnected(error.localizedDescription)
+                        }
+                    }
+                },
+                onOpenTaskSession: { workspace, task, session in
+                    selectedWorkspaceTask = WorkspaceTaskSelection(
+                        workspace: workspace,
+                        task: task
+                    )
+                    Task { await workspaceStore.openTask(workspace: workspace, task: task, preferredSessionId: session.id) }
+                },
+                onRequestNewSession: { workspace, task in
+                    selectedWorkspaceTask = WorkspaceTaskSelection(
+                        workspace: workspace,
+                        task: task
+                    )
+                    Task { await workspaceStore.openTaskAndPresentPicker(workspace: workspace, task: task) }
+                },
+                onOpenParallel: { workspace, task in
+                    selectedWorkspaceTask = WorkspaceTaskSelection(
+                        workspace: workspace,
+                        task: task
+                    )
+                    showMissions = true
+                },
+                onMergeAgentStarted: { _, started in
+                    presentSession(started, keepWorkspaceContext: true)
+                },
+                onWorkspaceDeleted: { workspaceId in
+                    if selectedWorkspaceTask?.workspace.id == workspaceId {
+                        selectedWorkspaceTask = nil
+                    }
+                },
+                onCreateWorkspace: { showCreateWorkspace = true }
+            )
         }
     }
 
@@ -576,26 +588,14 @@ struct MainShellView: View {
 
     private var sidebarChrome: some View {
         VStack(spacing: 8) {
-            Picker("侧栏", selection: sidebarSectionBinding) {
-                Text("会话").tag(SidebarSection.sessions)
-                Text("任务").tag(SidebarSection.workspaces)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityLabel("侧栏内容")
-
             Button {
-                if sidebarSection == .workspaces {
-                    newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil)
-                } else {
-                    presentNewSession = true
-                }
+                newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil)
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 13, weight: .medium))
                         .frame(width: 16)
-                    Text(sidebarSection == .workspaces ? "新建任务" : "新建会话")
+                    Text("新建任务")
                         .font(.system(size: 13, weight: .medium))
                     Spacer(minLength: 0)
                 }
@@ -615,7 +615,7 @@ struct MainShellView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(Theme.textMuted)
-                TextField(sidebarSection == .workspaces ? "搜索任务" : "搜索会话", text: $sidebarQuery)
+                TextField("搜索任务", text: $sidebarQuery)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                 if !sidebarQuery.isEmpty {
@@ -672,33 +672,15 @@ struct MainShellView: View {
                 onRetry: checkConnection,
                 onTroubleshoot: { showTroubleshooting = true }
             )
-        } else if sidebarSection == .workspaces {
-            if let selection = selectedWorkspaceTask {
-                WorkspaceTaskView(
-                    workspace: selection.workspace,
-                    task: selection.task,
-                    api: api,
-                    store: workspaceStore,
-                    gitStatusStore: gitStatusStore
-                )
-                .id(selection.task.id)
-            } else if let sessionId = selectedSessionId {
-                MainColumn(
-                    api: api,
-                    sessionId: sessionId,
-                    provider: selectedSessionProvider,
-                    session: selectedSession,
-                    gitStatusStore: gitStatusStore,
-                    showsHeader: true
-                )
-            } else {
-                EmptyMainColumn(
-                    title: "选择一个任务",
-                    message: "任务把目录、worktree 和工作窗口收在一起；建会话无需再选目录。",
-                    actionTitle: "新建任务",
-                    action: { newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil) }
-                )
-            }
+        } else if let selection = selectedWorkspaceTask {
+            WorkspaceTaskView(
+                workspace: selection.workspace,
+                task: selection.task,
+                api: api,
+                store: workspaceStore,
+                gitStatusStore: gitStatusStore
+            )
+            .id(selection.task.id)
         } else if let sessionId = selectedSessionId {
             MainColumn(
                 api: api,
@@ -710,10 +692,10 @@ struct MainShellView: View {
             )
         } else {
             EmptyMainColumn(
-                title: "选择会话或新建一个",
-                message: "从左侧打开最近的对话，或开始一个新的工作。",
-                actionTitle: "新建会话",
-                action: { presentNewSession = true }
+                title: "选择一个任务",
+                message: "任务把目录、worktree 和工作窗口收在一起；建会话无需再选目录。",
+                actionTitle: "新建任务",
+                action: { newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil) }
             )
         }
     }
