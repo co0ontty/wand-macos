@@ -74,7 +74,7 @@ struct NewTaskSheetBody: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .tint(Theme.wandAccent)
-                        .onChange(of: worktreeEnabled) { _, enabled in
+                        .onChange(of: worktreeEnabled) { enabled in
                             store.rememberCreationChoice(worktree: enabled)
                         }
                 }
