@@ -33,6 +33,7 @@ struct MainShellView: View {
     @AppStorage("wand.sidebar.section") private var sidebarSectionRaw = SidebarSection.sessions.rawValue
     @State private var sidebarQuery = ""
     @State private var showCreateWorkspace = false
+    @State private var newTaskSheetRequest: NewTaskSheetRequest?
     @State private var presentNewSession = false
     /// 连接状态(给顶栏的 connection dot 用)。
     @State private var connectionState: ShellConnectionState = .connecting
@@ -152,6 +153,25 @@ struct MainShellView: View {
                 showCreateWorkspace = false
                 sidebarSection = .workspaces
                 Task { await workspaceStore.loadWorkspaceSessions(workspaceId: created.id) }
+            }
+        }
+        .sheet(item: $newTaskSheetRequest) { request in
+            NewTaskSheetBody(request: request, store: workspaceStore) { workspace, creation in
+                sidebarSection = .workspaces
+                selectedWorkspaceTask = WorkspaceTaskSelection(
+                    workspace: workspace,
+                    task: WorkspaceTask(
+                        id: creation.id,
+                        workspaceId: creation.workspaceId,
+                        name: creation.name,
+                        worktree: creation.worktree,
+                        layout: nil,
+                        status: creation.status,
+                        createdAt: "",
+                        lastOpenedAt: nil
+                    )
+                )
+                Task { await workspaceStore.loadTaskGroups(force: true) }
             }
         }
         .task {
@@ -558,7 +578,7 @@ struct MainShellView: View {
         VStack(spacing: 8) {
             Picker("侧栏", selection: sidebarSectionBinding) {
                 Text("会话").tag(SidebarSection.sessions)
-                Text("项目").tag(SidebarSection.workspaces)
+                Text("任务").tag(SidebarSection.workspaces)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -566,7 +586,7 @@ struct MainShellView: View {
 
             Button {
                 if sidebarSection == .workspaces {
-                    showCreateWorkspace = true
+                    newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil)
                 } else {
                     presentNewSession = true
                 }
@@ -575,7 +595,7 @@ struct MainShellView: View {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 13, weight: .medium))
                         .frame(width: 16)
-                    Text(sidebarSection == .workspaces ? "新建项目" : "新建会话")
+                    Text(sidebarSection == .workspaces ? "新建任务" : "新建会话")
                         .font(.system(size: 13, weight: .medium))
                     Spacer(minLength: 0)
                 }
@@ -595,7 +615,7 @@ struct MainShellView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(Theme.textMuted)
-                TextField(sidebarSection == .workspaces ? "搜索项目" : "搜索会话", text: $sidebarQuery)
+                TextField(sidebarSection == .workspaces ? "搜索任务" : "搜索会话", text: $sidebarQuery)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                 if !sidebarQuery.isEmpty {
@@ -674,9 +694,9 @@ struct MainShellView: View {
             } else {
                 EmptyMainColumn(
                     title: "选择一个任务",
-                    message: "项目把目录、worktree 和工作窗口收在一起。",
-                    actionTitle: "新建项目",
-                    action: { showCreateWorkspace = true }
+                    message: "任务把目录、worktree 和工作窗口收在一起；建会话无需再选目录。",
+                    actionTitle: "新建任务",
+                    action: { newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil) }
                 )
             }
         } else if let sessionId = selectedSessionId {

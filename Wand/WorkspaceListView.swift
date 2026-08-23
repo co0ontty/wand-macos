@@ -1,8 +1,24 @@
 import SwiftUI
 
+/// 任务面板的显示模式：任务聚合为默认，项目树保留为高级入口。
+enum WorkspaceListDisplayMode: String, CaseIterable, Identifiable {
+    case tasks
+    case projects
+
+    var id: String { rawValue }
+    var title: String { self == .tasks ? "任务" : "项目" }
+}
+
 struct WorkspaceTaskSelection: Equatable {
     let workspace: Workspace
     let task: WorkspaceTask
+}
+
+/// 新建任务 sheet 载荷：目录预填（项目组「＋」时为项目 cwd；全局入口为空）。
+struct NewTaskSheetRequest: Identifiable, Equatable {
+    let id = UUID()
+    let cwd: String
+    let projectHint: String?
 }
 
 /// 侧栏项目树：项目展开后是任务和直属会话。交互对齐 Orca / Web「项目」面板。
@@ -27,10 +43,10 @@ struct WorkspaceListView: View {
     @State private var deleteTarget: WorkspaceTask?
     @State private var deleteBusy = false
     @State private var deleteError: String?
-    @State private var createTaskTarget: Workspace?
-    @State private var createTaskDraft = ""
-    @State private var createTaskError: String?
-    @State private var createTaskBusy = false
+    /// 任务一级视图（GET /api/tasks 聚合）与项目树的显示切换。
+    @State private var displayMode: WorkspaceListDisplayMode = .tasks
+    @State private var expandedTaskGroups = Set<String>()
+    @State private var expandedLooseGroups = Set<String>()
     @State private var renameWorkspaceTarget: Workspace?
     @State private var renameWorkspaceDraft = ""
     @State private var renameWorkspaceError: String?
@@ -40,10 +56,14 @@ struct WorkspaceListView: View {
     @State private var deleteWorkspaceError: String?
     @State private var reviewTarget: Workspace?
     @State private var toastMessage: String?
+    @State private var newTaskRequest: NewTaskSheetRequest?
 
     var body: some View {
         ZStack {
-            stateContent
+            VStack(spacing: 0) {
+                displayModePicker
+                stateContent
+            }
             if let toastMessage {
                 VStack {
                     Text(toastMessage)
@@ -62,6 +82,7 @@ struct WorkspaceListView: View {
             if case .idle = store.indexState {
                 await store.loadWorkspaceIndex()
             }
+            await store.loadTaskGroups()
         }
         .onChange(of: store.workspaces.map(\.id).joined(separator: ",")) { ids in
             if expandedWorkspaceIds.isEmpty {
@@ -83,8 +104,8 @@ struct WorkspaceListView: View {
                 }
             )
         }
-        .sheet(item: createTaskSheetItem) { workspace in
-            createTaskSheet(workspace)
+        .sheet(item: $newTaskRequest) { request in
+            newTaskSheet(request)
         }
         .sheet(item: renameTaskSheetItem) { task in
             renameSheet(
@@ -162,6 +183,20 @@ struct WorkspaceListView: View {
         }
     }
 
+    /// 任务/项目模式切换条（对齐 iOS TaskDisplayMode）。
+    private var displayModePicker: some View {
+        Picker("显示方式", selection: $displayMode) {
+            ForEach(WorkspaceListDisplayMode.allCases) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
     private var visibleWorkspaces: [Workspace] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return store.workspaces }
@@ -174,7 +209,9 @@ struct WorkspaceListView: View {
 
     @ViewBuilder
     private var workspaceContent: some View {
-        if visibleWorkspaces.isEmpty {
+        if displayMode == .tasks {
+            taskGroupsContent
+        } else if visibleWorkspaces.isEmpty {
             VStack(spacing: 12) {
                 Spacer()
                 Image(systemName: "folder")
@@ -201,6 +238,238 @@ struct WorkspaceListView: View {
                 .padding(.bottom, 8)
             }
         }
+    }
+
+    /// 任务一级视图：GET /api/tasks 聚合，目录组为一级容器，未分组会话不丢失。
+    @ViewBuilder
+    private var taskGroupsContent: some View {
+        let visible = store.taskGroups.filter { !$0.tasks.isEmpty || !$0.standaloneSessions.isEmpty }
+        if visible.isEmpty && store.taskGroupsError == nil {
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                Text("还没有任务")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                Text("新建任务时选目录，之后在任务里建会话无需再选目录。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                Button("新建任务") {
+                    newTaskRequest = NewTaskSheetRequest(cwd: "", projectHint: nil)
+                }
+                .buttonStyle(WandPrimaryButtonStyle())
+                Spacer()
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 2, pinnedViews: [.sectionHeaders]) {
+                    if let error = store.taskGroupsError {
+                        inlineError(error)
+                    }
+                    ForEach(visible) { group in
+                        taskGroupBlock(group)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func taskGroupBlock(_ group: TaskDirectoryGroup) -> some View {
+        let expanded = expandedTaskGroups.contains(group.id)
+        return VStack(spacing: 2) {
+            taskGroupHeader(group, expanded: expanded)
+            if expanded {
+                ForEach(group.tasks) { summary in
+                    taskSummaryRow(summary, group: group)
+                }
+                if group.tasks.isEmpty && group.standaloneSessions.isEmpty {
+                    Text("这个目录还没有任务。")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                        .padding(.leading, 36)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !group.standaloneSessions.isEmpty {
+                    DisclosureGroup(
+                        isExpanded: Binding(
+                            get: { expandedLooseGroups.contains(group.id) },
+                            set: { expanded in
+                                if expanded { expandedLooseGroups.insert(group.id) } else { expandedLooseGroups.remove(group.id) }
+                            }
+                        )
+                    ) {
+                        ForEach(group.standaloneSessions) { session in
+                            standaloneSessionRow(session, workspace: workspace(from: group))
+                        }
+                    } label: {
+                        Text("未分组会话（\(group.standaloneSessions.count)）")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textMuted)
+                    }
+                    .padding(.leading, 28)
+                }
+            }
+        }
+    }
+
+    private func taskGroupHeader(_ group: TaskDirectoryGroup, expanded: Bool) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                if expanded {
+                    expandedTaskGroups.remove(group.id)
+                } else {
+                    expandedTaskGroups.insert(group.id)
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(Theme.textMuted)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Image(systemName: group.isSynthetic ? "folder.badge.questionmark" : "folder")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.wandAccent)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 5) {
+                            Text(group.workspaceName)
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundColor(Theme.textPrimary)
+                                .lineLimit(1)
+                            if group.isSynthetic {
+                                Text("未归档")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(Theme.textMuted)
+                            }
+                        }
+                        Text((group.workspaceCwd as NSString).lastPathComponent)
+                            .font(.system(size: 10))
+                            .foregroundColor(Theme.textMuted)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    let sessionTotal = group.tasks.reduce(0) { $0 + $1.sessions.count } + group.standaloneSessions.count
+                    Text("\(group.tasks.count)/\(sessionTotal)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !group.isSynthetic {
+                Button {
+                    newTaskRequest = NewTaskSheetRequest(cwd: group.workspaceCwd, projectHint: group.workspaceName)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Theme.textSecondary)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(WandIconButtonStyle())
+                .help("在此目录新建任务")
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+    }
+
+    private func taskSummaryRow(_ summary: WorkspaceTaskSummary, group: TaskDirectoryGroup) -> some View {
+        let selected = selectedTaskId == summary.id
+        return Button {
+            onOpenTask(workspace(from: group), WorkspaceTask(
+                id: summary.id,
+                workspaceId: summary.workspaceId,
+                name: summary.name,
+                worktree: summary.worktree,
+                layout: summary.layout,
+                status: summary.status,
+                createdAt: summary.createdAt,
+                lastOpenedAt: summary.lastOpenedAt
+            ))
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: summary.status == "done" ? "checkmark.circle.fill" : "arrow.triangle.branch")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(summary.status == "done" ? Theme.success : Theme.textSecondary)
+                    .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(summary.name)
+                        .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
+                    Text(summary.isIsolated ? (summary.worktree?.branch ?? "独立 worktree") : "共享目录")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if !summary.sessions.isEmpty {
+                    Text("\(summary.sessions.count)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                }
+            }
+            .padding(.leading, 28)
+            .padding(.trailing, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: 7)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                renameDraft = summary.name
+                renameError = nil
+                renameTarget = WorkspaceTask(
+                    id: summary.id,
+                    workspaceId: summary.workspaceId,
+                    name: summary.name,
+                    worktree: summary.worktree,
+                    layout: summary.layout,
+                    status: summary.status,
+                    createdAt: summary.createdAt,
+                    lastOpenedAt: summary.lastOpenedAt
+                )
+            } label: {
+                Label("重命名", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                deleteError = nil
+                deleteTarget = WorkspaceTask(
+                    id: summary.id,
+                    workspaceId: summary.workspaceId,
+                    name: summary.name,
+                    worktree: summary.worktree,
+                    layout: summary.layout,
+                    status: summary.status,
+                    createdAt: summary.createdAt,
+                    lastOpenedAt: summary.lastOpenedAt
+                )
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    /// 聚合行只有 workspaceId/name/cwd；打开任务需要完整 Workspace，按组信息重建。
+    private func workspace(from group: TaskDirectoryGroup) -> Workspace {
+        Workspace(
+            id: group.workspaceId,
+            name: group.workspaceName,
+            cwd: group.workspaceCwd,
+            defaultProvider: nil,
+            layout: nil,
+            createdAt: "",
+            lastOpenedAt: nil
+        )
     }
 
     private func workspaceBlock(_ workspace: Workspace) -> some View {
@@ -266,9 +535,7 @@ struct WorkspaceListView: View {
             .buttonStyle(.plain)
 
             Button {
-                createTaskDraft = ""
-                createTaskError = nil
-                createTaskTarget = workspace
+                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name)
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
@@ -286,9 +553,7 @@ struct WorkspaceListView: View {
         )
         .contextMenu {
             Button {
-                createTaskDraft = ""
-                createTaskError = nil
-                createTaskTarget = workspace
+                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name)
             } label: {
                 Label("新任务", systemImage: "plus")
             }
@@ -423,13 +688,6 @@ struct WorkspaceListView: View {
 
     // MARK: - Sheets / dialogs
 
-    private var createTaskSheetItem: Binding<Workspace?> {
-        Binding(
-            get: { createTaskTarget },
-            set: { createTaskTarget = $0 }
-        )
-    }
-
     private var renameTaskSheetItem: Binding<WorkspaceTask?> {
         Binding(
             get: { renameTarget },
@@ -468,45 +726,21 @@ struct WorkspaceListView: View {
         )
     }
 
-    private func createTaskSheet(_ workspace: Workspace) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("新任务")
-                    .font(.system(size: 16, weight: .semibold))
-                Spacer()
-            }
-            .padding(16)
-            .windowDrag()
-            Divider().opacity(0.35)
-            VStack(alignment: .leading, spacing: 10) {
-                Text("在项目「\(workspace.name)」里创建任务，git 仓库会生成独立 worktree。")
-                    .font(.system(size: 12))
-                    .foregroundColor(Theme.textSecondary)
-                TextField("任务名称", text: $createTaskDraft)
-                    .textFieldStyle(.roundedBorder)
-                if let createTaskError {
-                    Text(createTaskError)
-                        .font(.footnote)
-                        .foregroundColor(Theme.danger)
-                }
-            }
-            .padding(16)
-            HStack {
-                Spacer()
-                Button("取消") { createTaskTarget = nil }
-                    .buttonStyle(WandSecondaryButtonStyle())
-                    .disabled(createTaskBusy)
-                Button(createTaskBusy ? "创建中…" : "创建") {
-                    Task { await performCreateTask(in: workspace) }
-                }
-                .buttonStyle(WandPrimaryButtonStyle())
-                .disabled(createTaskBusy || createTaskDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding(16)
+    /// 新建任务 sheet：目录按 find-or-create 归入隐式项目；worktree 开关对齐 web/iOS。
+    private func newTaskSheet(_ request: NewTaskSheetRequest) -> some View {
+        NewTaskSheetBody(request: request, store: store) { workspace, creation in
+            showToast("已创建任务「\(creation.name)」")
+            onOpenTask(workspace, WorkspaceTask(
+                id: creation.id,
+                workspaceId: creation.workspaceId,
+                name: creation.name,
+                worktree: creation.worktree,
+                layout: nil,
+                status: creation.status,
+                createdAt: "",
+                lastOpenedAt: nil
+            ))
         }
-        .frame(width: 420)
-        .background(WandAmbientBackground())
-        .hideNativeTitleBar()
     }
 
     private func renameSheet(
@@ -550,22 +784,6 @@ struct WorkspaceListView: View {
         .frame(width: 380)
         .background(WandAmbientBackground())
         .hideNativeTitleBar()
-    }
-
-    private func performCreateTask(in workspace: Workspace) async {
-        let trimmed = createTaskDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        createTaskBusy = true
-        do {
-            let outcome = try await store.createWorkspaceTask(workspaceId: workspace.id, name: trimmed)
-            createTaskTarget = nil
-            createTaskBusy = false
-            showToast("已创建任务「\(outcome.creation.name)」")
-            onOpenTask(workspace, outcome.task)
-        } catch {
-            createTaskError = error.localizedDescription
-            createTaskBusy = false
-        }
     }
 
     private func saveTaskRename(_ task: WorkspaceTask) async {
