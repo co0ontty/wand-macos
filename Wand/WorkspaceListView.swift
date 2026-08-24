@@ -38,9 +38,9 @@ struct WorkspaceListView: View {
     @State private var deleteTarget: WorkspaceTask?
     @State private var deleteBusy = false
     @State private var deleteError: String?
-    @State private var expandedTaskGroups = Set<String>()
-    @State private var expandedTaskIds = Set<String>()
-    @State private var expandedLooseGroups = Set<String>()
+    @State private var collapsedTaskGroups = Set<String>()
+    @State private var collapsedTaskIds = Set<String>()
+    @State private var collapsedLooseGroups = Set<String>()
     @State private var clearTarget: WorkspaceTaskSummary?
     @State private var clearBusy = false
     @State private var renameWorkspaceTarget: Workspace?
@@ -80,7 +80,7 @@ struct WorkspaceListView: View {
             await store.loadTaskGroups()
         }
         .onChange(of: selectedTaskId) { taskId in
-            if let taskId { expandedTaskIds.insert(taskId) }
+            if let taskId { collapsedTaskIds.remove(taskId) }
         }
         .onChange(of: store.workspaces.map(\.id).joined(separator: ",")) { ids in
             if expandedWorkspaceIds.isEmpty {
@@ -276,7 +276,7 @@ struct WorkspaceListView: View {
                         inlineError(error)
                     }
                     ForEach(visible) { group in
-                        taskGroupBlock(group)
+                        taskGroupBlock(group, directoryCount: visible.count)
                     }
                 }
                 .padding(.horizontal, 6)
@@ -285,10 +285,14 @@ struct WorkspaceListView: View {
         }
     }
 
-    private func taskGroupBlock(_ group: TaskDirectoryGroup) -> some View {
-        let expanded = expandedTaskGroups.contains(group.id)
+    private func taskGroupBlock(_ group: TaskDirectoryGroup, directoryCount: Int) -> some View {
+        let expanded = TaskListPresentation.isDirectoryExpanded(
+            userCollapsed: collapsedTaskGroups.contains(group.id),
+            directoryCount: directoryCount
+        )
+        let collapsible = TaskListPresentation.showsDirectoryDisclosure(directoryCount: directoryCount)
         return VStack(spacing: 2) {
-            taskGroupHeader(group, expanded: expanded)
+            taskGroupHeader(group, expanded: expanded, collapsible: collapsible)
             if expanded {
                 ForEach(group.tasks) { summary in
                     taskSummaryRow(summary, group: group)
@@ -297,47 +301,53 @@ struct WorkspaceListView: View {
                     Text("这个目录还没有任务。")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textMuted)
-                        .padding(.leading, 36)
+                        .padding(.leading, 12)
                         .padding(.vertical, 6)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !group.standaloneSessions.isEmpty {
-                    DisclosureGroup(
-                        isExpanded: Binding(
-                            get: { expandedLooseGroups.contains(group.id) },
-                            set: { expanded in
-                                if expanded { expandedLooseGroups.insert(group.id) } else { expandedLooseGroups.remove(group.id) }
-                            }
-                        )
-                    ) {
-                        ForEach(group.standaloneSessions) { session in
-                            standaloneSessionRow(session, workspace: workspace(from: group))
-                        }
-                    } label: {
-                        Text("未分组会话（\(group.standaloneSessions.count)）")
-                            .font(.system(size: 11))
-                            .foregroundColor(Theme.textMuted)
-                    }
-                    .padding(.leading, 28)
+                    standaloneSessionBlock(group)
                 }
             }
         }
     }
 
-    private func taskGroupHeader(_ group: TaskDirectoryGroup, expanded: Bool) -> some View {
-        HStack(spacing: 6) {
+    private func standaloneSessionBlock(_ group: TaskDirectoryGroup) -> some View {
+        let expanded = !collapsedLooseGroups.contains(group.id)
+        return VStack(alignment: .leading, spacing: 2) {
             Button {
-                if expanded {
-                    expandedTaskGroups.remove(group.id)
-                } else {
-                    expandedTaskGroups.insert(group.id)
+                toggleCollapsedLooseGroup(group.id)
+            } label: {
+                HStack {
+                    Text("未分组会话（\(group.standaloneSessions.count)）")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                    Spacer(minLength: 6)
+                    treeDisclosureCaret(expanded: expanded)
                 }
+                .padding(.leading, 12)
+                .padding(.trailing, 6)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(expanded ? "收起未分组会话" : "展开未分组会话")
+            if expanded {
+                ForEach(group.standaloneSessions) { session in
+                    standaloneSessionRow(session, workspace: workspace(from: group))
+                }
+            }
+        }
+    }
+
+    private func taskGroupHeader(_ group: TaskDirectoryGroup, expanded: Bool, collapsible: Bool) -> some View {
+        let sessionTotal = group.tasks.reduce(0) { $0 + $1.listedSessionCount } + group.standaloneSessions.count
+        return HStack(spacing: 6) {
+            Button {
+                guard collapsible else { return }
+                toggleCollapsedTaskGroup(group.id)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(Theme.textMuted)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
                     Image(systemName: group.isSynthetic ? "folder.badge.questionmark" : "folder")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Theme.wandAccent)
@@ -361,7 +371,9 @@ struct WorkspaceListView: View {
                         }
                     }
                     Spacer(minLength: 0)
-                    let sessionTotal = group.tasks.reduce(0) { $0 + $1.listedSessionCount } + group.standaloneSessions.count
+                    if collapsible {
+                        treeDisclosureCaret(expanded: expanded)
+                    }
                     Text("\(group.tasks.count)/\(sessionTotal)")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(Theme.textMuted)
@@ -385,61 +397,88 @@ struct WorkspaceListView: View {
         .padding(.vertical, 5)
     }
 
+    private func treeDisclosureCaret(expanded: Bool) -> some View {
+        Image(systemName: "chevron.down")
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundColor(Theme.textMuted)
+            .rotationEffect(.degrees(expanded ? 0 : -90))
+            .frame(width: 12, height: 14)
+    }
+
+    private func toggleCollapsedTaskGroup(_ id: String) {
+        if collapsedTaskGroups.contains(id) {
+            collapsedTaskGroups.remove(id)
+        } else {
+            collapsedTaskGroups.insert(id)
+        }
+    }
+
+    private func toggleCollapsedTask(_ id: String) {
+        if collapsedTaskIds.contains(id) {
+            collapsedTaskIds.remove(id)
+        } else {
+            collapsedTaskIds.insert(id)
+        }
+    }
+
+    private func toggleCollapsedLooseGroup(_ id: String) {
+        if collapsedLooseGroups.contains(id) {
+            collapsedLooseGroups.remove(id)
+        } else {
+            collapsedLooseGroups.insert(id)
+        }
+    }
+
     private func taskSummaryRow(_ summary: WorkspaceTaskSummary, group: TaskDirectoryGroup) -> some View {
         let selected = selectedTaskId == summary.id
-        let expanded = expandedTaskIds.contains(summary.id) || selected
+        let canCollapseSessions = TaskListPresentation.showsTaskSessionDisclosure(sessionCount: summary.listedSessionCount)
+        let expanded = TaskListPresentation.isTaskSessionsExpanded(
+            userCollapsed: collapsedTaskIds.contains(summary.id),
+            sessionCount: summary.listedSessionCount
+        )
         let workspace = workspace(from: group)
         let task = summary.asTask()
         return VStack(spacing: 1) {
             HStack(spacing: 4) {
                 Button {
-                    if expandedTaskIds.contains(summary.id) {
-                        expandedTaskIds.remove(summary.id)
-                    } else {
-                        expandedTaskIds.insert(summary.id)
-                    }
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(Theme.textMuted)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .frame(width: 16, height: 18)
-                }
-                .buttonStyle(.plain)
-                .help(expanded ? "收起终端" : "展开终端")
-
-                Button {
-                    expandedTaskIds.insert(summary.id)
+                    collapsedTaskIds.remove(summary.id)
                     onOpenTask(workspace, task)
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: summary.status == "done" ? "checkmark.circle.fill" : "arrow.triangle.branch")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(summary.status == "done" ? Theme.success : Theme.textSecondary)
-                            .frame(width: 18, height: 18)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(summary.name)
-                                .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                                .foregroundColor(Theme.textPrimary)
-                                .lineLimit(1)
-                            Text(TaskListPresentation.taskIsolationCaption(isolated: summary.isIsolated))
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(Theme.textMuted)
-                                .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if summary.isIsolated || summary.status == "done" {
+                            Image(systemName: summary.status == "done" ? "checkmark.circle.fill" : "arrow.triangle.branch")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(summary.status == "done" ? Theme.success : Theme.textMuted)
+                                .frame(width: 14, height: 14)
                         }
+                        Text(summary.name)
+                            .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
-                        if summary.listedSessionCount > 0 {
-                            Text("\(summary.listedSessionCount)")
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(Theme.textMuted)
-                        }
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
+                if canCollapseSessions {
+                    Button {
+                        toggleCollapsedTask(summary.id)
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text("\(summary.listedSessionCount)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(Theme.textMuted)
+                            treeDisclosureCaret(expanded: expanded)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(expanded ? "收起终端" : "展开终端")
+                }
+
                 Button {
-                    expandedTaskIds.insert(summary.id)
+                    collapsedTaskIds.remove(summary.id)
                     onRequestNewSession?(workspace, task)
                 } label: {
                     Image(systemName: "plus")
@@ -450,19 +489,19 @@ struct WorkspaceListView: View {
                 .buttonStyle(WandIconButtonStyle())
                 .help("在「\(summary.name)」中新建终端")
             }
-            .padding(.leading, 12)
+            .padding(.leading, 8)
             .padding(.trailing, 4)
             .padding(.vertical, 4)
             .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: 7)
             .contextMenu {
                 Button {
-                    expandedTaskIds.insert(summary.id)
+                    collapsedTaskIds.remove(summary.id)
                     onOpenTask(workspace, task)
                 } label: {
                     Label("打开任务", systemImage: "arrow.forward")
                 }
                 Button {
-                    expandedTaskIds.insert(summary.id)
+                    collapsedTaskIds.remove(summary.id)
                     onRequestNewSession?(workspace, task)
                 } label: {
                     Label("新建终端", systemImage: "plus")
@@ -501,7 +540,7 @@ struct WorkspaceListView: View {
                     Text("还没有终端。点右侧「＋」新建。")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textMuted)
-                        .padding(.leading, 48)
+                        .padding(.leading, 12)
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -512,7 +551,7 @@ struct WorkspaceListView: View {
                         Text("列表仅显示 \(summary.sessions.count)/\(summary.listedSessionCount) 个会话，打开任务可查看全部。")
                             .font(.system(size: 10))
                             .foregroundColor(Theme.textMuted)
-                            .padding(.leading, 48)
+                            .padding(.leading, 12)
                             .padding(.vertical, 4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -553,7 +592,7 @@ struct WorkspaceListView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 48)
+            .padding(.leading, 12)
             .padding(.trailing, 8)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
@@ -743,16 +782,11 @@ struct WorkspaceListView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(task.status == "done" ? Theme.success : Theme.textSecondary)
                     .frame(width: 18, height: 18)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(task.name)
-                        .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(1)
-                    Text(TaskListPresentation.taskIsolationCaption(isolated: task.worktree != nil))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(Theme.textMuted)
-                        .lineLimit(1)
-                }
+                Text(task.name)
+                    .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
             }
             .padding(.leading, 28)

@@ -7,7 +7,8 @@ final class WorkspaceTaskContractTests: XCTestCase {
             TaskListPresentation.shortenWorkspacePath("/Users/me/Self/vibe_coding/wand"),
             "…/vibe_coding/wand"
         )
-        XCTAssertEqual(TaskListPresentation.taskIsolationCaption(isolated: false), "共享")
+        XCTAssertNil(TaskListPresentation.taskIsolationCaption(isolated: false))
+        XCTAssertEqual(TaskListPresentation.taskIsolationCaption(isolated: true), "隔离")
         XCTAssertEqual(
             TaskListPresentation.listSessionLabel(
                 title: "wand",
@@ -18,6 +19,17 @@ final class WorkspaceTaskContractTests: XCTestCase {
             ),
             "Pi 1"
         )
+    }
+
+    func testTaskTreeHidesNeedlessCaretsAndKeepsTerminalsOpen() {
+        XCTAssertFalse(TaskListPresentation.showsDirectoryDisclosure(directoryCount: 1))
+        XCTAssertTrue(TaskListPresentation.showsDirectoryDisclosure(directoryCount: 2))
+        XCTAssertTrue(TaskListPresentation.isDirectoryExpanded(userCollapsed: true, directoryCount: 1))
+        XCTAssertFalse(TaskListPresentation.isDirectoryExpanded(userCollapsed: true, directoryCount: 2))
+        XCTAssertFalse(TaskListPresentation.showsTaskSessionDisclosure(sessionCount: 0))
+        XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: true, sessionCount: 0))
+        XCTAssertFalse(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: true, sessionCount: 2))
+        XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: false, sessionCount: 2))
     }
 
     func testCreateTaskWorktreeFlagOmitsByDefaultAndSendsFalseExplicitly() {
