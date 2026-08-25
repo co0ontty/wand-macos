@@ -43,6 +43,8 @@ struct WorkspaceListView: View {
     @State private var collapsedLooseGroups = Set<String>()
     @State private var clearTarget: WorkspaceTaskSummary?
     @State private var clearBusy = false
+    @State private var deleteSessionTarget: WorkspaceSessionSummary?
+    @State private var deleteSessionBusy = false
     @State private var renameWorkspaceTarget: Workspace?
     @State private var renameWorkspaceDraft = ""
     @State private var renameWorkspaceError: String?
@@ -170,6 +172,24 @@ struct WorkspaceListView: View {
         } message: {
             if let target = clearTarget {
                 Text("将结束并删除「\(target.name)」的 \(target.listedSessionCount) 个终端，此操作无法撤销。")
+            }
+        }
+        .confirmationDialog(
+            "删除终端？",
+            isPresented: Binding(
+                get: { deleteSessionTarget != nil },
+                set: { if !$0 && !deleteSessionBusy { deleteSessionTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(deleteSessionBusy ? "删除中…" : "删除终端", role: .destructive) {
+                Task { await confirmDeleteSession() }
+            }
+            .disabled(deleteSessionBusy)
+            Button("取消", role: .cancel) { deleteSessionTarget = nil }
+        } message: {
+            if let target = deleteSessionTarget {
+                Text("终端「\(sessionDeleteLabel(target))」会结束并被删除，此操作无法撤销。")
             }
         }
     }
@@ -517,7 +537,7 @@ struct WorkspaceListView: View {
                     Button(role: .destructive) {
                         clearTarget = summary
                     } label: {
-                        Label("清空会话(\(summary.listedSessionCount))", systemImage: "trash")
+                        Label("清空会话(\(summary.listedSessionCount))", systemImage: "trash.slash")
                     }
                 }
                 if onOpenParallel != nil {
@@ -601,7 +621,7 @@ struct WorkspaceListView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button(role: .destructive) {
-                Task { try? await store.deleteSessions([session.id]) }
+                requestDeleteSession(session)
             } label: {
                 Label("删除终端", systemImage: "trash")
             }
@@ -765,7 +785,7 @@ struct WorkspaceListView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button(role: .destructive) {
-                Task { try? await store.deleteSessions([session.id]) }
+                requestDeleteSession(session)
             } label: {
                 Label("删除终端", systemImage: "trash")
             }
@@ -996,6 +1016,35 @@ struct WorkspaceListView: View {
             deleteError = error.localizedDescription
         }
         deleteBusy = false
+    }
+
+    private func requestDeleteSession(_ session: WorkspaceSessionSummary) {
+        deleteError = nil
+        deleteSessionTarget = session
+    }
+
+    private func sessionDeleteLabel(_ session: WorkspaceSessionSummary) -> String {
+        TaskListPresentation.listSessionLabel(
+            title: session.title,
+            providerLabel: session.providerLabel,
+            cwd: session.cwd,
+            index: 0,
+            parentNames: []
+        )
+    }
+
+    private func confirmDeleteSession() async {
+        guard let target = deleteSessionTarget, !deleteSessionBusy else { return }
+        deleteSessionBusy = true
+        do {
+            try await store.deleteSessions([target.id])
+            showToast("已删除终端「\(sessionDeleteLabel(target))」")
+            deleteSessionTarget = nil
+        } catch {
+            deleteSessionTarget = nil
+            deleteError = error.localizedDescription
+        }
+        deleteSessionBusy = false
     }
 
     private func confirmClearSessions() async {

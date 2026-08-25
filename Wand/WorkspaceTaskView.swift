@@ -9,6 +9,8 @@ struct WorkspaceTaskView: View {
     @ObservedObject var store: WorkspaceStore
     @ObservedObject var gitStatusStore: GitStatusStore
     @State private var pendingDeleteSession: WorkspaceSessionSummary?
+    @State private var deleteSessionBusy = false
+    @State private var deleteSessionError: String?
 
     var body: some View {
         ZStack {
@@ -23,17 +25,24 @@ struct WorkspaceTaskView: View {
         }
         .alert("删除终端？", isPresented: Binding(
             get: { pendingDeleteSession != nil },
-            set: { if !$0 { pendingDeleteSession = nil } }
+            set: { if !$0 && !deleteSessionBusy { pendingDeleteSession = nil; deleteSessionError = nil } }
         )) {
-            Button("取消", role: .cancel) { pendingDeleteSession = nil }
-            Button("删除", role: .destructive) {
-                if let id = pendingDeleteSession?.id {
-                    Task { try? await store.deleteSessions([id]) }
-                }
+            Button("取消", role: .cancel) {
                 pendingDeleteSession = nil
+                deleteSessionError = nil
             }
+            Button(deleteSessionBusy ? "删除中…" : "删除", role: .destructive) {
+                Task { await confirmDeleteSession() }
+            }
+            .disabled(deleteSessionBusy)
         } message: {
-            Text("终端会结束并被删除，此操作无法撤销。")
+            if let deleteSessionError {
+                Text(deleteSessionError)
+            } else if let session = pendingDeleteSession {
+                Text("终端「\(sessionLabel(session, index: 0))」会结束并被删除，此操作无法撤销。")
+            } else {
+                Text("终端会结束并被删除，此操作无法撤销。")
+            }
         }
     }
 
@@ -168,16 +177,18 @@ struct WorkspaceTaskView: View {
                         }
                         .buttonStyle(.plain)
 
-                        Button {
-                            pendingDeleteSession = session
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(Theme.textMuted)
-                                .frame(width: 20, height: 30)
+                        if selected {
+                            Button {
+                                requestDeleteSession(session)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundColor(Theme.textMuted)
+                                    .frame(width: 20, height: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .help("删除终端")
                         }
-                        .buttonStyle(.plain)
-                        .help("删除终端")
                     }
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -185,7 +196,7 @@ struct WorkspaceTaskView: View {
                     )
                     .contextMenu {
                         Button(role: .destructive) {
-                            pendingDeleteSession = session
+                            requestDeleteSession(session)
                         } label: {
                             Label("删除终端", systemImage: "trash")
                         }
@@ -296,5 +307,23 @@ struct WorkspaceTaskView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func requestDeleteSession(_ session: WorkspaceSessionSummary) {
+        deleteSessionError = nil
+        pendingDeleteSession = session
+    }
+
+    private func confirmDeleteSession() async {
+        guard let target = pendingDeleteSession, !deleteSessionBusy else { return }
+        deleteSessionBusy = true
+        do {
+            try await store.deleteSessions([target.id])
+            pendingDeleteSession = nil
+            deleteSessionError = nil
+        } catch {
+            deleteSessionError = error.localizedDescription
+        }
+        deleteSessionBusy = false
     }
 }
