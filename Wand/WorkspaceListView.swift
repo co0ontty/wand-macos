@@ -774,7 +774,7 @@ struct WorkspaceListView: View {
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Circle()
-                    .fill(session.status == "running" ? Theme.success : Theme.textMuted.opacity(0.45))
+                    .fill(["running", "thinking"].contains(session.activityStatus) ? Theme.success : Theme.textMuted.opacity(0.45))
                     .frame(width: 6, height: 6)
             }
             .padding(.leading, 28)

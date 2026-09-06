@@ -164,7 +164,7 @@ struct WorkspaceTaskView: View {
                                 Text(sessionLabel(session, index: index))
                                     .font(.system(size: 12, weight: selected ? .semibold : .medium))
                                     .lineLimit(1)
-                                if ["initializing", "running", "thinking"].contains(session.status ?? "") {
+                                if ["running", "thinking"].contains(session.activityStatus) {
                                     Circle()
                                         .fill(Theme.success)
                                         .frame(width: 6, height: 6)

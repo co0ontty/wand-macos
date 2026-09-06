@@ -428,6 +428,7 @@ struct SessionSnapshot: Decodable, Identifiable {
     let autoApprovePermissions: Bool?
     var providerCliActive: Bool? = nil
     var providerCliExitCode: Int? = nil
+    var ptyBusy: Bool? = nil
 
     var isStructured: Bool { (sessionKind ?? "pty") == "structured" }
     var providerLabel: String {
@@ -441,21 +442,33 @@ struct SessionSnapshot: Decodable, Identifiable {
         }
     }
 
-    /// 列表标题：服务端 title > 摘要 > 当前任务 > cwd 末段。
+    /// 列表标题以服务端 title 为准，不再用任务名 / 目录名自行兜底。
     var displayTitle: String {
         if let s = title, !s.isEmpty { return s }
-        if let s = summary, !s.isEmpty { return s }
-        if let t = currentTaskTitle, !t.isEmpty { return t }
-        if let c = cwd, !c.isEmpty {
-            let name = (c as NSString).lastPathComponent
-            return name.isEmpty ? c : name
-        }
         return "会话"
     }
 
     var isResponding: Bool {
-        if let inFlight = structuredState?.inFlight { return inFlight }
-        return false
+        sessionIsResponding(
+            sessionKind: sessionKind,
+            status: status,
+            provider: provider,
+            ptyBusy: ptyBusy,
+            providerCliActive: providerCliActive,
+            inFlight: structuredState?.inFlight
+        )
+    }
+
+    var activityStatus: String {
+        effectiveSessionStatus(
+            sessionKind: sessionKind,
+            status: status,
+            provider: provider,
+            ptyBusy: ptyBusy,
+            providerCliActive: providerCliActive,
+            inFlight: structuredState?.inFlight,
+            permissionBlocked: hasPendingPermission
+        )
     }
 
     var hasPendingPermission: Bool {
@@ -572,6 +585,7 @@ struct WsData: Decodable {
     let autoApprovePermissions: Bool?
     let providerCliActive: Bool?
     let providerCliExitCode: Int?
+    let ptyBusy: Bool?
     // —— output 事件增量字段 ——
     let chunk: String?
     let lastMessage: ConversationTurn?
@@ -945,4 +959,63 @@ struct QuickCommitResult: Decodable {
     let pushed: Bool?
     let pushError: String?
     let submoduleCommits: [SubmoduleCommit]?
+}
+
+// MARK: - Session activity (align Web ptyTurnActive)
+
+private let providerCLI: Set<String> = ["claude", "codex", "opencode", "grok", "qoder", "pi"]
+
+func isProviderCliSession(_ provider: String?) -> Bool {
+    guard let provider, !provider.isEmpty else { return false }
+    return providerCLI.contains(provider.lowercased())
+}
+
+func ptyTurnActive(
+    sessionKind: String?,
+    status: String?,
+    provider: String?,
+    ptyBusy: Bool?
+) -> Bool {
+    if (sessionKind ?? "pty") == "structured" { return false }
+    if status != "running" { return false }
+    if isProviderCliSession(provider) { return ptyBusy == true }
+    return true
+}
+
+func sessionIsResponding(
+    sessionKind: String?,
+    status: String?,
+    provider: String?,
+    ptyBusy: Bool?,
+    providerCliActive: Bool?,
+    inFlight: Bool?
+) -> Bool {
+    if (sessionKind ?? "pty") == "structured" { return inFlight == true }
+    if providerCliActive == false { return false }
+    return ptyTurnActive(sessionKind: sessionKind, status: status, provider: provider, ptyBusy: ptyBusy)
+}
+
+func effectiveSessionStatus(
+    sessionKind: String?,
+    status: String?,
+    provider: String?,
+    ptyBusy: Bool?,
+    providerCliActive: Bool?,
+    inFlight: Bool?,
+    permissionBlocked: Bool = false
+) -> String {
+    if permissionBlocked { return "permission" }
+    if sessionIsResponding(
+        sessionKind: sessionKind,
+        status: status,
+        provider: provider,
+        ptyBusy: ptyBusy,
+        providerCliActive: providerCliActive,
+        inFlight: inFlight
+    ) {
+        return status == "thinking" ? "thinking" : "running"
+    }
+    let normalized = status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if ["running", "initializing", "thinking"].contains(normalized) { return "idle" }
+    return normalized.isEmpty ? "idle" : normalized
 }

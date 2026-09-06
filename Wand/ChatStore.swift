@@ -205,6 +205,7 @@ final class ChatStore: ObservableObject {
                 permissionBlocked: data.permissionBlocked,
                 autoApprovePermissions: data.autoApprovePermissions
             )
+            snapshot?.ptyBusy = data.ptyBusy
             snapshot?.providerCliActive = data.providerCliActive
             snapshot?.providerCliExitCode = data.providerCliExitCode
         }
@@ -239,10 +240,14 @@ final class ChatStore: ObservableObject {
     }
 
     private func applyCommonFields(_ data: WsData) {
+        if let busy = data.ptyBusy {
+            snapshot?.ptyBusy = busy
+            isResponding = snapshot?.isResponding ?? isResponding
+        }
         if let s = data.structuredState { isResponding = s.inFlight ?? isResponding }
         if let active = data.providerCliActive {
             snapshot?.providerCliActive = active
-            if !active { isResponding = false }
+            isResponding = snapshot?.isResponding ?? isResponding
         }
         if let exitCode = data.providerCliExitCode { snapshot?.providerCliExitCode = exitCode }
         if let q = data.queuedMessages { queuedMessages = q }
@@ -321,7 +326,12 @@ final class ChatStore: ObservableObject {
             apply(snapshot: resumed)
             socket.requestResync()
         }
-        try await api.sendPtyInputChunk(id: sessionId, input: trimmed, view: view)
+        try await api.sendPtyInputChunk(
+            id: sessionId,
+            input: trimmed,
+            view: view,
+            shortcutKey: "enter_text"
+        )
         try await Task.sleep(nanoseconds: 30_000_000)
         try await api.sendPtyInputChunk(
             id: sessionId,
