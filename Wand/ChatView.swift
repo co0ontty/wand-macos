@@ -36,6 +36,7 @@ struct ChatView: View {
     @State private var observedLastUserAbsoluteIndex = Int.min
     @State private var observedLatestAssistantAbsoluteIndex = Int.min
     @State private var showModelThinkingPanel = false
+    @State private var modelQuery = ""
     /// 停止任务二次确认弹窗开关：点停止按钮先弹确认，避免误触中断正在跑的任务。
     @State private var showStopConfirm = false
     @State private var showTroubleshooting = false
@@ -461,15 +462,25 @@ struct ChatView: View {
     }
 
     private func modelButton(id: String?, label: String) -> some View {
-        Button {
+        let selected = id == nil
+            ? (store.selectedModel == nil || store.selectedModel?.isEmpty == true || store.selectedModel == "default")
+            : store.selectedModel == id
+        return Button {
             store.setModel(id)
         } label: {
-            if store.selectedModel == id {
-                Label(label, systemImage: "checkmark")
-            } else {
+            HStack {
                 Text(label)
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(Theme.brand)
+                }
             }
+            .contentShape(Rectangle())
+            .padding(.vertical, 4)
         }
+        .buttonStyle(.plain)
     }
 
     private var thinkingLevels: [ThinkingEffortOption] {
@@ -657,6 +668,9 @@ struct ChatView: View {
         .popover(isPresented: $showModelThinkingPanel, arrowEdge: .bottom) {
             modelThinkingPanel
         }
+        .onChange(of: showModelThinkingPanel) { open in
+            if !open { modelQuery = "" }
+        }
     }
 
     private var modelThinkingText: String {
@@ -717,23 +731,43 @@ struct ChatView: View {
         }
     }
 
+    private var filteredPanelModels: [ModelInfo] {
+        store.availableModels.filter { model in
+            model.id != "default" && matchesModelKeyword(modelQuery, id: model.id, label: model.label)
+        }
+    }
+
+    private var defaultModelMatchesQuery: Bool {
+        matchesModelKeyword(modelQuery, id: "", label: "默认")
+    }
+
     private var modelThinkingPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Menu {
-                modelButton(id: nil, label: "默认")
-                ForEach(store.availableModels.filter { $0.id != "default" }) { model in
-                    modelButton(id: model.id, label: model.label)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("模型")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Theme.textSecondary)
+            TextField("搜索模型", text: $modelQuery)
+                .textFieldStyle(.roundedBorder)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    if defaultModelMatchesQuery {
+                        modelButton(id: nil, label: "默认")
+                            .buttonStyle(.plain)
+                    }
+                    ForEach(filteredPanelModels) { model in
+                        modelButton(id: model.id, label: model.label)
+                            .buttonStyle(.plain)
+                    }
+                    if !defaultModelMatchesQuery && filteredPanelModels.isEmpty {
+                        Text("没有匹配的模型")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
+                            .padding(.vertical, 8)
+                    }
                 }
-            } label: {
-                HStack {
-                    Label("模型", systemImage: "cpu")
-                    Spacer()
-                    Text(shortModelLabel).font(.system(.caption, design: .monospaced))
-                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
-                }
-                .foregroundColor(Theme.textPrimary)
-                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxHeight: 220)
             Divider()
             ThinkingEffortSlider(
                 options: thinkingLevels,
@@ -743,7 +777,7 @@ struct ChatView: View {
             )
         }
         .padding(14)
-        .frame(width: 286)
+        .frame(width: 300)
     }
 
     private var gitChangesButton: some View {

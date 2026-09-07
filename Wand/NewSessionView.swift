@@ -34,6 +34,8 @@ struct NewSessionView: View {
     @State private var fullAccessAcknowledged = false
     @State private var errorMessage: String?
     @State private var showBrowser = false
+    @State private var showModelPicker = false
+    @State private var modelQuery = ""
     @FocusState private var focusedInput: NewSessionInput?
 
     init(
@@ -427,35 +429,39 @@ struct NewSessionView: View {
         return providerModels.first(where: { $0.id == selectedModel })?.label ?? selectedModel
     }
 
-    @ViewBuilder private var modelMenu: some View {
-        Button {
-            selectedModel = ""
-        } label: {
-            if selectedModel.isEmpty {
-                Label("默认", systemImage: "checkmark")
-            } else {
-                Text("默认")
-            }
-        }
-        ForEach(providerModels.filter { $0.id != "default" }) { model in
-            Button {
-                selectedModel = model.id
-            } label: {
-                if selectedModel == model.id {
-                    Label(model.label, systemImage: "checkmark")
-                } else {
-                    Text(model.label)
-                }
-            }
-        }
-        if providerModels.isEmpty {
-            Text("暂未加载到模型列表")
+    private var filteredNewSessionModels: [ModelInfo] {
+        providerModels.filter { model in
+            model.id != "default" && matchesModelKeyword(modelQuery, id: model.id, label: model.label)
         }
     }
 
+    private var defaultNewSessionModelMatchesQuery: Bool {
+        matchesModelKeyword(modelQuery, id: "", label: "默认")
+    }
+
+    @ViewBuilder private func modelPickerRow(id: String, label: String) -> some View {
+        Button {
+            selectedModel = id
+            showModelPicker = false
+            modelQuery = ""
+        } label: {
+            HStack {
+                Text(label)
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                if selectedModel == id || (id.isEmpty && selectedModel.isEmpty) {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(Theme.wandAccent)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var modelMenuButton: some View {
-        Menu {
-            modelMenu
+        Button {
+            showModelPicker.toggle()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "cpu")
@@ -474,11 +480,42 @@ struct NewSessionView: View {
             .padding(.horizontal, 10)
         }
         .buttonStyle(.plain)
-        .menuStyle(.borderlessButton)
         .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
         .frame(height: 44)
         .background(controlBackground)
         .accessibilityLabel("模型：\(selectedModelLabel)")
+        .popover(isPresented: $showModelPicker, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("搜索模型", text: $modelQuery)
+                    .textFieldStyle(.roundedBorder)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if defaultNewSessionModelMatchesQuery {
+                            modelPickerRow(id: "", label: "默认")
+                        }
+                        ForEach(filteredNewSessionModels) { model in
+                            modelPickerRow(id: model.id, label: model.label)
+                        }
+                        if providerModels.isEmpty {
+                            Text("暂未加载到模型列表")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.textSecondary)
+                        } else if !defaultNewSessionModelMatchesQuery && filteredNewSessionModels.isEmpty {
+                            Text("没有匹配的模型")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 260)
+            }
+            .padding(12)
+            .frame(width: 280)
+        }
+        .onChange(of: showModelPicker) { open in
+            if !open { modelQuery = "" }
+        }
     }
 
     /// 工作目录保持单行主路径；最近目录进入菜单，避免把弹窗拉成长列表。
