@@ -88,17 +88,11 @@ struct WorkspaceTaskView: View {
             Text(detail.name)
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
-            Text(detail.isIsolated ? "独立 worktree 已就绪" : "在任务目录中运行")
+            Text("选择 CLI 工具，以及结构化或 PTY，开始这个任务。")
                 .font(.system(size: 13))
                 .foregroundColor(Theme.textSecondary)
-            Button {
-                store.presentTargetPicker()
-            } label: {
-                Label("选择工作窗口", systemImage: "plus")
-                    .frame(minWidth: 200)
-            }
-            .buttonStyle(WandPrimaryButtonStyle())
-            .padding(.top, 8)
+            WorkspaceTargetPicker(store: store, taskId: task.id, embedded: true)
+                .padding(.top, 8)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("工作目录")

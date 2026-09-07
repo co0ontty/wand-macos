@@ -60,6 +60,18 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(sharedTask.body["worktree"], .bool(false))
     }
 
+    func testStandaloneTaskRequestUsesGlobalTasksEndpoint() {
+        let scratch = createStandaloneTaskRequest(name: "随口问问", cwd: nil, worktree: false)
+        XCTAssertEqual(scratch.path, "/api/tasks")
+        XCTAssertEqual(scratch.body["name"], .string("随口问问"))
+        XCTAssertNil(scratch.body["cwd"])
+        XCTAssertEqual(scratch.body["worktree"], .bool(false))
+
+        let mounted = createStandaloneTaskRequest(name: "挂目录", cwd: "/tmp/work", worktree: true)
+        XCTAssertEqual(mounted.body["cwd"], .string("/tmp/work"))
+        XCTAssertEqual(mounted.body["worktree"], .bool(true))
+    }
+
     func testTaskDirectoryGroupsDecodeAggregateShape() throws {
         // GET /api/tasks 的目录组形状：任务带运行期字段，未分组会话归 standaloneSessions。
         let json = """

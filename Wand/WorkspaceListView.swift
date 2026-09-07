@@ -10,6 +10,7 @@ struct NewTaskSheetRequest: Identifiable, Equatable {
     let id = UUID()
     let cwd: String
     let projectHint: String?
+    var workspaceId: String? = nil
 }
 
 /// 侧栏项目树：项目展开后是任务和直属会话。交互对齐 Orca / Web「项目」面板。
@@ -403,7 +404,7 @@ struct WorkspaceListView: View {
             .buttonStyle(.plain)
 
             Button {
-                newTaskRequest = NewTaskSheetRequest(cwd: group.workspaceCwd, projectHint: group.workspaceName)
+                newTaskRequest = NewTaskSheetRequest(cwd: group.workspaceCwd, projectHint: group.workspaceName, workspaceId: group.synthetic == true ? nil : group.workspaceId)
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
@@ -708,7 +709,7 @@ struct WorkspaceListView: View {
             .buttonStyle(.plain)
 
             Button {
-                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name)
+                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id)
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
@@ -726,7 +727,7 @@ struct WorkspaceListView: View {
         )
         .contextMenu {
             Button {
-                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name)
+                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id)
             } label: {
                 Label("新任务", systemImage: "plus")
             }

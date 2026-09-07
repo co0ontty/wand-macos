@@ -12,6 +12,8 @@ struct NewTaskSheetBody: View {
     @State private var name = ""
     @State private var cwd = ""
     @State private var worktreeEnabled = true
+    @State private var target: WorkspaceSessionTarget = .claude
+    @State private var sessionKind: WorkspaceSessionKind = .structured
     @State private var creating = false
     @State private var errorMessage: String?
 
@@ -27,11 +29,11 @@ struct NewTaskSheetBody: View {
             Divider().opacity(0.35)
             VStack(alignment: .leading, spacing: 12) {
                 if let hint = request.projectHint {
-                    Text("将在项目「\(hint)」下创建任务。")
+                    Text("将在项目「\(hint)」下创建任务。创建时必须选择 CLI。")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textSecondary)
                 } else {
-                    Text("任务归属所选目录；之后在任务里新建会话无需再选目录。")
+                    Text("可以不挂项目、不选目录（使用全局临时目录）。创建任务时必须选择 CLI。")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textSecondary)
                 }
@@ -46,10 +48,11 @@ struct NewTaskSheetBody: View {
                     Text("任务目录")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(Theme.textSecondary)
-                    TextField("例如：/home/user/wand", text: $cwd)
+                    TextField(request.projectHint == nil ? "留空则使用全局临时目录" : "例如：/home/user/wand", text: $cwd)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12, design: .monospaced))
                 }
+                if !cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 HStack(spacing: 10) {
                     Image(systemName: "arrow.triangle.branch")
                         .font(.system(size: 13, weight: .semibold))
@@ -83,6 +86,37 @@ struct NewTaskSheetBody: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(worktreeEnabled ? Theme.wandAccent.opacity(0.4) : Theme.border.opacity(0.6), lineWidth: 1)
                 )
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("CLI 工具")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Theme.textSecondary)
+                    Picker("CLI", selection: $target) {
+                        ForEach(WorkspaceSessionTarget.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .labelsHidden()
+                    .onChange(of: target) { value in
+                        store.rememberCreationChoice(provider: value)
+                    }
+                }
+                if target != .shell {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("会话类型")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(Theme.textSecondary)
+                        Picker("会话类型", selection: $sessionKind) {
+                            ForEach(WorkspaceSessionKind.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: sessionKind) { value in
+                            store.rememberCreationChoice(kind: value)
+                        }
+                    }
+                }
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
@@ -112,6 +146,8 @@ struct NewTaskSheetBody: View {
             Task {
                 await store.loadCreationDefaults()
                 worktreeEnabled = store.defaultTaskWorktree
+                target = store.selectedTarget
+                sessionKind = store.selectedKind
             }
         }
     }
@@ -123,10 +159,12 @@ struct NewTaskSheetBody: View {
         defer { creating = false }
         do {
             let directory = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+            store.rememberCreationChoice(provider: target, kind: sessionKind)
             let (workspace, creation) = try await store.createTask(
                 name: trimmed,
                 directory: directory,
-                worktree: worktreeEnabled ? nil : false
+                worktree: directory.isEmpty ? false : (worktreeEnabled ? nil : false),
+                workspaceId: request.workspaceId
             )
             dismiss()
             onCreated(workspace, creation)

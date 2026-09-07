@@ -155,15 +155,14 @@ struct MainShellView: View {
             WorkspaceCreateView(api: api, store: workspaceStore) { created in
                 showCreateWorkspace = false
                 sidebarSection = .workspaces
-                Task { await workspaceStore.loadWorkspaceSessions(workspaceId: created.id) }
-            }
-        }
-        .sheet(item: $newTaskSheetRequest) { request in
-            NewTaskSheetBody(request: request, store: workspaceStore) { workspace, creation in
-                sidebarSection = .workspaces
-                selectedWorkspaceTask = WorkspaceTaskSelection(
-                    workspace: workspace,
-                    task: WorkspaceTask(
+                Task {
+                    guard let (workspace, creation) = try? await workspaceStore.createTask(
+                        name: "新任务",
+                        directory: created.cwd,
+                        worktree: false,
+                        workspaceId: created.id
+                    ) else { return }
+                    let task = WorkspaceTask(
                         id: creation.id,
                         workspaceId: creation.workspaceId,
                         name: creation.name,
@@ -173,8 +172,30 @@ struct MainShellView: View {
                         createdAt: "",
                         lastOpenedAt: nil
                     )
+                    selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
+                    await workspaceStore.openTask(workspace: workspace, task: task)
+                }
+            }
+        }
+        .sheet(item: $newTaskSheetRequest) { request in
+            NewTaskSheetBody(request: request, store: workspaceStore) { workspace, creation in
+                sidebarSection = .workspaces
+                let task = WorkspaceTask(
+                    id: creation.id,
+                    workspaceId: creation.workspaceId,
+                    name: creation.name,
+                    worktree: creation.worktree,
+                    layout: nil,
+                    status: creation.status,
+                    createdAt: "",
+                    lastOpenedAt: nil
                 )
-                Task { await workspaceStore.loadTaskGroups(force: true) }
+                selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
+                Task {
+                    await workspaceStore.openTask(workspace: workspace, task: task)
+                    await workspaceStore.createSelectedWindow(expectedTaskId: creation.id)
+                    await workspaceStore.loadTaskGroups(force: true)
+                }
             }
         }
         .task {

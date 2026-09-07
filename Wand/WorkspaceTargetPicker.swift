@@ -3,43 +3,55 @@ import SwiftUI
 struct WorkspaceTargetPicker: View {
     @ObservedObject var store: WorkspaceStore
     let taskId: String
+    var embedded: Bool = false
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            sheetHeader
-            Divider().opacity(0.35)
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(WorkspaceSessionTarget.allCases) { target in
-                        targetRow(target)
-                    }
-                    if store.selectedTarget != .shell {
-                        kindPicker
-                    }
-                    if let error = store.creationError {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.footnote)
-                            .foregroundColor(Theme.danger)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Theme.danger.opacity(0.10))
-                            )
-                    }
-                }
-                .padding(20)
+        if embedded {
+            VStack(spacing: 16) {
+                pickerFields
+                sheetFooter
             }
-            Divider().opacity(0.35)
-            sheetFooter
+        } else {
+            VStack(spacing: 0) {
+                sheetHeader
+                Divider().opacity(0.35)
+                ScrollView {
+                    pickerFields
+                        .padding(20)
+                }
+                Divider().opacity(0.35)
+                sheetFooter
+            }
+            .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 580)
+            .background(WandAmbientBackground())
+            .hideNativeTitleBar()
+            .onChange(of: store.pickerPresented) { presented in
+                if !presented { dismiss() }
+            }
         }
-        .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 580)
-        .background(WandAmbientBackground())
-        .hideNativeTitleBar()
-        .onChange(of: store.pickerPresented) { presented in
-            if !presented { dismiss() }
+    }
+
+    private var pickerFields: some View {
+        VStack(spacing: 8) {
+            ForEach(WorkspaceSessionTarget.allCases) { target in
+                targetRow(target)
+            }
+            if store.selectedTarget != .shell {
+                kindPicker
+            }
+            if let error = store.creationError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundColor(Theme.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Theme.danger.opacity(0.10))
+                    )
+            }
         }
     }
 
@@ -150,13 +162,15 @@ struct WorkspaceTargetPicker: View {
 
     private var sheetFooter: some View {
         HStack {
-            Button("取消") {
-                store.dismissTargetPicker()
-                dismiss()
+            if !embedded {
+                Button("取消") {
+                    store.dismissTargetPicker()
+                    dismiss()
+                }
+                .buttonStyle(WandSecondaryButtonStyle())
+                .disabled(store.creating)
+                Spacer()
             }
-            .buttonStyle(WandSecondaryButtonStyle())
-            .disabled(store.creating)
-            Spacer()
             Button {
                 Task { await store.createSelectedWindow(expectedTaskId: taskId) }
             } label: {

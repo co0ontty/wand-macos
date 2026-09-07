@@ -32,6 +32,11 @@ protocol WorkspaceServing: AnyObject {
         baseRef: String?,
         worktree: Bool?
     ) async throws -> WorkspaceTaskCreation
+    func createStandaloneTask(
+        name: String,
+        cwd: String?,
+        worktree: Bool?
+    ) async throws -> WorkspaceTaskCreation
     func listTaskGroups() async throws -> [TaskDirectoryGroup]
     func deleteWorkspaceSessions(sessionIds: [String]) async throws -> Int
     func workspaceWorktreeOverview(workspaceId: String) async throws -> WorkspaceWorktreeOverview
@@ -272,35 +277,46 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    /// 任务一级入口：按目录 find-or-create 项目，再建任务（可选 worktree 隔离）。
+    /// 任务入口：独立任务走 POST /api/tasks（目录可空，使用全局临时目录）；
+    /// 指定 workspaceId 时在该项目下创建。
     @discardableResult
     func createTask(
         name: String,
         directory: String,
-        worktree: Bool?
+        worktree: Bool?,
+        workspaceId: String? = nil
     ) async throws -> (workspace: Workspace, creation: WorkspaceTaskCreation) {
         let trimmedDirectory = directory.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = trimmedDirectory.hasSuffix("/") && trimmedDirectory.count > 1
             ? String(trimmedDirectory.dropLast())
             : trimmedDirectory
+        let creation: WorkspaceTaskCreation
         let workspace: Workspace
-        if let existing = workspaces.first(where: { $0.cwd == normalized }) {
+        if let workspaceId, let existing = workspaces.first(where: { $0.id == workspaceId }) {
+            creation = try await api.createWorkspaceTask(
+                workspaceId: existing.id,
+                name: name,
+                baseRef: nil,
+                worktree: worktree
+            )
             workspace = existing
         } else {
-            let directoryName = normalized.split(separator: "/").last.map(String.init) ?? normalized
-            workspace = try await api.createWorkspace(
-                name: directoryName,
-                cwd: normalized,
-                defaultProvider: nil
+            creation = try await api.createStandaloneTask(
+                name: name,
+                cwd: normalized.isEmpty ? nil : normalized,
+                worktree: normalized.isEmpty ? false : worktree
             )
-            workspaces.append(workspace)
+            workspace = workspaces.first(where: { $0.id == creation.workspaceId })
+                ?? Workspace(
+                    id: creation.workspaceId,
+                    name: "",
+                    cwd: creation.cwd,
+                    defaultProvider: nil,
+                    layout: nil,
+                    createdAt: "",
+                    lastOpenedAt: nil
+                )
         }
-        let creation = try await api.createWorkspaceTask(
-            workspaceId: workspace.id,
-            name: name,
-            baseRef: nil,
-            worktree: worktree
-        )
         tasksByWorkspace[workspace.id] = (tasksByWorkspace[workspace.id] ?? []) + [WorkspaceTask(
             id: creation.id,
             workspaceId: creation.workspaceId,
@@ -417,6 +433,7 @@ final class WorkspaceStore: ObservableObject {
 
     func openTaskAndPresentPicker(workspace: Workspace, task: WorkspaceTask) async {
         await openTask(workspace: workspace, task: task)
+        if case .empty = taskState { return }
         presentTargetPicker()
     }
 
