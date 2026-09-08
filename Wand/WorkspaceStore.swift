@@ -30,7 +30,8 @@ protocol WorkspaceServing: AnyObject {
         workspaceId: String,
         name: String,
         baseRef: String?,
-        worktree: Bool?
+        worktree: Bool?,
+        cwd: String?
     ) async throws -> WorkspaceTaskCreation
     func createStandaloneTask(
         name: String,
@@ -228,7 +229,8 @@ final class WorkspaceStore: ObservableObject {
             workspaceId: workspaceId,
             name: name,
             baseRef: nil,
-            worktree: nil
+            worktree: nil,
+            cwd: nil
         )
         var refreshed: [WorkspaceTask] = []
         do {
@@ -297,7 +299,8 @@ final class WorkspaceStore: ObservableObject {
                 workspaceId: existing.id,
                 name: name,
                 baseRef: nil,
-                worktree: worktree
+                worktree: worktree,
+            cwd: nil
             )
             workspace = existing
         } else {
