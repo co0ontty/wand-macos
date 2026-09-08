@@ -402,7 +402,13 @@ final class WandAPI {
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
         if let prompt, !prompt.isEmpty { body["prompt"] = prompt }
-        return try await request(SessionSnapshot.self, method: "POST", path: "/api/structured-sessions", body: body)
+        return try await request(
+            SessionSnapshot.self,
+            method: "POST",
+            path: "/api/structured-sessions",
+            body: body,
+            timeout: 180
+        )
     }
 
     /// PTY 会话：POST /api/commands，command 与 provider 保持一致。
