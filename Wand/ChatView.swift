@@ -2764,6 +2764,9 @@ private struct TurnView: View {
     }
 
     private var collapsed: Bool {
+        // 最新一次助手回复始终展开；历史回复才使用本地折叠状态。
+        let isCurrentReply = turn.role == "assistant" && (historyBoundary < 0 || turnIndex >= historyBoundary)
+        if isCurrentReply { return false }
         if let currentReplyExpandedOverride {
             return !currentReplyExpandedOverride
         }
