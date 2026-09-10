@@ -369,9 +369,14 @@ struct WorkspaceListView: View {
                 toggleCollapsedTaskGroup(group.id)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: group.isSynthetic ? "folder.badge.questionmark" : "folder")
-                        .font(.system(size: 13, weight: .medium))
+                    Image(systemName: group.isSynthetic ? "folder.badge.questionmark" : "folder.fill")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.wandAccent)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Theme.wandAccent.opacity(0.10))
+                        )
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 5) {
                             Text(group.workspaceName)
@@ -414,8 +419,12 @@ struct WorkspaceListView: View {
             .buttonStyle(WandIconButtonStyle())
             .help("在此目录新建任务")
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Theme.surface.opacity(0.55))
+        )
     }
 
     private func treeDisclosureCaret(expanded: Bool) -> some View {
