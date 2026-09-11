@@ -2171,8 +2171,7 @@ private func collapseActivityItems(
     }
     flushPending()
     if isLastTurn && isResponding,
-       case .activity(let group) = renderItems.last,
-       isActivityGroupOpen(group) {
+       case .activity(let group) = renderItems.last {
         renderItems[renderItems.count - 1] = .activity(ActivityGroup(
             id: group.id,
             latest: group.latest,
@@ -2547,6 +2546,32 @@ private func replyPreview(_ content: [ContentBlock]) -> String {
     return toolCount > 0 ? "\(toolCount) 个工具调用" : ""
 }
 
+private struct ActivityFoldPulseDots: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var lifted = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(Theme.brand)
+                    .frame(width: 4, height: 4)
+                    .offset(y: reduceMotion ? 0 : (lifted ? -2.5 : 0))
+                    .opacity(reduceMotion ? 0.55 : (lifted ? 1 : 0.28))
+                    .animation(
+                        reduceMotion
+                            ? nil
+                            : .easeInOut(duration: 0.42)
+                                .repeatForever(autoreverses: true)
+                                .delay(Double(index) * 0.12),
+                        value: lifted
+                    )
+            }
+        }
+        .onAppear { lifted = true }
+    }
+}
+
 private struct ActivityFoldCompactKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -2595,12 +2620,15 @@ private struct ActivityFoldCard<Content: View>: View {
                             .rotationEffect(.degrees(expanded ? 180 : 0))
                     }
                     if group.running {
-                        Text(group.latest)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(Theme.textMuted)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 8) {
+                            Text(group.latest)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(Theme.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            ActivityFoldPulseDots()
+                        }
                     }
                 }
                 .padding(.horizontal, 2)
