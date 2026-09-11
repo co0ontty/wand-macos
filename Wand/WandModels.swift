@@ -774,6 +774,17 @@ struct ModelsResponse: Decodable {
     let defaultPiModel: String?
     let defaultModels: ProviderDefaultModels?
 
+    func models(for provider: String) -> [ModelInfo] {
+        switch provider {
+        case "codex": return codexModels
+        case "opencode": return opencodeModels ?? []
+        case "grok": return grokModels ?? []
+        case "qoder": return qoderModels ?? []
+        case "pi": return piModels ?? []
+        default: return models
+        }
+    }
+
     func defaultModelId(for provider: String) -> String {
         if let configured = defaultModels?.model(for: provider), !configured.isEmpty {
             return configured

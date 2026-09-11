@@ -464,6 +464,36 @@ struct TaskDirectoryGroup: Codable, Equatable, Identifiable {
     var isSynthetic: Bool { synthetic ?? false }
 }
 
+
+struct TaskGroupsPage: Equatable {
+    let groups: [TaskDirectoryGroup]
+    let revision: String?
+    let unchanged: Bool
+
+    static func decode(from data: Data) throws -> TaskGroupsPage {
+        let object = try JSONSerialization.jsonObject(with: data)
+        if let array = object as? [Any] {
+            let encoded = try JSONSerialization.data(withJSONObject: array)
+            let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: encoded)
+            return TaskGroupsPage(groups: groups, revision: nil, unchanged: false)
+        }
+        guard let dict = object as? [String: Any] else {
+            throw NSError(domain: "Wand", code: 1, userInfo: [NSLocalizedDescriptionKey: "任务列表响应无效"])
+        }
+        let unchanged = dict["unchanged"] as? Bool ?? false
+        let revision = dict["revision"] as? String
+        let groups: [TaskDirectoryGroup]
+        if let raw = dict["groups"] {
+            let encoded = try JSONSerialization.data(withJSONObject: raw)
+            groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: encoded)
+        } else {
+            groups = []
+        }
+        return TaskGroupsPage(groups: groups, revision: revision, unchanged: unchanged)
+    }
+}
+
+
 struct SessionBatchDeleteResponse: Decodable {
     let deleted: Int?
 }
@@ -504,6 +534,44 @@ enum TaskListPresentation {
 
     static func isTaskSessionsExpanded(userCollapsed: Bool, sessionCount: Int) -> Bool {
         !showsTaskSessionDisclosure(sessionCount: sessionCount) || !userCollapsed
+    }
+
+    struct ManageSelection: Equatable {
+        var taskIds: Set<String> = []
+        var sessionIds: Set<String> = []
+        var count: Int { taskIds.count + sessionIds.count }
+        var isEmpty: Bool { count == 0 }
+    }
+
+    static func collectManagedIds(_ groups: [TaskDirectoryGroup]) -> ManageSelection {
+        var taskIds = Set<String>()
+        var sessionIds = Set<String>()
+        for group in groups {
+            for task in group.tasks {
+                taskIds.insert(task.id)
+                task.sessions.forEach { sessionIds.insert($0.id) }
+            }
+            group.standaloneSessions.forEach { sessionIds.insert($0.id) }
+        }
+        return ManageSelection(taskIds: taskIds, sessionIds: sessionIds)
+    }
+
+    static func resolveManagedDeletion(
+        _ selection: ManageSelection,
+        groups: [TaskDirectoryGroup]
+    ) -> ManageSelection {
+        let owned = Set(groups.flatMap(\.tasks).filter { selection.taskIds.contains($0.id) }.flatMap { $0.sessions.map(\.id) })
+        return ManageSelection(
+            taskIds: selection.taskIds,
+            sessionIds: selection.sessionIds.filter { !owned.contains($0) }
+        )
+    }
+
+    static func describeManagedDeletion(_ selection: ManageSelection) -> String {
+        var parts: [String] = []
+        if !selection.taskIds.isEmpty { parts.append("\(selection.taskIds.count) 个任务") }
+        if !selection.sessionIds.isEmpty { parts.append("\(selection.sessionIds.count) 个终端") }
+        return parts.isEmpty ? "所选项目" : parts.joined(separator: "和")
     }
 
     static func listSessionLabel(

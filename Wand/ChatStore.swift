@@ -47,6 +47,10 @@ final class ChatStore: ObservableObject {
     private var started = false
     private let earlierPageSize = 40
     private var queuePromotePending = false
+    private var settingsMutationTail: Task<Void, Never>?
+    private var modelUpdateRevision: UInt64 = 0
+    private var thinkingUpdateRevision: UInt64 = 0
+    private var queueMutationRevision: UInt64 = 0
 
     var isStructured: Bool { snapshot?.isStructured ?? true }
     var sessionEnded: Bool { ["exited", "failed", "stopped"].contains(status) }
@@ -288,7 +292,8 @@ final class ChatStore: ObservableObject {
         Task {
             do {
                 if isStructured {
-                    try await api.sendInput(id: sessionId, input: trimmed, respondImmediately: true)
+                    let snap = try await api.sendInput(id: sessionId, input: trimmed, respondImmediately: true)
+                    apply(snapshot: snap)
                     socket.requestResync()
                 } else {
                     try await sendPtyChatInput(trimmed)
@@ -343,12 +348,16 @@ final class ChatStore: ObservableObject {
 
     func setModel(_ model: String?) {
         let previous = selectedModel
+        modelUpdateRevision &+= 1
+        let revision = modelUpdateRevision
         selectedModel = model
-        Task {
+        enqueueSettingsMutation { [self] in
             do {
                 let snap = try await api.setModel(id: sessionId, model: model)
-                apply(snapshot: snap)
+                guard revision == modelUpdateRevision else { return }
+                selectedModel = snap.selectedModel ?? model
             } catch {
+                guard revision == modelUpdateRevision else { return }
                 selectedModel = previous
                 toast = error.localizedDescription
             }
@@ -357,15 +366,29 @@ final class ChatStore: ObservableObject {
 
     func setThinkingEffort(_ effort: String) {
         let previous = thinkingEffort
+        thinkingUpdateRevision &+= 1
+        let revision = thinkingUpdateRevision
         thinkingEffort = effort
-        Task {
+        enqueueSettingsMutation { [self] in
             do {
                 let snap = try await api.setThinkingEffort(id: sessionId, thinkingEffort: effort)
-                apply(snapshot: snap)
+                guard revision == thinkingUpdateRevision else { return }
+                thinkingEffort = snap.thinkingEffort ?? effort
             } catch {
+                guard revision == thinkingUpdateRevision else { return }
                 thinkingEffort = previous
                 toast = error.localizedDescription
             }
+        }
+    }
+
+    private func enqueueSettingsMutation(
+        _ mutation: @escaping @MainActor () async -> Void
+    ) {
+        let previous = settingsMutationTail
+        settingsMutationTail = Task { @MainActor in
+            _ = await previous?.result
+            await mutation()
         }
     }
 
@@ -454,11 +477,14 @@ final class ChatStore: ObservableObject {
     func deleteQueued(index: Int) {
         let previous = queuedMessages
         guard previous.indices.contains(index) else { return }
+        queueMutationRevision &+= 1
+        let revision = queueMutationRevision
         queuedMessages.remove(at: index)
         Task {
             do {
                 try await api.deleteQueued(id: sessionId, index: index)
             } catch {
+                guard revision == queueMutationRevision else { return }
                 queuedMessages = previous
                 toast = error.localizedDescription
             }
@@ -469,12 +495,15 @@ final class ChatStore: ObservableObject {
     func clearQueued() {
         let previous = queuedMessages
         guard !previous.isEmpty else { return }
+        queueMutationRevision &+= 1
+        let revision = queueMutationRevision
         queuedMessages = []
         Task {
             do {
                 try await api.clearQueued(id: sessionId)
                 toast = "已清空 \(previous.count) 条排队消息。"
             } catch {
+                guard revision == queueMutationRevision else { return }
                 queuedMessages = previous
                 toast = error.localizedDescription
             }

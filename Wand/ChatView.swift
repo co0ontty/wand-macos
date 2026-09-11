@@ -1955,7 +1955,9 @@ private func subagentIdentity(_ meta: SubagentMeta) -> String {
 
 private struct ActivityGroup: Identifiable {
     let id: String
-    let summary: String
+    let latest: String
+    let meta: String
+    let count: Int
     let items: [DisplayItem]
     let running: Bool
 }
@@ -2142,18 +2144,23 @@ private func collapseActivityItems(
     func flushPending() {
         guard !pending.isEmpty else { return }
         let groupItems = pending
-        let running = groupItems.contains { isDisplayItemRunning($0, isLastTurn: isLastTurn, isResponding: isResponding) }
-        renderItems.append(.activity(ActivityGroup(
-            id: activityGroupKey(groupItems, startIndex: pendingStartIndex),
-            summary: activitySummary(groupItems, running: running),
-            items: groupItems,
-            running: running
-        )))
+        let summary = summarizeActivityItems(groupItems)
+        if summary.count > 0 {
+            renderItems.append(.activity(ActivityGroup(
+                id: activityGroupKey(groupItems, startIndex: pendingStartIndex),
+                latest: summary.latest,
+                meta: summary.meta,
+                count: summary.count,
+                items: groupItems,
+                running: false
+            )))
+        }
         pending.removeAll(keepingCapacity: true)
         pendingStartIndex = -1
     }
 
     for (index, item) in items.enumerated() {
+        if shouldSkipActivityItem(item) { continue }
         if isCollapsibleActivityItem(item) {
             if pending.isEmpty { pendingStartIndex = index }
             pending.append(item)
@@ -2163,6 +2170,18 @@ private func collapseActivityItems(
         }
     }
     flushPending()
+    if isLastTurn && isResponding,
+       case .activity(let group) = renderItems.last,
+       isActivityGroupOpen(group) {
+        renderItems[renderItems.count - 1] = .activity(ActivityGroup(
+            id: group.id,
+            latest: group.latest,
+            meta: group.meta,
+            count: group.count,
+            items: group.items,
+            running: true
+        ))
+    }
     return renderItems
 }
 
@@ -2193,17 +2212,161 @@ private func displayItemStableKey(_ item: DisplayItem) -> String {
     }
 }
 
+private func shouldSkipActivityItem(_ item: DisplayItem) -> Bool {
+    if case .plain(.thinking(let text, _)) = item {
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    guard case .tool(let id, let name, _, _, let subagent, _) = item else { return false }
+    return subagent?.taskId == id && (name == "Task" || name == "Agent")
+}
+
 private func isCollapsibleActivityItem(_ item: DisplayItem) -> Bool {
     switch item {
     case .plain(let block):
-        if case .text = block { return false }
-        if case .unknown = block { return false }
-        return true
+        switch block {
+        case .text, .unknown, .toolUse: return false
+        case .thinking, .toolResult: return true
+        }
     case .explorationGroup:
         return true
-    case .tool(_, let name, _, _, _, _):
-        return name != "AskUserQuestion"
+    case .tool(_, let name, _, let input, _, _):
+        if name == "AskUserQuestion" { return false }
+        if toolShowsImage(input) { return false }
+        return true
     }
+}
+
+private func toolShowsImage(_ input: [String: JSONValue]) -> Bool {
+    let candidate = input["file_path"]?.stringValue ?? input["path"]?.stringValue ?? input["url"]?.stringValue ?? ""
+    return isImageAttachmentPath(candidate)
+}
+
+private func isActivityGroupOpen(_ group: ActivityGroup) -> Bool {
+    guard let last = group.items.last else { return false }
+    switch last {
+    case .plain(.thinking): return true
+    case .tool(_, _, _, _, _, let result): return result == nil
+    case .explorationGroup(let tools): return tools.last?.result == nil
+    default: return false
+    }
+}
+
+private struct ActivityRunSummary {
+    let latest: String
+    let meta: String
+    let count: Int
+}
+
+private let activityKindMeta: [(String, String)] = [
+    ("read", "浏览"),
+    ("command", "命令"),
+    ("search", "搜索"),
+    ("edit", "编辑"),
+    ("web", "网页"),
+    ("other", "调用"),
+    ("thinking", "思考"),
+]
+
+private func summarizeActivityItems(_ items: [DisplayItem]) -> ActivityRunSummary {
+    var counts: [String: Int] = [:]
+    var latest = ""
+    var count = 0
+
+    func addTool(name: String, input: [String: JSONValue]) {
+        let kind = activityKindOf(name)
+        counts[kind, default: 0] += 1
+        let label = activityToolLabel(name: name, input: input)
+        if !label.isEmpty { latest = label }
+        count += 1
+    }
+
+    for item in items {
+        switch item {
+        case .plain(.thinking(let thinking, _)):
+            let trimmed = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            counts["thinking", default: 0] += 1
+            latest = activityThinkingLabel(thinking)
+            count += 1
+        case .tool(_, let name, _, let input, _, _):
+            addTool(name: name, input: input)
+        case .explorationGroup(let tools):
+            for tool in tools { addTool(name: tool.name, input: tool.input) }
+        default:
+            break
+        }
+    }
+    let meta = activityKindMeta.compactMap { kind, label in
+        guard let value = counts[kind], value > 0 else { return nil }
+        return "\(label) \(value)"
+    }.joined(separator: " · ")
+    return ActivityRunSummary(
+        latest: latest.isEmpty ? "处理中" : latest,
+        meta: meta,
+        count: count
+    )
+}
+
+private func compactInline(_ value: String) -> String {
+    value.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func truncateInline(_ value: String, max: Int) -> String {
+    let text = compactInline(value)
+    if text.isEmpty { return "" }
+    return text.count > max ? String(text.prefix(max - 1)) + "…" : text
+}
+
+private func tailInline(_ value: String, max: Int) -> String {
+    let text = compactInline(value)
+    if text.isEmpty { return "" }
+    return text.count > max ? "…" + String(text.suffix(max - 1)) : text
+}
+
+private func fileNameOf(_ path: String) -> String {
+    if let idx = path.lastIndex(of: "/") {
+        return String(path[path.index(after: idx)...])
+    }
+    return path
+}
+
+private func activityThinkingLabel(_ thinking: String) -> String {
+    let text = tailInline(thinking, max: 240)
+    return text.isEmpty ? "深度思考" : text
+}
+
+private func activityToolLabel(name: String, input: [String: JSONValue]) -> String {
+    let command = input["command"]?.stringValue ?? input["cmd"]?.stringValue ?? ""
+    let path = input["file_path"]?.stringValue ?? input["path"]?.stringValue ?? ""
+    let query = input["pattern"]?.stringValue ?? input["query"]?.stringValue ?? ""
+    let url = input["url"]?.stringValue ?? ""
+    switch name {
+    case "Bash":
+        return command.isEmpty ? "运行命令" : "运行 \(truncateInline(command, max: 240))"
+    case "Read":
+        return path.isEmpty ? "读取文件" : "读取 \(truncateInline(path, max: 240))"
+    case "Grep", "Glob", "WebSearch":
+        return query.isEmpty ? "搜索" : "搜索 \(truncateInline(query, max: 240))"
+    case "WebFetch":
+        return url.isEmpty ? "抓取网页" : "抓取 \(truncateInline(url, max: 240))"
+    case "Edit", "MultiEdit":
+        return "修改 \(path.isEmpty ? "文件" : truncateInline(path, max: 240))"
+    case "Write":
+        return "写入 \(path.isEmpty ? "文件" : truncateInline(path, max: 240))"
+    default:
+        return toolLabel(name)
+    }
+}
+
+private func activityKindOf(_ name: String) -> String {
+    let lower = name.lowercased()
+    if ["read", "inspect", "view", "open", "list", "load"].contains(where: { lower.contains($0) }) { return "read" }
+    if ["bash", "exec", "command", "shell", "stdin", "terminal"].contains(where: { lower.contains($0) }) { return "command" }
+    if ["grep", "glob", "search", "find", "query", "lookup"].contains(where: { lower.contains($0) }) { return "search" }
+    if ["edit", "write", "patch", "replace", "notebook"].contains(where: { lower.contains($0) }) { return "edit" }
+    if ["web", "fetch", "http", "url", "browser"].contains(where: { lower.contains($0) }) { return "web" }
+    return "other"
 }
 
 private func isDisplayItemRunning(_ item: DisplayItem, isLastTurn: Bool, isResponding: Bool) -> Bool {
@@ -2384,87 +2547,93 @@ private func replyPreview(_ content: [ContentBlock]) -> String {
     return toolCount > 0 ? "\(toolCount) 个工具调用" : ""
 }
 
-private struct ActivitySummaryRow: View {
-    let group: ActivityGroup
-    let onClick: () -> Void
+private struct ActivityFoldCompactKey: EnvironmentKey {
+    static let defaultValue = false
+}
 
-    var body: some View {
-        Button {
-            onClick()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: activityIconName(group.items))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(group.running ? Theme.brand : Theme.textSecondary)
-                    .frame(width: 18)
-                Text(group.summary)
-                    .font(.system(size: 14))
-                    .foregroundColor(Theme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(Theme.textSecondary)
-            }
-            .padding(.horizontal, 2)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func activityIconName(_ items: [DisplayItem]) -> String {
-        if let first = activityTools(items).first {
-            let lower = first.name.lowercased()
-            if lower.contains("bash") || lower.contains("command") { return "terminal" }
-            if lower.contains("edit") || lower.contains("write") { return "pencil" }
-            if lower.contains("read") { return "doc.text.magnifyingglass" }
-            if lower.contains("grep") || lower.contains("glob") || lower.contains("search") { return "magnifyingglass" }
-            if lower.contains("web") || lower.contains("fetch") { return "globe" }
-            if lower.contains("task") || lower.contains("agent") { return "person.2" }
-            return "wrench.and.screwdriver"
-        }
-        if case .plain(.thinking(_, _))? = items.first {
-            return "brain"
-        }
-        return "doc.text"
+private extension EnvironmentValues {
+    var activityFoldCompact: Bool {
+        get { self[ActivityFoldCompactKey.self] }
+        set { self[ActivityFoldCompactKey.self] = newValue }
     }
 }
 
-private struct ActivityDetailSheet<Content: View>: View {
+private struct ActivityFoldCard<Content: View>: View {
     let group: ActivityGroup
     @ViewBuilder let itemView: (DisplayItem) -> Content
 
+    @State private var expanded = false
+    private let tailAnchorID = "activity-fold-tail"
+    private var refreshToken: String { "\(group.count):\(group.latest)" }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Text("执行详情")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Spacer()
-                Text(group.summary)
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Theme.surface))
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(group.items.enumerated()), id: \.offset) { _, item in
-                        itemView(item)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                expanded.toggle()
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        if !group.meta.isEmpty {
+                            Text(group.meta)
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.textMuted.opacity(0.85))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Spacer(minLength: 0)
+                        }
+                        Text("\(group.count)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Theme.brand)
+                            .padding(.horizontal, 5)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(Capsule().fill(Theme.brand.opacity(0.12)))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(Theme.textMuted)
+                            .rotationEffect(.degrees(expanded ? 180 : 0))
+                    }
+                    if group.running {
+                        Text(group.latest)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(Theme.textMuted)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 2)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(expanded ? "收起活动" : "展开活动")
+
+            if expanded {
+                Divider()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(group.items.enumerated()), id: \.offset) { _, item in
+                                itemView(item)
+                            }
+                            Color.clear.frame(height: 1).id(tailAnchorID)
+                        }
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 6)
+                    }
+                    .frame(height: 220)
+                    .environment(\.activityFoldCompact, true)
+                    .onAppear {
+                        proxy.scrollTo(tailAnchorID, anchor: .bottom)
+                    }
+                    .onChange(of: refreshToken) { _, _ in
+                        proxy.scrollTo(tailAnchorID, anchor: .bottom)
+                    }
+                }
             }
         }
-        .padding(16)
-        .frame(minWidth: 520, minHeight: 420)
-        .background(Theme.background)
     }
 }
 
@@ -2629,7 +2798,6 @@ private struct TurnView: View {
     var onAskSubmit: (String, String) -> Void
 
     @State private var localCollapsed: Bool
-    @State private var openActivityGroup: ActivityGroup?
 
     init(
         turn: ConversationTurn,
@@ -2663,8 +2831,7 @@ private struct TurnView: View {
         self.askSelections = askSelections
         self.onAskToggle = onAskToggle
         self.onAskSubmit = onAskSubmit
-        _localCollapsed = State(initialValue: turnIndex >= 0 && historyBoundary >= 0 && turnIndex < historyBoundary)
-        _openActivityGroup = State(initialValue: nil)
+        _localCollapsed = State(initialValue: false)
     }
 
     var body: some View {
@@ -2756,7 +2923,7 @@ private struct TurnView: View {
     }
 
     private var defaultCollapsed: Bool {
-        turnIndex >= 0 && historyBoundary >= 0 && turnIndex < historyBoundary
+        false
     }
 
     private var shouldFoldCurrentReply: Bool {
@@ -2832,11 +2999,6 @@ private struct TurnView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(item: $openActivityGroup) { group in
-            ActivityDetailSheet(group: group) { item in
-                itemView(item)
-            }
-        }
     }
 
     private var assistantSegments: [AssistantContentSegment] {
@@ -2854,8 +3016,8 @@ private struct TurnView: View {
             case .item(_, let item):
                 itemView(item)
             case .activity(let group):
-                ActivitySummaryRow(group: group) {
-                    openActivityGroup = group
+                ActivityFoldCard(group: group) { item in
+                    itemView(item)
                 }
             }
         }
@@ -2927,6 +3089,7 @@ private struct TurnView: View {
 // MARK: - 内容块渲染
 
 private struct BlockView: View {
+    @Environment(\.activityFoldCompact) private var compact
     let block: ContentBlock
     var showSubagentTag = true
 
@@ -2949,9 +3112,9 @@ private struct BlockView: View {
                     tint: Theme.textSecondary
                 ) {
                     Text(thinking)
-                        .font(.system(size: 13))
+                        .font(.system(size: compact ? 11 : 13))
                         .italic()
-                        .foregroundColor(Theme.textSecondary)
+                        .foregroundColor(compact ? Theme.textMuted : Theme.textSecondary)
                         .textSelection(.enabled)
                 }
             }
@@ -3004,6 +3167,7 @@ private struct BlockView: View {
 /// 原生 Markdown 渲染：块级结构独立布局，内联标记交给 AttributedString。
 private struct MarkdownText: View {
     let text: String
+    @Environment(\.activityFoldCompact) private var compact
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -3026,9 +3190,9 @@ private struct MarkdownText: View {
     @ViewBuilder private func blockView(_ block: Block) -> some View {
         switch block {
         case .paragraph(let content):
-            inlineText(content, size: 16)
+            inlineText(content, size: compact ? 12 : 16, color: compact ? Theme.textMuted : Theme.textPrimary)
         case .heading(let level, let content):
-            inlineText(content, size: headingSize(level), weight: .semibold)
+            inlineText(content, size: headingSize(level) - (compact ? 3 : 0), weight: .semibold, color: compact ? Theme.textMuted : Theme.textPrimary)
                 .padding(.top, level <= 2 ? 3 : 1)
         case .listItem(let marker, let content, let indent, let checked):
             HStack(alignment: .top, spacing: 7) {
@@ -3044,7 +3208,7 @@ private struct MarkdownText: View {
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 14)
                     .padding(.top, 2)
-                inlineText(content, size: 16)
+                inlineText(content, size: compact ? 12 : 16, color: compact ? Theme.textMuted : Theme.textPrimary)
             }
             .padding(.leading, CGFloat(indent * 14))
         case .quote(let content):

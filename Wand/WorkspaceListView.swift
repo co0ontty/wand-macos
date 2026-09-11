@@ -56,6 +56,10 @@ struct WorkspaceListView: View {
     @State private var reviewTarget: Workspace?
     @State private var toastMessage: String?
     @State private var newTaskRequest: NewTaskSheetRequest?
+    @State private var isSelecting = false
+    @State private var selectedTaskIds = Set<String>()
+    @State private var selectedSessionIds = Set<String>()
+    @State private var pendingManagedDelete: TaskListPresentation.ManageSelection?
 
     var body: some View {
         ZStack {
@@ -193,6 +197,23 @@ struct WorkspaceListView: View {
                 Text("终端「\(sessionDeleteLabel(target))」会结束并被删除，此操作无法撤销。")
             }
         }
+        .confirmationDialog(
+            "删除所选项目？",
+            isPresented: Binding(
+                get: { pendingManagedDelete != nil },
+                set: { if !$0 { pendingManagedDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                Task { await confirmManagedDelete() }
+            }
+            Button("取消", role: .cancel) { pendingManagedDelete = nil }
+        } message: {
+            if let selection = pendingManagedDelete {
+                Text("将删除\(TaskListPresentation.describeManagedDeletion(selection))，此操作无法撤销。")
+            }
+        }
     }
 
     private var expandedWorkspaceIdsDescription: String {
@@ -293,6 +314,7 @@ struct WorkspaceListView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 2, pinnedViews: [.sectionHeaders]) {
+                    manageBar(groups: visible)
                     if let error = store.taskGroupsError {
                         inlineError(error)
                     }
@@ -471,11 +493,24 @@ struct WorkspaceListView: View {
         return VStack(spacing: 1) {
             HStack(spacing: 4) {
                 Button {
+                    if isSelecting {
+                        if selectedTaskIds.contains(summary.id) {
+                            selectedTaskIds.remove(summary.id)
+                        } else {
+                            selectedTaskIds.insert(summary.id)
+                        }
+                        return
+                    }
                     collapsedTaskIds.remove(summary.id)
                     onOpenTask(workspace, task)
                 } label: {
                     HStack(spacing: 6) {
-                        if summary.isIsolated || summary.status == "done" {
+                        if isSelecting {
+                            Image(systemName: selectedTaskIds.contains(summary.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(selectedTaskIds.contains(summary.id) ? Theme.brand : Theme.textMuted)
+                                .frame(width: 14, height: 14)
+                        } else if summary.isIsolated || summary.status == "done" {
                             Image(systemName: summary.status == "done" ? "checkmark.circle.fill" : "arrow.triangle.branch")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(summary.status == "done" ? Theme.success : Theme.textMuted)
@@ -605,9 +640,23 @@ struct WorkspaceListView: View {
             parentNames: [groupName(workspace), summary.name]
         )
         return Button {
+            if isSelecting {
+                if selectedSessionIds.contains(session.id) {
+                    selectedSessionIds.remove(session.id)
+                } else {
+                    selectedSessionIds.insert(session.id)
+                }
+                return
+            }
             onOpenTaskSession?(workspace, summary.asTask(), session)
         } label: {
             HStack(spacing: 8) {
+                if isSelecting {
+                    Image(systemName: selectedSessionIds.contains(session.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(selectedSessionIds.contains(session.id) ? Theme.brand : Theme.textMuted)
+                        .frame(width: 14, height: 14)
+                }
                 BrandLogo(provider: session.provider ?? "terminal", color: selected ? Theme.wandAccent : Theme.textSecondary)
                     .frame(width: 13, height: 13)
                     .frame(width: 18, height: 18)
@@ -766,9 +815,23 @@ struct WorkspaceListView: View {
         workspace: Workspace
     ) -> some View {
         Button {
+            if isSelecting {
+                if selectedSessionIds.contains(session.id) {
+                    selectedSessionIds.remove(session.id)
+                } else {
+                    selectedSessionIds.insert(session.id)
+                }
+                return
+            }
             onOpenSession?(workspace, session)
         } label: {
             HStack(spacing: 8) {
+                if isSelecting {
+                    Image(systemName: selectedSessionIds.contains(session.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(selectedSessionIds.contains(session.id) ? Theme.brand : Theme.textMuted)
+                        .frame(width: 14, height: 14)
+                }
                 BrandLogo(provider: session.provider ?? "terminal", color: Theme.textSecondary)
                     .frame(width: 13, height: 13)
                     .frame(width: 18, height: 18)
@@ -1031,6 +1094,88 @@ struct WorkspaceListView: View {
     private func requestDeleteSession(_ session: WorkspaceSessionSummary) {
         deleteError = nil
         deleteSessionTarget = session
+    }
+
+    @ViewBuilder
+    private func manageBar(groups: [TaskDirectoryGroup]) -> some View {
+        HStack(spacing: 8) {
+            if isSelecting {
+                Text(selectedTaskIds.isEmpty && selectedSessionIds.isEmpty
+                     ? "点选任务或终端"
+                     : "已选择 \(selectedTaskIds.count + selectedSessionIds.count) 项")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer(minLength: 0)
+                Button(allVisibleSelected(groups) ? "取消全选" : "全选") {
+                    let all = TaskListPresentation.collectManagedIds(groups)
+                    if allVisibleSelected(groups) {
+                        selectedTaskIds.removeAll()
+                        selectedSessionIds.removeAll()
+                    } else {
+                        selectedTaskIds = all.taskIds
+                        selectedSessionIds = all.sessionIds
+                    }
+                }
+                .buttonStyle(.plain)
+                Button("删除", role: .destructive) {
+                    let resolved = TaskListPresentation.resolveManagedDeletion(
+                        .init(taskIds: selectedTaskIds, sessionIds: selectedSessionIds),
+                        groups: groups
+                    )
+                    if !resolved.isEmpty { pendingManagedDelete = resolved }
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedTaskIds.isEmpty && selectedSessionIds.isEmpty)
+                Button("完成") {
+                    isSelecting = false
+                    selectedTaskIds.removeAll()
+                    selectedSessionIds.removeAll()
+                }
+                .buttonStyle(.plain)
+            } else {
+                Spacer(minLength: 0)
+                Button {
+                    isSelecting = true
+                    selectedTaskIds.removeAll()
+                    selectedSessionIds.removeAll()
+                } label: {
+                    Label("选择", systemImage: "checkmark.circle")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .help("多选任务和终端")
+                .accessibilityLabel("多选任务和终端")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+
+    private func allVisibleSelected(_ groups: [TaskDirectoryGroup]) -> Bool {
+        let all = TaskListPresentation.collectManagedIds(groups)
+        return !all.isEmpty && selectedTaskIds == all.taskIds && selectedSessionIds == all.sessionIds
+    }
+
+    private func confirmManagedDelete() async {
+        guard let selection = pendingManagedDelete else { return }
+        do {
+            for taskId in selection.taskIds {
+                if let task = store.taskGroups.flatMap(\.tasks).first(where: { $0.id == taskId }) {
+                    try await store.deleteWorkspaceTask(workspaceId: task.workspaceId, taskId: task.id)
+                    onTaskDeleted?(task.id)
+                }
+            }
+            if !selection.sessionIds.isEmpty {
+                try await store.deleteSessions(Array(selection.sessionIds))
+            }
+            pendingManagedDelete = nil
+            isSelecting = false
+            selectedTaskIds.removeAll()
+            selectedSessionIds.removeAll()
+            showToast("已删除\(TaskListPresentation.describeManagedDeletion(selection))")
+        } catch {
+            deleteError = error.localizedDescription
+        }
     }
 
     private func sessionDeleteLabel(_ session: WorkspaceSessionSummary) -> String {

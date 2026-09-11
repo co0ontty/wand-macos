@@ -39,6 +39,7 @@ struct MainShellView: View {
     @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
     @State private var showMissions = false
+    @State private var showTaskBoard = false
     @StateObject private var gitStatusStore = GitStatusStore()
     @StateObject private var workspaceStore: WorkspaceStore
 
@@ -149,6 +150,14 @@ struct MainShellView: View {
                 linkedTaskCwd: workspaceStore.taskState.detail?.cwd ?? selectedWorkspaceTask?.workspace.cwd,
                 onOpenSession: openSessionFromMissions,
                 onDismiss: { showMissions = false }
+            )
+        }
+        .sheet(isPresented: $showTaskBoard) {
+            TaskBoardView(
+                api: api,
+                linkedWorkspaceId: selectedWorkspaceTask?.workspace.id,
+                onOpenSession: openSessionFromMissions,
+                onDismiss: { showTaskBoard = false }
             )
         }
         .sheet(isPresented: $showCreateWorkspace) {
@@ -296,6 +305,8 @@ struct MainShellView: View {
     private func openSessionFromMissions(_ sessionId: String) {
         sidebarSection = .sessions
         selectedWorkspaceTask = nil
+        showTaskBoard = false
+        showMissions = false
         Task {
             do {
                 let session = try await api.getSession(id: sessionId)
@@ -480,6 +491,12 @@ struct MainShellView: View {
 
     private var settingsMenu: some View {
         Menu {
+            Button(action: { showTaskBoard = true }) {
+                Label("任务管理", systemImage: "checklist")
+            }
+            Button(action: { showMissions = true }) {
+                Label("并行任务", systemImage: "square.stack.3d.up")
+            }
             Button(action: { presentSettings = true }) {
                 Label("设置…", systemImage: "gearshape")
             }
@@ -525,6 +542,12 @@ struct MainShellView: View {
                 NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
             }) {
                 Label("切换服务器…", systemImage: "server.rack")
+            }
+            Button(action: { showTaskBoard = true }) {
+                Label("任务管理", systemImage: "checklist")
+            }
+            Button(action: { showMissions = true }) {
+                Label("并行任务", systemImage: "square.stack.3d.up")
             }
             Button(action: { presentSettings = true }) {
                 Label("设置…", systemImage: "gearshape")

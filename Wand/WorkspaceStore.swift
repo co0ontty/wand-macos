@@ -39,6 +39,7 @@ protocol WorkspaceServing: AnyObject {
         worktree: Bool?
     ) async throws -> WorkspaceTaskCreation
     func listTaskGroups() async throws -> [TaskDirectoryGroup]
+    func listTaskGroupsPage(revision: String?) async throws -> TaskGroupsPage
     func deleteWorkspaceSessions(sessionIds: [String]) async throws -> Int
     func workspaceWorktreeOverview(workspaceId: String) async throws -> WorkspaceWorktreeOverview
     func startWorktreeMergeAgent(
@@ -270,8 +271,10 @@ final class WorkspaceStore: ObservableObject {
     func loadTaskGroups(force: Bool = false) async {
         if !force && !taskGroups.isEmpty { return }
         do {
-            let groups = try await api.listTaskGroups()
-            taskGroups = groups
+            let page = try await api.listTaskGroupsPage(revision: taskGroupsRevision)
+            if page.unchanged { taskGroupsError = nil; return }
+            taskGroups = page.groups
+            taskGroupsRevision = page.revision
             taskGroupsError = nil
         } catch {
             // 保留旧数据，仅记错误供 UI 提示；老服务端无该接口时静默降级。
