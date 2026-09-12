@@ -29,11 +29,11 @@ struct NewTaskSheetBody: View {
             Divider().opacity(0.35)
             VStack(alignment: .leading, spacing: 12) {
                 if let hint = request.projectHint {
-                    Text("将在项目「\(hint)」下创建任务。创建时必须选择 CLI。")
+                    Text("将在目录「\(hint)」下创建任务。创建时必须选择 CLI。")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textSecondary)
                 } else {
-                    Text("可以不挂项目、不选目录（使用全局临时目录）。创建任务时必须选择 CLI。")
+                    Text("可以不选目录（使用全局临时目录）。创建任务时必须选择 CLI。")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textSecondary)
                 }
