@@ -38,10 +38,10 @@ struct NewTaskSheetBody: View {
                         .foregroundColor(Theme.textSecondary)
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("任务名称")
+                    Text("任务名称（可选）")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(Theme.textSecondary)
-                    TextField("例如：重构会话恢复流程", text: $name)
+                    TextField("留空则由系统自动命名", text: $name)
                         .textFieldStyle(.roundedBorder)
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -133,7 +133,7 @@ struct NewTaskSheetBody: View {
                     Task { await submit() }
                 }
                 .buttonStyle(WandPrimaryButtonStyle())
-                .disabled(creating || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(creating)
             }
             .padding(16)
         }
@@ -154,12 +154,12 @@ struct NewTaskSheetBody: View {
 
     private func submit() async {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
         creating = true
         defer { creating = false }
         do {
             let directory = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
             store.rememberCreationChoice(provider: target, kind: sessionKind)
+            // 名称可选：留空时服务端先用「未命名任务」，看板再按会话内容自动补标题。
             let (workspace, creation) = try await store.createTask(
                 name: trimmed,
                 directory: directory,
