@@ -2240,16 +2240,6 @@ private func toolShowsImage(_ input: [String: JSONValue]) -> Bool {
     return isImageAttachmentPath(candidate)
 }
 
-private func isActivityGroupOpen(_ group: ActivityGroup) -> Bool {
-    guard let last = group.items.last else { return false }
-    switch last {
-    case .plain(.thinking): return true
-    case .tool(_, _, _, _, _, let result): return result == nil
-    case .explorationGroup(let tools): return tools.last?.result == nil
-    default: return false
-    }
-}
-
 private struct ActivityRunSummary {
     let latest: String
     let meta: String
@@ -2661,7 +2651,7 @@ private struct ActivityFoldCard<Content: View>: View {
                     .onAppear {
                         proxy.scrollTo(tailAnchorID, anchor: .bottom)
                     }
-                    .onChange(of: refreshToken) { _, _ in
+                    .onChange(of: refreshToken) { _ in
                         proxy.scrollTo(tailAnchorID, anchor: .bottom)
                     }
                 }
