@@ -85,6 +85,8 @@ final class WorkspaceStore: ObservableObject {
     /// 跨目录任务聚合（GET /api/tasks）；加载失败时置空并回退到逐项目拉取。
     @Published private(set) var taskGroups: [TaskDirectoryGroup] = []
     @Published private(set) var taskGroupsError: String?
+    /// 增量拉取 `GET /api/tasks` 的 revision；为空时服务端回退全量。
+    private var taskGroupsRevision: String?
 
     @Published private(set) var currentWorkspace: Workspace?
     @Published private(set) var currentTask: WorkspaceTask?
