@@ -152,16 +152,8 @@ struct TaskBoardView: View {
             List {
                 ForEach(WandBoardStatus.allCases) { status in
                     let items = visibleTasks.filter { $0.status == status.rawValue }
-                        .sorted { lhs, rhs in
-                            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
-                            return lhs.updatedAt > rhs.updatedAt
-                        }
                     let archived = status == .done
                         ? visibleTasks.filter { $0.status == "archived" }
-                            .sorted { lhs, rhs in
-                                if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
-                                return lhs.updatedAt > rhs.updatedAt
-                            }
                         : []
                     Section(header: Text("\(status.label)  \(items.count)")) {
                         if items.isEmpty && archived.isEmpty {
