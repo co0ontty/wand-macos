@@ -109,10 +109,7 @@ struct ConnectView: View {
 
     private var intro: some View {
         HStack(spacing: 12) {
-            Image(systemName: "network")
-                .font(.system(size: 19, weight: .medium))
-                .foregroundColor(Theme.wandAccent)
-                .frame(width: 32, height: 32)
+            WandBrandMark(size: 40)
             VStack(alignment: .leading, spacing: 3) {
                 Text("连接到 Wand")
                     .font(.system(size: 19, weight: .semibold))

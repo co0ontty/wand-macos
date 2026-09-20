@@ -429,10 +429,7 @@ struct ChatView: View {
 
     private var sessionLaunchPanel: some View {
         VStack(spacing: 9) {
-            Image(systemName: "wand.and.stars")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundColor(Theme.textSecondary)
-                .frame(width: 32, height: 32)
+            WandBrandMark(size: 32)
             Text(emptySessionTitle)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(Theme.textPrimary)
@@ -2485,13 +2482,7 @@ private struct AssistantReplyHeader: View {
                 onToggle()
             } label: {
                 HStack(spacing: 8) {
-                    ZStack {
-                        Circle().fill(Theme.brand.opacity(0.14))
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Theme.brand)
-                    }
-                    .frame(width: 24, height: 24)
+                    WandBrandMark(size: 24)
                     Text("Wand")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)

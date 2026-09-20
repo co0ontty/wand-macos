@@ -1883,10 +1883,7 @@ struct EmptyMainColumn: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "wand.and.stars")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundColor(Theme.textSecondary)
-                .frame(width: 36, height: 36)
+            WandBrandMark(size: 36)
             Text(title)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
