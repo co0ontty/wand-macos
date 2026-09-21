@@ -30,6 +30,29 @@
 `ContentView` 应用本机外观模式。父仓库 Web 页面继续使用 Web 主题及行为契约。
 变更共享色彩或几何时同时更新运行时所有者、本文相关行为和验证证据。
 
+## Whole-app appearance and motion
+
+用户在 2026-09-21 指定本机已安装服务的 Web 登录页作为全部 macOS 页面的视觉参考。
+原生共用暖纸背景、墨色文字、赤陶动作与细分隔；长时间阅读区域保持静态。
+`Theme` 是唯一 token 所有者，页面通过共享按钮、输入表面、选择行与 `wandMotion` 呈现状态。
+鼠标悬停与焦点变化为 120 ms，手动结构展开为 180 ms；Reduce Motion 关闭自定义动画。
+按压、高频路由、轮询刷新和流式消息不增加等待、列表入场或循环扫光。
+
+| 页面 | 视觉所有者与保留行为 |
+|---|---|
+| 连接 / 切换服务器 | `ConnectView`：860 pt 以下单列，宽屏开放式两区；连接信息默认遮蔽，可显示，切换不清空输入 |
+| 首页 / 新会话 | `NewSessionView`：单一输入区、底部 chips、赤陶发送按钮；默认值和草稿仍由现有模型控制 |
+| 连续侧栏 / 命令搜索 | `MainShellView` / `SessionSidebarView` / `WorkspaceListView` / `DesktopCommands`：轻量选中底色、可读辅助文字、统一筛选与键盘操作 |
+| 聊天 / 权限 / 附件 | `ChatView`：共享输入与操作，状态文字静态，长消息/代码保留阅读和滚动语义 |
+| 工作空间 / 任务 / 选择弹窗 | 对应 `Workspace*View` 与 `WorkspaceTargetPicker`：开放分组、细线、统一主次操作，任务树保持紧凑 |
+| 任务看板 / 编辑详情 | `TaskBoardView`：轻量列与任务内容，弹窗统一标题和底部动作，保留原CRUD状态 |
+| 文件 / Git / 快捷提交 | `FilePanelView` / `FileTreeView` / `GitQuickCommitView`：统一检查器工具条与焦点，代码和diff不套品牌底色 |
+| PTY 加载与失败 | `WebContainerView`：与主壳一致的状态排版；终端画布与输入协议保持原有语义 |
+| 设置 / 关于 / 更新 | `SettingsView`：24 pt 正文标题、分组细线、原生选项；更新与权限状态取真实结果 |
+| 故障排查 | `TroubleshootingView`：连续诊断行、稳定主次按钮；最小620 × 540 pt，理想680 × 620 pt |
+
+该表描述实现覆盖范围；各页是否完成真实服务验收，必须以本轮 verification.md 为准。
+
 ## Canonical UI Map
 
 | Capability | Canonical owner | Source of truth | Allowed variants | Verification |
@@ -281,3 +304,9 @@ xcodebuild -project Wand.xcodeproj -scheme Wand -destination 'platform=macOS' te
   任务和目录中的添加操作共用首页输入区及原有 API；文件与 Git 检查器继续服务当前会话。
 
 重新登录使用包含服务器上下文的单个 sheet 请求，避免分开更新 URL 与布尔值时，首次弹窗捕获旧上下文。
+
+## 2026-09-21—22 全客户端视觉与实机交互修正
+
+连接输入默认遮蔽；切换显示/隐藏时保留原UTF-16选区和焦点，继续编辑不覆盖无关文字。
+命令面板先保存显式选择，关闭后再发送操作，避免sheet快捷键保护吞掉跳转；普通弹窗的快捷键隔离保持。
+本轮页面覆盖、截图、验证和真实服务限制见 `docs/desktop-paper-design-2026-09-21/verification.md`。

@@ -35,6 +35,7 @@ final class TroubleshootingModel: ObservableObject {
     }
 
     func run() {
+        guard networkState != .running else { return }
         networkState = .running
         localNetworkDenied = nil
         Task {
@@ -127,45 +128,53 @@ struct TroubleshootingView: View {
             header
             Divider().opacity(0.35)
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 28) {
                     if let error = context.errorMessage, !error.isEmpty {
                         errorSummary(error)
                     }
                     checks
                     recommendedActions
                 }
-                .padding(24)
+                .padding(32)
             }
         }
-        .frame(minWidth: 620, idealWidth: 680, minHeight: 560, idealHeight: 640)
+        .frame(minWidth: 620, idealWidth: 680, minHeight: 540, idealHeight: 620)
         .background(WandAmbientBackground())
+        .foregroundColor(Theme.textPrimary)
+        .tint(Theme.accentSolid)
+        .wandMotion(value: model.networkState)
         .task { model.run() }
     }
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "stethoscope")
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundColor(Theme.wandAccent)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("故障排查").font(.system(size: 17, weight: .semibold))
-                Text("检查连接、安装位置和本地网络权限")
-                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                Text("连接、安装位置与系统权限")
+                    .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
             }
-            Spacer()
-            Button(copied ? "已复制" : "复制诊断报告") { copyReport() }
-                .buttonStyle(.bordered)
+            Spacer(minLength: 12)
+            Button { copyReport() } label: {
+                ZStack {
+                    Text("复制报告").opacity(copied ? 0 : 1)
+                    Text("已复制").opacity(copied ? 1 : 0)
+                }
+            }
+            .buttonStyle(WandSecondaryButtonStyle())
+            .accessibilityLabel(copied ? "诊断报告已复制" : "复制诊断报告")
+            .wandMotion(value: copied)
             Button("完成") { dismiss() }
-                .buttonStyle(.borderedProminent).tint(Theme.brand)
+                .buttonStyle(WandSecondaryButtonStyle())
                 .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 18).padding(.vertical, 12)
-        .wandGlass(.chrome)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(Theme.background)
     }
 
     private func errorSummary(_ error: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: "exclamationmark.circle")
                 .foregroundColor(Theme.danger)
             VStack(alignment: .leading, spacing: 4) {
                 Text("当前错误").font(.system(size: 13, weight: .semibold))
@@ -174,13 +183,22 @@ struct TroubleshootingView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Theme.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.vertical, 4)
     }
 
     private var checks: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("检测结果").font(.system(size: 14, weight: .semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("检测结果").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                if let checkedAt = model.lastCheckedAt {
+                    Text(checkedAt, style: .time)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Theme.textTertiary)
+                        .accessibilityLabel("最近检测时间")
+                }
+            }
+            .padding(.bottom, 14)
             diagnosticRow(
                 title: "服务器连接",
                 detail: networkDetail,
@@ -192,7 +210,9 @@ struct TroubleshootingView: View {
                 title: "本地网络权限",
                 detail: permissionDetail,
                 symbol: permissionSymbol,
-                tint: permissionTint
+                tint: permissionTint,
+                working: LocalNetworkPermission.isEnforced && model.isLanTarget
+                    && model.localNetworkDenied == nil && model.networkState == .running
             )
             diagnosticRow(
                 title: "App 安装位置",
@@ -225,25 +245,43 @@ struct TroubleshootingView: View {
             }
             Spacer()
         }
-        .padding(14)
-        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border.opacity(0.65), lineWidth: 0.75))
+        .padding(.vertical, 16)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.border.opacity(0.6)).frame(height: 0.5)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(title)
         .accessibilityValue(detail)
     }
 
     private var recommendedActions: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("建议操作").font(.system(size: 14, weight: .semibold))
+        VStack(alignment: .leading, spacing: 16) {
+            Text("下一步").font(.system(size: 13, weight: .semibold))
+            Text(actionHint)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
-                Button { model.run() } label: { Label("重新检测", systemImage: "arrow.clockwise") }
-                    .buttonStyle(.borderedProminent).tint(Theme.brand)
-                if let onRetry {
-                    Button("重试原操作") { dismiss(); onRetry() }.buttonStyle(.bordered)
+                Button { model.run() } label: {
+                    ZStack {
+                        Label("重新检测", systemImage: "arrow.clockwise")
+                            .opacity(model.networkState == .running ? 0 : 1)
+                        Text("正在检测…")
+                            .opacity(model.networkState == .running ? 1 : 0)
+                    }
                 }
+                .buttonStyle(WandPrimaryButtonStyle())
+                .disabled(model.networkState == .running)
+                .accessibilityLabel(model.networkState == .running ? "正在检测" : "重新检测")
+                if let onRetry {
+                    Button("重试原操作") { dismiss(); onRetry() }
+                        .buttonStyle(WandSecondaryButtonStyle())
+                }
+            }
+            HStack(spacing: 18) {
                 if LocalNetworkPermission.isEnforced && model.isLanTarget {
-                    Button("打开本地网络权限") { LocalNetworkPermission.openSettings() }.buttonStyle(.bordered)
+                    Button("打开本地网络权限") { LocalNetworkPermission.openSettings() }
+                        .buttonStyle(.link)
                 }
                 Button("切换服务器") {
                     dismiss()
@@ -251,25 +289,30 @@ struct TroubleshootingView: View {
                         NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.link)
             }
-            Text(actionHint)
-                .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+            .font(.system(size: 12))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 22)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.border.opacity(0.6)).frame(height: 0.5)
         }
     }
 
     private var networkDetail: String {
         switch model.networkState {
         case .idle: return "等待检测"
-        case .running: return "正在请求服务器的公开探测端点…"
+        case .running: return "正在检查服务器连接…"
         case .reachable: return "服务器可达；若仍报错，请检查连接码是否过期"
         case .unreachable(let detail): return detail
         }
     }
 
     private var networkSymbol: String {
-        if case .reachable = model.networkState { return "checkmark.circle.fill" }
-        return "xmark.circle.fill"
+        if case .reachable = model.networkState { return "checkmark.circle" }
+        if case .idle = model.networkState { return "clock" }
+        return "xmark.circle"
     }
 
     private var networkTint: Color {
@@ -287,11 +330,13 @@ struct TroubleshootingView: View {
     }
 
     private var permissionSymbol: String {
-        model.localNetworkDenied == true ? "hand.raised.slash.fill" : "checkmark.shield.fill"
+        if model.localNetworkDenied == true { return "hand.raised.slash" }
+        if !LocalNetworkPermission.isEnforced || !model.isLanTarget { return "checkmark.shield" }
+        return "shield"
     }
 
     private var permissionTint: Color {
-        model.localNetworkDenied == true ? Theme.danger : Theme.success
+        model.localNetworkDenied == true ? Theme.danger : Theme.textSecondary
     }
 
     private var actionHint: String {

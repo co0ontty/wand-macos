@@ -258,11 +258,10 @@ private struct LoadingOverlay: View {
         ZStack {
             Theme.background
             VStack(spacing: 18) {
-                WandBrandMark(size: 56)
                 ProgressView()
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .tint(Theme.brand)
-                VStack(spacing: 4) {
+                VStack(spacing: 8) {
                     Text("正在连接")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
@@ -289,17 +288,20 @@ private struct ErrorOverlay: View {
             VStack(spacing: 16) {
                 ZStack {
                     Circle()
-                        .fill(Theme.danger.opacity(0.12))
-                        .frame(width: 62, height: 62)
+                        .fill(Theme.surface)
+                        .frame(width: 64, height: 64)
                     Image(systemName: "wifi.exclamationmark")
-                        .font(.system(size: 26, weight: .medium))
-                        .foregroundColor(Theme.danger)
+                        .font(.system(size: 26, weight: .regular))
+                        .foregroundColor(Theme.textSecondary)
                 }
+                .accessibilityHidden(true)
                 Text(title)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: 24, weight: .semibold))
+                    .tracking(-0.4)
                     .foregroundColor(Theme.textPrimary)
                 Text(message)
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
+                    .lineSpacing(5)
                     .foregroundColor(Theme.textSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 360)

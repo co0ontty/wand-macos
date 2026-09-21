@@ -15,72 +15,81 @@ struct WorkspaceCreateView: View {
     @State private var creating = false
     @State private var errorMessage: String?
     @State private var showBrowser = false
+    @State private var recentPathsExpanded = false
+    @FocusState private var focusedField: String?
 
     var body: some View {
         VStack(spacing: 0) {
             sheetHeader
-            Divider().opacity(0.35)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    fieldLabel("项目名称")
-                    TextField("例如：Wand", text: $name)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(fieldBackground)
-
-                    fieldLabel("项目目录")
-                    HStack(spacing: 8) {
-                        TextField("服务器上的路径，例如 /Users/you/project", text: $cwd)
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        fieldLabel("名称")
+                        TextField("例如：Wand", text: $name)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 13, design: .monospaced))
-                        Button("浏览…") { showBrowser = true }
-                            .buttonStyle(WandSecondaryButtonStyle())
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .focused($focusedField, equals: "name")
+                            .wandInputSurface(focused: focusedField == "name", cornerRadius: Theme.Radius.control)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(fieldBackground)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        fieldLabel("工作目录")
+                        HStack(spacing: 8) {
+                            TextField("服务器上的路径，例如 /Users/you/project", text: $cwd)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13, design: .monospaced))
+                                .focused($focusedField, equals: "cwd")
+                            Button("浏览…") { showBrowser = true }
+                                .buttonStyle(WandSecondaryButtonStyle())
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .wandInputSurface(focused: focusedField == "cwd", cornerRadius: Theme.Radius.control)
+                    }
 
                     if !recentPaths.isEmpty {
-                        fieldLabel("最近使用")
-                        VStack(spacing: 4) {
-                            ForEach(recentPaths.prefix(5)) { item in
-                                Button {
-                                    cwd = item.path
-                                    if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        name = item.name
+                        DisclosureGroup("最近使用的目录", isExpanded: $recentPathsExpanded) {
+                            VStack(spacing: 6) {
+                                ForEach(recentPaths.prefix(5)) { item in
+                                    Button {
+                                        cwd = item.path
+                                        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                            name = item.name
+                                        }
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: "folder")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(Theme.textMuted)
+                                            Text(item.path)
+                                                .font(.system(size: 12, design: .monospaced))
+                                                .foregroundColor(Theme.textPrimary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                            Spacer(minLength: 0)
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .contentShape(Rectangle())
                                     }
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "folder")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(Theme.textMuted)
-                                        Text(item.path)
-                                            .font(.system(size: 12, design: .monospaced))
-                                            .foregroundColor(Theme.textPrimary)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                        Spacer(minLength: 0)
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .contentShape(Rectangle())
+                                    .buttonStyle(DesktopNavigationButtonStyle())
+                                    .help(item.path)
                                 }
-                                .buttonStyle(.plain)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(Theme.surface.opacity(0.7))
-                                )
                             }
+                            .padding(.top, 6)
                         }
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
                     }
 
-                    fieldLabel("默认 Agent")
-                    HStack(spacing: 8) {
+                    Picker("默认工具", selection: $defaultProvider) {
                         ForEach(WandProvider.allCases) { provider in
-                            providerChip(provider)
+                            Text(provider.title).tag(provider)
                         }
                     }
+                    .font(.system(size: 13))
 
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle")
@@ -88,13 +97,15 @@ struct WorkspaceCreateView: View {
                             .foregroundColor(Theme.danger)
                     }
                 }
-                .padding(22)
+                .padding(24)
+                .disabled(creating)
+                .wandMotion(value: recentPathsExpanded, layout: true)
             }
-            Divider().opacity(0.35)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             sheetFooter
         }
         .frame(minWidth: 560, idealWidth: 620, minHeight: 460, idealHeight: 520)
-        .background(WandAmbientBackground())
+        .background(Theme.workspaceBackground)
         .hideNativeTitleBar()
         .sheet(isPresented: $showBrowser) {
             DirectoryBrowserView(api: api, startPath: cwd) { picked in
@@ -127,67 +138,26 @@ struct WorkspaceCreateView: View {
         !creating && !trimmedName.isEmpty && !trimmedCwd.isEmpty
     }
 
-    private var fieldBackground: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(Theme.surfaceElevated)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 1)
-            )
-    }
-
     private func fieldLabel(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 12, weight: .semibold))
             .foregroundColor(Theme.textSecondary)
     }
 
-    private func providerChip(_ provider: WandProvider) -> some View {
-        let selected = defaultProvider == provider
-        return Button {
-            defaultProvider = provider
-        } label: {
-            VStack(spacing: 6) {
-                BrandLogo(
-                    provider: provider.rawValue,
-                    color: selected ? Theme.wandAccent : Theme.textSecondary
-                )
-                .frame(width: 18, height: 18)
-                Text(provider.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(selected ? Theme.wandAccent : Theme.textPrimary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected ? Theme.wandAccent.opacity(0.08) : Theme.surface.opacity(0.88))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(selected ? Theme.wandAccent : Theme.border, lineWidth: selected ? 1.4 : 1)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(creating)
-    }
-
     private var sheetHeader: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("新建项目")
-                    .font(.system(size: 17, weight: .semibold))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("新建工作空间")
+                    .font(.system(size: 22, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
-                Text("锚定一个目录，任务会在独立 worktree 里跑")
-                    .font(.system(size: 11))
+                Text("选择工作目录，将相关任务放在一起。")
+                    .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer()
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(Theme.workspaceBackground)
         .contentShape(Rectangle())
         .windowDrag()
@@ -202,14 +172,14 @@ struct WorkspaceCreateView: View {
             Button {
                 Task { await submit() }
             } label: {
-                Text(creating ? "创建中…" : "创建项目")
+                Text(creating ? "创建中…" : "创建工作空间")
                     .frame(minWidth: 88)
             }
             .buttonStyle(WandPrimaryButtonStyle())
             .disabled(!canSubmit)
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
         .background(Theme.workspaceBackground)
     }
 

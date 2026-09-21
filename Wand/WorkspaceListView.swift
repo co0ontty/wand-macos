@@ -35,6 +35,7 @@ struct WorkspaceListView: View {
     @State private var renameDraft = ""
     @State private var renameError: String?
     @State private var renameBusy = false
+    @FocusState private var renameFocused: Bool
     @State private var deleteTarget: WorkspaceTask?
     @State private var deleteBusy = false
     @State private var deleteError: String?
@@ -62,10 +63,10 @@ struct WorkspaceListView: View {
                 VStack {
                     Text(toastMessage)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.textPrimary)
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Capsule().fill(Color.black.opacity(0.78)))
+                        .padding(.vertical, 8)
+                        .wandGlassCard(cornerRadius: Theme.Radius.md)
                         .padding(.top, 8)
                     Spacer()
                 }
@@ -87,6 +88,9 @@ struct WorkspaceListView: View {
             selectedTaskIds.removeAll()
             selectedSessionIds.removeAll()
         }
+        .wandMotion(value: expandedTaskGroups, layout: true)
+        .wandMotion(value: collapsedTaskIds, layout: true)
+        .wandMotion(value: isSelecting, layout: true)
         .onAppear { revealSelection() }
         .onChange(of: selectedTaskId) { _ in revealSelection() }
         .onChange(of: selectedSessionId) { _ in revealSelection() }
@@ -347,12 +351,8 @@ struct WorkspaceListView: View {
                 HStack(spacing: 7) {
                     Image(systemName: group.isSynthetic ? "folder.badge.questionmark" : "folder.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Theme.wandAccent)
-                        .frame(width: 26, height: 26)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Theme.wandAccent.opacity(0.10))
-                        )
+                        .foregroundColor(Theme.textSecondary)
+                        .frame(width: 20, height: 24)
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 5) {
                             Text(group.workspaceName)
@@ -382,7 +382,7 @@ struct WorkspaceListView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DesktopNavigationButtonStyle())
 
             Button {
                 requestNewTask(NewTaskSheetRequest(
@@ -401,10 +401,6 @@ struct WorkspaceListView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Theme.surface.opacity(0.55))
-        )
     }
 
     private func treeDisclosureCaret(expanded: Bool) -> some View {
@@ -496,7 +492,7 @@ struct WorkspaceListView: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
 
                 if canCollapseSessions {
                     Button {
@@ -509,7 +505,7 @@ struct WorkspaceListView: View {
                             treeDisclosureCaret(expanded: expanded)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(DesktopNavigationButtonStyle())
                     .disabled(isFiltering)
                     .help(isFiltering ? "筛选时显示匹配会话" : expanded ? "收起终端" : "展开终端")
                 }
@@ -530,7 +526,7 @@ struct WorkspaceListView: View {
             .padding(.leading, 8)
             .padding(.trailing, 4)
             .padding(.vertical, 4)
-            .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: 7)
+            .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: Theme.Radius.control)
             .contextMenu {
                 Button {
                     collapsedTaskIds.remove(summary.id)
@@ -641,9 +637,9 @@ struct WorkspaceListView: View {
             .padding(.trailing, 8)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
-            .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: 7)
+            .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: Theme.Radius.control)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DesktopNavigationButtonStyle())
         .contextMenu {
             Button(role: .destructive) {
                 requestDeleteSession(session)
@@ -700,7 +696,7 @@ struct WorkspaceListView: View {
                 }
             }
             .font(.system(size: 11))
-            .buttonStyle(.plain)
+            .buttonStyle(DesktopNavigationButtonStyle())
             .foregroundColor(Theme.wandAccent)
         }
         .padding(.horizontal, 12)
@@ -775,22 +771,28 @@ struct WorkspaceListView: View {
         VStack(spacing: 0) {
             HStack {
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 22, weight: .semibold))
                 Spacer()
             }
-            .padding(16)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
             .windowDrag()
-            Divider().opacity(0.35)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             VStack(alignment: .leading, spacing: 10) {
                 TextField("名称", text: draft)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .padding(12)
+                    .focused($renameFocused)
+                    .wandInputSurface(focused: renameFocused, invalid: error != nil,
+                                      cornerRadius: Theme.Radius.control)
                 if let error {
                     Text(error)
                         .font(.footnote)
                         .foregroundColor(Theme.danger)
                 }
             }
-            .padding(16)
+            .padding(24)
             HStack {
                 Spacer()
                 Button("取消", action: onCancel)
@@ -800,10 +802,11 @@ struct WorkspaceListView: View {
                     .buttonStyle(WandPrimaryButtonStyle())
                     .disabled(busy || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(16)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
         .frame(width: 380)
-        .background(WandAmbientBackground())
+        .background(Theme.workspaceBackground)
         .hideNativeTitleBar()
     }
 
@@ -866,7 +869,7 @@ struct WorkspaceListView: View {
                         selectedSessionIds = all.sessionIds
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
                 Button("删除", role: .destructive) {
                     let available = manageableSelection
                     let resolved = TaskListPresentation.resolveManagedDeletion(
@@ -876,14 +879,14 @@ struct WorkspaceListView: View {
                     )
                     if !resolved.isEmpty { pendingManagedDelete = resolved }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
                 .disabled(selectedTaskIds.isEmpty && selectedSessionIds.isEmpty)
                 Button("完成") {
                     isSelecting = false
                     selectedTaskIds.removeAll()
                     selectedSessionIds.removeAll()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
             }
         }
         .padding(.horizontal, 8)

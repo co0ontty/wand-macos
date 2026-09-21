@@ -110,7 +110,7 @@ struct WorkspaceTaskView: View {
             }
             sessionStrip(detail.sessions)
             Rectangle()
-                .fill(Color(nsColor: Theme.borderSubtle))
+                .fill(Theme.border)
                 .frame(height: 0.5)
             sessionContent
         }
@@ -145,7 +145,7 @@ struct WorkspaceTaskView: View {
                             .padding(.trailing, 4)
                             .frame(height: 30)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DesktopNavigationButtonStyle())
 
                         if selected {
                             Button {
@@ -156,12 +156,12 @@ struct WorkspaceTaskView: View {
                                     .foregroundColor(Theme.textMuted)
                                     .frame(width: 20, height: 30)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(WandIconButtonStyle())
                             .help("删除终端")
                         }
                     }
                     .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .fill(selected ? Theme.textPrimary.opacity(0.08) : Color.clear)
                     )
                     .contextMenu {
@@ -184,7 +184,7 @@ struct WorkspaceTaskView: View {
                 .accessibilityLabel("在此任务新建会话")
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, 9)
         }
         .background(Theme.workspaceBackground)
     }
@@ -207,10 +207,10 @@ struct WorkspaceTaskView: View {
         } else if let error = store.sessionError {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 28))
+                    .font(.system(size: 26, weight: .light))
                     .foregroundColor(Theme.danger)
                 Text(error)
-                    .font(.footnote)
+                    .font(.system(size: 13))
                     .foregroundColor(Theme.textSecondary)
                     .multilineTextAlignment(.center)
                 if let id = store.visibleSessionID {
@@ -218,7 +218,7 @@ struct WorkspaceTaskView: View {
                         .buttonStyle(WandSecondaryButtonStyle())
                 }
             }
-            .padding(28)
+            .padding(32)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             loadingState("正在选择工作窗口…")
@@ -239,26 +239,26 @@ struct WorkspaceTaskView: View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
             Text(message)
-                .font(.footnote)
+                .font(.system(size: 13))
                 .lineLimit(2)
             Spacer(minLength: 4)
             Button { store.clearLayoutWarning() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WandIconButtonStyle())
         }
         .foregroundColor(Theme.textSecondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Theme.wandAccent.opacity(0.08))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.warning.opacity(0.06))
     }
 
     private func loadingState(_ text: String) -> some View {
         VStack(spacing: 12) {
             ProgressView().tint(Theme.wandAccent)
             Text(text)
-                .font(.footnote)
+                .font(.system(size: 13))
                 .foregroundColor(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -267,16 +267,16 @@ struct WorkspaceTaskView: View {
     private func errorState(_ message: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 30))
+                .font(.system(size: 26, weight: .light))
                 .foregroundColor(Theme.textSecondary)
             Text(message)
-                .font(.footnote)
+                .font(.system(size: 13))
                 .foregroundColor(Theme.textSecondary)
                 .multilineTextAlignment(.center)
             Button("重试") { Task { await store.reloadCurrentTask() } }
                 .buttonStyle(WandSecondaryButtonStyle())
         }
-        .padding(28)
+        .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

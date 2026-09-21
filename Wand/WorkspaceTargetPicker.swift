@@ -16,17 +16,17 @@ struct WorkspaceTargetPicker: View {
         } else {
             VStack(spacing: 0) {
                 sheetHeader
-                Divider().opacity(0.35)
+                Rectangle().fill(Theme.border).frame(height: 0.5)
                 ScrollView {
                     pickerFields
-                        .padding(20)
+                        .padding(24)
                 }
-                Divider().opacity(0.35)
+                Rectangle().fill(Theme.border).frame(height: 0.5)
                 sheetFooter
             }
-            .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 580)
+            .frame(minWidth: 460, idealWidth: 500, minHeight: 460, idealHeight: 520)
             .focusedSceneValue(\.wandDesktopCommandsEnabled, false)
-            .background(WandAmbientBackground())
+            .background(Theme.workspaceBackground)
             .hideNativeTitleBar()
             .onChange(of: store.pickerPresented) { presented in
                 if !presented { dismiss() }
@@ -35,7 +35,7 @@ struct WorkspaceTargetPicker: View {
     }
 
     private var pickerFields: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 4) {
             ForEach(WorkspaceSessionTarget.allCases) { target in
                 targetRow(target)
             }
@@ -49,11 +49,12 @@ struct WorkspaceTargetPicker: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
                     .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .fill(Theme.danger.opacity(0.10))
                     )
             }
         }
+        .wandMotion(value: store.selectedTarget == .shell, layout: true)
     }
 
     private func targetRow(_ target: WorkspaceSessionTarget) -> some View {
@@ -67,16 +68,12 @@ struct WorkspaceTargetPicker: View {
                     provider: target.provider?.rawValue ?? "terminal",
                     color: selected ? Theme.wandAccent : Theme.textSecondary
                 )
-                .frame(width: 20, height: 20)
-                .frame(width: 36, height: 36)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(selected ? Theme.wandAccent.opacity(0.12) : Theme.surface)
-                )
+                .frame(width: 18, height: 18)
+                .frame(width: 28, height: 28)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(target.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(selected ? Theme.wandAccent : Theme.textPrimary)
                     Text(target.summary)
                         .font(.system(size: 12))
@@ -89,73 +86,47 @@ struct WorkspaceTargetPicker: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected ? Theme.wandAccent.opacity(0.06) : Theme.surface.opacity(0.88))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(selected ? Theme.wandAccent : Theme.border, lineWidth: selected ? 1.4 : 1)
-            )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DesktopNavigationButtonStyle(active: selected))
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .disabled(store.creating)
     }
 
     private var kindPicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("会话类型")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Theme.textSecondary)
-                .padding(.top, 6)
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+                .padding(.vertical, 10)
+            Picker("会话类型", selection: Binding(
+                get: { store.selectedKind },
+                set: { store.rememberCreationChoice(kind: $0) }
+            )) {
                 ForEach(WorkspaceSessionKind.allCases) { option in
-                    let selected = store.selectedKind == option
-                    Button {
-                        guard !store.creating else { return }
-                        store.rememberCreationChoice(kind: option)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(option.title)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(selected ? Theme.wandAccent : Theme.textPrimary)
-                            Text(option.summary)
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.textSecondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(selected ? Theme.wandAccent.opacity(0.08) : Theme.surface.opacity(0.88))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(selected ? Theme.wandAccent : Theme.border, lineWidth: selected ? 1.5 : 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(store.creating)
+                    Text(option.title).tag(option)
                 }
             }
+            .pickerStyle(.segmented)
+            .disabled(store.creating)
+            Text(store.selectedKind.summary)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
         }
     }
 
     private var sheetHeader: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("新建工作窗口")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 22, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
-                Text("在当前任务的 worktree 里启动一个 Agent 或终端")
-                    .font(.system(size: 11))
+                Text("在当前任务目录中开始一个会话。")
+                    .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer()
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
         .background(Theme.workspaceBackground)
         .contentShape(Rectangle())
         .windowDrag()
@@ -181,8 +152,8 @@ struct WorkspaceTargetPicker: View {
             .buttonStyle(WandPrimaryButtonStyle())
             .disabled(store.creating)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
         .background(Theme.workspaceBackground)
     }
 }

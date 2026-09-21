@@ -12,12 +12,14 @@ struct ConnectView: View {
     @State private var input: String = ""
     @State private var error: String? = nil
     @State private var isConnecting = false
+    @State private var inputVisible = false
     @State private var showTroubleshooting = false
     @FocusState private var inputFocused: Bool
 
     /// 「本地网络」权限引导：nil = 不展示；false = 提示性引导（无法确定是否被拒）；
     /// true = 已探测到被系统拒绝。仅 macOS 15+ 且目标地址像局域网时出现。
     @State private var localNetworkDenied: Bool? = nil
+    private let sheetHeaderHeight: CGFloat = 68
 
     private var trimmedInput: String {
         input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,8 +37,8 @@ struct ConnectView: View {
                         card(wide: geometry.size.width >= 860)
                             .frame(maxWidth: isPresentedAsSheet ? 520 : 900)
                             .padding(.horizontal, 28)
-                            .padding(.vertical, 24)
-                            .frame(minHeight: max(0, geometry.size.height - (isPresentedAsSheet ? 50 : 0)))
+                            .padding(.vertical, isPresentedAsSheet ? 28 : 48)
+                            .frame(minHeight: max(0, geometry.size.height - (isPresentedAsSheet ? sheetHeaderHeight : 0)))
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -47,6 +49,8 @@ struct ConnectView: View {
             minWidth: isPresentedAsSheet ? 520 : nil,
             minHeight: isPresentedAsSheet ? 540 : nil
         )
+        .wandMotion(value: error != nil, layout: true)
+        .wandMotion(value: localNetworkDenied, layout: true)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { inputFocused = true }
         }
@@ -72,12 +76,11 @@ struct ConnectView: View {
             Spacer()
             Button("取消") { onDismiss?() }
                 .keyboardShortcut(.cancelAction)
-                .buttonStyle(.plain)
-                .foregroundColor(Theme.textSecondary)
+                .buttonStyle(WandSecondaryButtonStyle())
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(Theme.workspaceBackground)
+        .padding(.horizontal, 24)
+        .frame(height: sheetHeaderHeight)
+        .background(Theme.background)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color(nsColor: Theme.borderSubtle))
@@ -96,84 +99,70 @@ struct ConnectView: View {
     }
 
     private var desktopCard: some View {
-        HStack(alignment: .center, spacing: 58) {
-            VStack(alignment: .leading, spacing: 26) {
-                WandBrandMark(size: 52)
-                VStack(alignment: .leading, spacing: 13) {
-                    Text("你的 AI 工作，\n在 Mac 上继续。")
-                        .font(.system(size: 30, weight: .semibold))
-                        .tracking(-0.6)
+        HStack(alignment: .center, spacing: 52) {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(spacing: 14) {
+                    WandBrandMark(size: 42)
+                    Text("Wand")
+                        .font(.system(size: 32, weight: .medium))
+                        .tracking(-0.8)
                         .foregroundColor(Theme.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("连接 Wand 服务器，把会话、项目和任务放在一个专注的桌面里。")
-                        .font(.system(size: 13))
-                        .lineSpacing(5)
-                        .foregroundColor(Theme.textSecondary)
                 }
-                VStack(alignment: .leading, spacing: 15) {
-                    welcomeFeature("bubble.left.and.bubble.right", "接着聊", "继续已有会话，使用你配置的 AI 工具")
-                    welcomeFeature("folder", "接着做", "打开项目、终端与工作空间")
-                    welcomeFeature("keyboard", "更顺手", "全局导航、原生输入和桌面快捷键")
-                }
-            }
-            .frame(width: 280, alignment: .leading)
-            connectionCard
-                .frame(maxWidth: 460)
-        }
-    }
-
-    private func welcomeFeature(_ symbol: String, _ title: String, _ description: String) -> some View {
-        HStack(alignment: .top, spacing: 11) {
-            Image(systemName: symbol)
-                .font(.system(size: 15))
-                .foregroundColor(Theme.textSecondary)
-                .frame(width: 21)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(Theme.textPrimary)
-                Text(description).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                Text("连接已有的 Wand 服务，\n继续你的会话与任务。")
+                    .font(.system(size: 15))
+                    .lineSpacing(6)
+                    .foregroundColor(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(width: 252, alignment: .leading)
+            Rectangle()
+                .fill(Theme.border.opacity(0.65))
+                .frame(width: 0.5, height: 220)
+            connectionCard
+                .frame(maxWidth: 390)
         }
     }
 
     private var compactCard: some View {
-        connectionCard
+        VStack(alignment: .leading, spacing: 28) {
+            if !isPresentedAsSheet {
+                WandBrandMark(size: 40)
+            }
+            connectionCard
+        }
     }
 
     private var connectionCard: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            intro
+        VStack(alignment: .leading, spacing: 28) {
+            if !isPresentedAsSheet {
+                intro
+            }
             formContent
         }
-        .padding(28)
-        .wandGlassCard(cornerRadius: Theme.Radius.lg)
     }
 
     private var intro: some View {
-        HStack(spacing: 12) {
-            WandBrandMark(size: 40)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("连接到 Wand")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Text("粘贴设置页的连接码，或直接输入服务器地址")
-                    .font(.system(size: 12))
-                    .foregroundColor(Theme.textSecondary)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("连接服务器")
+                .font(.system(size: 24, weight: .semibold))
+                .tracking(-0.4)
+                .foregroundColor(Theme.textPrimary)
+            Text("使用连接码，或输入服务器地址。")
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textSecondary)
         }
     }
 
     private var formContent: some View {
-        VStack(spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             inputField
 
             if let error {
-                errorBanner(error)
+                errorBanner(error).transition(.opacity)
             }
 
             if let denied = localNetworkDenied {
-                localNetworkHint(denied: denied)
+                localNetworkHint(denied: denied).transition(.opacity)
             }
 
             connectButton
@@ -193,7 +182,7 @@ struct ConnectView: View {
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("连接码 / 服务器地址")
+            Text("连接码或地址")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
 
@@ -201,46 +190,80 @@ struct ConnectView: View {
                 Image(systemName: "link")
                     .font(.system(size: 13))
                     .foregroundColor(Theme.textSecondary)
-                TextField("例如 192.168.1.10:7777 或粘贴连接码", text: $input)
+                Group {
+                    if inputVisible {
+                        TextField("粘贴连接码或输入地址", text: $input)
+                    } else {
+                        SecureField("粘贴连接码或输入地址", text: $input)
+                    }
+                }
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundColor(Theme.textPrimary)
                     .focused($inputFocused)
+                    .accessibilityLabel("连接码或服务器地址")
+                    .accessibilityHint(error ?? "连接码可在服务器设置的连接 App 中获取")
                     .onSubmit { connect() }
                     .disabled(isConnecting)
                     .onChange(of: input) { _ in
                         error = nil
                         localNetworkDenied = nil
                     }
+                Button(action: toggleInputVisibility) {
+                    Image(systemName: inputVisible ? "eye.slash" : "eye")
+                        .font(.system(size: 13))
+                }
+                .buttonStyle(WandIconButtonStyle())
+                .help(inputVisible ? "隐藏连接信息" : "显示连接信息")
+                .accessibilityLabel(inputVisible ? "隐藏连接信息" : "显示连接信息")
+                .disabled(isConnecting)
                 if !input.isEmpty {
-                    Button { input = ""; error = nil } label: {
+                    Button { input = ""; error = nil; inputFocused = true } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 13))
                             .foregroundColor(Theme.textSecondary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(WandIconButtonStyle())
                     .help("清除地址")
                     .accessibilityLabel("清除连接码或地址")
                     .disabled(isConnecting)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .wandInputSurface(focused: inputFocused, invalid: error != nil, cornerRadius: 10)
+            .padding(.vertical, 7)
+            .wandInputSurface(focused: inputFocused, invalid: error != nil, cornerRadius: Theme.Radius.control)
+        }
+    }
+
+    private func toggleInputVisibility() {
+        let selection = (NSApp.keyWindow?.firstResponder as? NSTextView)?.selectedRange()
+        inputVisible.toggle()
+        DispatchQueue.main.async {
+            inputFocused = true
+            // SecureField and TextField use separate field editors. Restore the old
+            // selection after SwiftUI attaches the new editor and focuses it.
+            DispatchQueue.main.async {
+                guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView,
+                      editor.isFieldEditor else { return }
+                let length = editor.string.utf16.count
+                let location = min(selection?.location ?? length, length)
+                let selectedLength = min(selection?.length ?? 0, length - location)
+                editor.setSelectedRange(NSRange(location: location, length: selectedLength))
+            }
         }
     }
 
     private func errorBanner(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 12))
-                .foregroundColor(Theme.danger)
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundColor(Theme.danger)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+                Image(systemName: "exclamationmark.circle")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.danger)
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
             Button { showTroubleshooting = true } label: {
                 Label("打开故障排查", systemImage: "stethoscope")
@@ -248,11 +271,7 @@ struct ConnectView: View {
             .buttonStyle(.link)
             .font(.system(size: 12, weight: .medium))
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.danger.opacity(0.1))
-        )
+        .padding(.vertical, 4)
     }
 
     private var troubleshootingURL: URL? {
@@ -284,35 +303,37 @@ struct ConnectView: View {
             .font(.system(size: 12))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.brand.opacity(0.08))
-        )
+        .padding(14)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Theme.brand.opacity(0.35), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .stroke(Theme.border.opacity(0.65), lineWidth: 0.5)
         )
     }
 
     private var connectButton: some View {
         Button(action: connect) {
-            HStack(spacing: 8) {
+            ZStack {
+                Text("连接服务器").opacity(isConnecting ? 0 : 1)
                 if isConnecting {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white)
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(.white)
+                        Text("正在连接…")
+                    }
                 }
-                Text(isConnecting ? "连接中…" : "连接")
             }
             .frame(maxWidth: .infinity)
+            .frame(height: 24)
         }
         .buttonStyle(WandPrimaryButtonStyle())
         .disabled(isConnecting || trimmedInput.isEmpty)
+        .accessibilityLabel(isConnecting ? "正在连接服务器" : "连接服务器")
+        .wandMotion(value: isConnecting)
     }
 
     private var recentSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().opacity(0.5).padding(.bottom, 6)
             Text("最近连接")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
@@ -349,7 +370,7 @@ struct ConnectView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DesktopNavigationButtonStyle())
             .disabled(isConnecting)
             .help("连接到 \(info.text)")
             Button {
@@ -360,21 +381,12 @@ struct ConnectView: View {
                     .foregroundColor(Theme.textSecondary)
                     .padding(6)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WandIconButtonStyle())
             .accessibilityLabel("移除最近连接 \(info.text)")
             .help("从最近连接中移除")
             .disabled(isConnecting)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Theme.border, lineWidth: 1)
-        )
+        .padding(.vertical, 4)
     }
 
     private var footerHint: some View {
@@ -384,7 +396,8 @@ struct ConnectView: View {
         )
             .font(.system(size: 11))
             .foregroundColor(Theme.textSecondary)
-            .multilineTextAlignment(.center)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 2)
     }
 
@@ -407,6 +420,7 @@ struct ConnectView: View {
                     store.connect(serverURL: target.url, token: target.token)
                     onDismiss?()
                 case .failure(let err):
+                    inputFocused = true
                     error = err.userMessage
                     maybeShowLocalNetworkHint(for: err, rawInput: raw)
                 }

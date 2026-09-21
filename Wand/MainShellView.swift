@@ -122,7 +122,7 @@ struct MainShellView: View {
     private var structuralAnimation: Animation? {
         reduceMotion
             ? nil
-            : .easeOut(duration: 0.16)
+            : Theme.Motion.structure
     }
 
     var body: some View {
@@ -134,8 +134,8 @@ struct MainShellView: View {
         }
         .sheet(isPresented: $showCommandPalette, onDismiss: openPendingDestination) {
             DesktopCommandPalette(api: api, onCommand: { command in
-                showCommandPalette = false
                 pendingCommand = command
+                showCommandPalette = false
             }, onSession: { session in
                 showCommandPalette = false
                 presentSession(session)
@@ -391,7 +391,7 @@ struct MainShellView: View {
                     sidebarColumn
                         .frame(width: Theme.LayoutMetrics.sidebarWidth)
                         .background(Theme.sidebarBackground)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
+                        .transition(reduceMotion ? .identity : .move(edge: .leading).combined(with: .opacity))
                     Rectangle().fill(Theme.border.opacity(0.5)).frame(width: 0.5)
                 }
                 VStack(spacing: 0) {
@@ -436,7 +436,7 @@ struct MainShellView: View {
     }
 
     private var rightPanelTransition: AnyTransition {
-        .offset(x: 10).combined(with: .opacity)
+        reduceMotion ? .identity : .offset(x: 10).combined(with: .opacity)
     }
 
     private var sidebarColumn: some View {
@@ -699,7 +699,8 @@ struct MainShellView: View {
                     }.buttonStyle(.plain).accessibilityLabel("清除筛选").help("清除筛选")
                 }
             }
-            .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 30)
+            .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 32)
+            .wandInputSurface(focused: sidebarSearchFocused, cornerRadius: Theme.Radius.control)
             .padding(.top, 14)
         }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
     }
@@ -730,7 +731,7 @@ struct MainShellView: View {
                     identityMenu.fixedSize()
                     HStack(spacing: 5) {
                         connectionBadge
-                        Text(displayHost).font(.system(size: 10)).lineLimit(1)
+                        Text(displayHost).font(.system(size: 11)).lineLimit(1)
                             .foregroundColor(Theme.textSecondary)
                     }
                 }
@@ -776,7 +777,12 @@ struct MainShellView: View {
     private func openPendingDestination() {
         if let command = pendingCommand {
             pendingCommand = nil
-            command.send()
+            // This is an explicit palette selection, not a shortcut from a sheet.
+            // AppKit can still report the closing sheet as key during onDismiss;
+            // the shortcut guard would silently discard the selected command.
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .wandDesktopCommand, object: command)
+            }
         }
     }
 
@@ -897,7 +903,7 @@ struct MainShellView: View {
                                 .frame(height: 1.5)
                         }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
             }
             Spacer()
         }
@@ -926,16 +932,21 @@ private struct ConnectionFailureView: View {
     let onTroubleshoot: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 18) {
             Spacer()
             Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 34, weight: .medium))
-                .foregroundColor(Theme.danger)
+                .font(.system(size: 26, weight: .regular))
+                .foregroundColor(Theme.textSecondary)
+                .frame(width: 64, height: 64)
+                .background(Circle().fill(Theme.surface))
+                .accessibilityHidden(true)
             Text(requiresAuthentication ? "请重新登录" : "无法连接服务器")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 24, weight: .semibold))
+                .tracking(-0.4)
                 .foregroundColor(Theme.textPrimary)
             Text(message)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
+                .lineSpacing(5)
                 .foregroundColor(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 460)
@@ -945,11 +956,14 @@ private struct ConnectionFailureView: View {
                     .buttonStyle(WandPrimaryButtonStyle())
                 Button("切换服务器", action: onSwitchServer)
                     .buttonStyle(WandSecondaryButtonStyle())
-                Button(action: onTroubleshoot) {
-                    Label("故障排查", systemImage: "stethoscope")
-                }
-                .buttonStyle(.bordered)
             }
+            .padding(.top, 8)
+            Button(action: onTroubleshoot) {
+                Label("故障排查", systemImage: "stethoscope")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+            }.buttonStyle(DesktopNavigationButtonStyle())
             Spacer()
         }
         .padding(32)

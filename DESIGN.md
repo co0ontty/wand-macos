@@ -3,28 +3,36 @@ version: alpha
 name: Wand for Mac
 description: A focused native AI workspace with quiet navigation, readable conversations, and contextual file and Git inspection
 colors:
-  primary: "rgb(77.3%, 39.6%, 23.9%)"
-  primary-dark: "rgb(83.1%, 45.9%, 31.4%)"
-  background: "rgb(95.3%, 95.3%, 94.9%)"
-  background-dark: "rgb(9%, 9%, 8.6%)"
-  sidebar: "rgb(94.1%, 94.1%, 93.7%)"
-  sidebar-dark: "rgb(11.8%, 11.8%, 11.4%)"
-  workspace: "rgb(99.2%, 99.2%, 98.8%)"
-  workspace-dark: "rgb(7.5%, 7.5%, 7.3%)"
-  surface: "rgba(97.6%, 97.6%, 97.3%, 0.94)"
-  surface-dark: "rgba(14.5%, 14.5%, 14.1%, 0.94)"
-  elevated: "rgb(100%, 100%, 99.6%)"
-  elevated-dark: "rgb(13.7%, 13.7%, 13.3%)"
-  foreground: "rgb(12.5%, 12.5%, 11.8%)"
-  foreground-dark: "rgb(94.1%, 94.1%, 92.5%)"
-  secondary: "rgb(36.5%, 36.5%, 34.9%)"
-  secondary-dark: "rgb(74.5%, 74.5%, 72.2%)"
-  border: "rgb(85.5%, 85.5%, 84.3%)"
-  border-dark: "rgb(23.5%, 23.5%, 22.4%)"
-  success: "rgb(31%, 47.8%, 34.5%)"
-  warning: "rgb(66.3%, 41.6%, 18.4%)"
-  danger: "rgb(69.8%, 31%, 27.1%)"
-  info: "rgb(29%, 43.5%, 64.7%)"
+  primary: "rgb(66.3%, 31%, 16.9%)"
+  primary-dark: "rgb(87.8%, 60.8%, 47.1%)"
+  action: "rgb(72.2%, 33.7%, 18.4%)"
+  action-hover: "rgb(61.6%, 27.5%, 13.7%)"
+  background: "rgb(98%, 96.9%, 94.9%)"
+  background-dark: "rgb(10.2%, 9.4%, 8.6%)"
+  sidebar: "rgb(94.9%, 92.9%, 89.8%)"
+  sidebar-dark: "rgb(12.5%, 11.4%, 10.2%)"
+  workspace: "rgb(98%, 96.9%, 94.9%)"
+  workspace-dark: "rgb(10.2%, 9.4%, 8.6%)"
+  surface: "rgb(94.9%, 92.9%, 89.8%)"
+  surface-dark: "rgb(14.9%, 13.7%, 12.5%)"
+  elevated: "rgb(100%, 99.2%, 98%)"
+  elevated-dark: "rgb(16.5%, 15.3%, 14.1%)"
+  foreground: "rgb(12.2%, 10.6%, 9.4%)"
+  foreground-dark: "rgb(95.3%, 92.5%, 88.6%)"
+  secondary: "rgb(34.1%, 31.4%, 29%)"
+  secondary-dark: "rgb(76.9%, 72.9%, 67.8%)"
+  tertiary: "rgb(43.5%, 40%, 36.1%)"
+  tertiary-dark: "rgb(69%, 64.7%, 59.2%)"
+  border: "rgb(89.8%, 87.1%, 82.7%)"
+  border-dark: "rgb(27.5%, 25.1%, 22.4%)"
+  success: "rgb(29%, 45.5%, 32.5%)"
+  success-dark: "rgb(58%, 74.9%, 60%)"
+  warning: "rgb(58.4%, 36.5%, 15.3%)"
+  warning-dark: "rgb(87.1%, 69.4%, 43.9%)"
+  danger: "rgb(67.8%, 29%, 25.5%)"
+  danger-dark: "rgb(89%, 56.5%, 52.5%)"
+  info: "rgb(27.5%, 41.6%, 62.4%)"
+  info-dark: "rgb(58%, 70.6%, 86.3%)"
 typography:
   sans:
     fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif'
@@ -53,8 +61,8 @@ Wand for Mac 服务于需要持续跟进 AI 会话、项目、终端和任务的
 随时可达的搜索与设置。参考的是信息层级、桌面键盘习惯和克制的反馈；Wand 的工作空间、
 终端和权限行为由自己的协议与业务模型决定，不复制其他产品的标识或无关功能。
 
-原有 `Theme.swift` 已采用中性灰壳、近白工作区与少量珊瑚色动作。本次延续这套原生体系，
-不把父仓库的 Web 暖纸色布局规范直接覆盖到 SwiftUI。Wand 像素猫标记只出现在欢迎、连接和
+用户进一步指定已安装 Web 登录页作为全客户端视觉参考。实际观察后统一为暖纸底色、墨色文字、
+细分隔线与赤陶主动作；连接页的开放排版延续该参考，工作页面保持原生桌面的阅读密度。Wand 像素猫标记只出现在欢迎、连接和
 关于等识别位置；高频内容不重复放大品牌图案。界面不采用营销大标题、装饰性指标或全屏动态背景。
 
 Token ownership 使用 Model B：`Wand/Theme.swift` 是原生颜色和共享外观的唯一运行时所有者。
@@ -66,11 +74,12 @@ PTY 终端由 Web 画布呈现，保留终端的内容配色与交互契约。�
 
 窗口、侧栏、工作区和浮层按信息角色区分；浅色与深色保留相同结构。
 `wand.appearanceMode` 的 `system`、`light`、`dark` 由 `ContentView` 统一应用。
-品牌珊瑚色用于主动作、关键图标与输入焦点，不作为所有分区的大面积底色。
+赤陶色用于主动作、关键图标与输入焦点，不作为所有分区的大面积底色。
 
 | 文档角色 | 运行时所有者 | 主要使用位置 |
 |---|---|---|
-| primary / primary-dark | `Theme.wandAccent`，兼容别名 `brand` | 主按钮、焦点 |
+| primary / primary-dark | `Theme.wandAccent`，兼容别名 `brand` | 文字动作、图标、焦点 |
+| action / action-hover | `Theme.accentSolid` / `accentSolidHover` | 白字主按钮与发送按钮 |
 | background / sidebar / workspace | 同名 `Theme` 背景属性 | 窗口、左侧导航、正文 |
 | surface / elevated | `Theme.surface` / `surfaceElevated` | 输入、轻量分组、弹窗 |
 | foreground / secondary | `Theme.textPrimary` / `textSecondary` | 标题、正文、辅助说明 |
@@ -85,7 +94,7 @@ PTY 终端由 Web 画布呈现，保留终端的内容配色与交互契约。�
 
 使用系统字体，SwiftUI `.system` 负责原生中文回退与字体度量；路径、命令、版本、快捷键使用
 `.monospaced`。不引入网络字体。常见侧栏与表单为 12–14 pt，辅助说明 11–12 pt，
-设置标题 22 pt，连接欢迎标题 30 pt。标题使用 semibold；正文保持 regular。
+设置与内容页标题 24 pt，连接标题 24 pt，侧栏正文 13 pt、辅助信息 11 pt。标题使用 semibold；正文保持 regular。
 
 标题通过字号、字重和间距建立层级，不能把所有标签加粗。中文说明允许换行，技术路径按需要
 保留尾部或中间截断，并通过 help、可选文本或详情提供完整值。关键错误与主动作不得只靠截断文本表达。
@@ -138,7 +147,7 @@ PTY 终端由 Web 画布呈现，保留终端的内容配色与交互契约。�
 
 ## Components
 
-按钮复用 `WandPrimaryButtonStyle`、`WandSecondaryButtonStyle`、`WandIconButtonStyle`；
+按钮复用 `WandPrimaryButtonStyle`、`WandSendButtonStyle`、`WandSecondaryButtonStyle`、`WandIconButtonStyle`；
 原生 `Button` 保留键盘与辅助功能语义。主要动作与取消相邻，危险动作在语义和确认文案上明确区分。
 异步提交期间禁止重复触发，忙碌状态要保留可辨认的标签与恢复路径。
 
@@ -179,8 +188,10 @@ PTY 终端由 Web 画布呈现，保留终端的内容配色与交互契约。�
 取消功能的入口不能残留在侧栏更多菜单、任务右键菜单、系统菜单、命令面板或设置中。
 保留会话、工作树、文件与 Git 检查器的原有能力；此次清理不删除服务端/Web 功能或用户数据。
 
-结构变化使用约 160 ms 的短促 ease-out / ease-in-out；高频列表选择即时发生，
-不添加连续跳动、装饰性弹簧或长时间阻止输入的过渡。开启 Reduce Motion 时取消相关空间动画。
+悬停和焦点使用 `Theme.Motion.feedback` 的 120 ms ease-out；手动面板展开使用
+`Theme.Motion.structure` 的 180 ms ease-in-out。共享 `wandMotion(value:layout:)` 尊重 Reduce Motion，
+开启后取消这些自定义动画。按钮按下、高频选择与流式消息即时响应。移除聊天状态文字的常驻
+30 fps 扫光，不添加循环跳动、装饰性弹簧或页面进入时的整页位移。
 这是参考桌面产品节奏后延续现有原生反馈的选择，不承诺重现某个参考 App 的内部动画参数。
 
 中文文案使用直接动词，例如「新建会话」「连接」「打开设置」「回到最新」。
@@ -195,11 +206,14 @@ PTY 终端由 Web 画布呈现，保留终端的内容配色与交互契约。�
 - PTY 使用 Web 终端画布；不得将静态审计当作原生功能或无障碍验证。
 - 不为单个页面重写 `Theme`，不让父仓库 Web 文档成为第二套原生 token 所有者。
 
-当前有意保留的差异：原生 Theme 的中性工作区、10/12 pt 分组圆角和原生菜单几何
-与父仓库 Web 的暖纸色、12/16 px 容器不同。本文件记录该平台边界；它不是静默修改 Web 设计规范。
+原生 Theme 与 Web 登录页共享暖纸与赤陶的视觉方向；原生的 8/10/12 pt 圆角、菜单几何和键盘
+行为仍由 SwiftUI / AppKit 负责。本次仅更新 macOS 运行时与设计契约，不修改 Web 的 token 所有权。
 
 当前功能验收以这台机器已安装运行的 Wand 服务为准，连接信息按父仓库 `AGENTS.md`
 从本机私密文件读取。旧指南、工具目录、宽表单和分段侧栏截图仅作历史记录。
 附加功能清理结果见 `docs/desktop-cleanup-2026-09-21/verification.md`；连续侧栏检查另记于
 `docs/desktop-continuous-sidebar-2026-09-21/verification.md`。本轮指定 HTTPS 入口仍拒绝连接，
 不能据编译、单元测试或旧截图宣称真实任务交互已验收通过。
+
+全客户端暖纸视觉、真实参考与本轮实际验证范围见
+`docs/desktop-paper-design-2026-09-21/verification.md`；其中明确区分已验证的本地界面与HTTPS故障阻塞的真实会话流程。

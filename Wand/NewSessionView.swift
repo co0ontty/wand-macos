@@ -326,9 +326,11 @@ struct NewSessionView: View {
             else {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("新建会话").font(.headline)
+                        Text("新建会话").font(.system(size: 17, weight: .semibold))
                         Spacer()
-                        Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                        Button("取消") { dismiss() }
+                            .buttonStyle(WandSecondaryButtonStyle())
+                            .keyboardShortcut(.cancelAction)
                     }.padding(20)
                     form
                 }
@@ -371,6 +373,7 @@ struct NewSessionView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 errorBanner(error)
                                 Button("重试加载") { Task { await loadInitial() } }
+                                    .buttonStyle(WandSecondaryButtonStyle())
                             }.padding(14)
                         } else {
                             composerOptions(compact: geometry.size.width < 700)
@@ -378,14 +381,12 @@ struct NewSessionView: View {
                                 .disabled(draft.creating)
                         }
                     }
-                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.surfaceElevated))
-                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(composerFocused ? Theme.textSecondary.opacity(0.42) : Theme.border, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.025), radius: 12, y: 4)
+                    .wandInputSurface(focused: composerFocused, cornerRadius: Theme.Radius.lg)
                     if let error = draft.taskError {
                         VStack(alignment: .leading, spacing: 8) {
                             errorBanner(error)
                             Button("重新读取任务") { selectDestination(draft.destination) }
+                                .buttonStyle(WandSecondaryButtonStyle())
                         }
                     }
                     if let error = draft.errorMessage { errorBanner(error) }
@@ -425,7 +426,7 @@ struct NewSessionView: View {
         }
         .foregroundColor(Theme.textSecondary)
         .padding(.horizontal, 8).frame(height: 32)
-        .frame(maxWidth: width).contentShape(RoundedRectangle(cornerRadius: 9))
+        .frame(maxWidth: width).contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
     }
 
     private var providerButton: some View {
@@ -456,7 +457,7 @@ struct NewSessionView: View {
                         fieldHint("跟随所选任务的工作目录。切换任务可更改目录。")
                     } else { cwdCard }
                     HStack { Spacer(); Button("完成") { showDirectoryOptions = false }.buttonStyle(WandSecondaryButtonStyle()) }
-                }.padding(18).frame(width: 400)
+                }.padding(20).frame(width: 400).background(Theme.workspaceBackground)
             }
     }
 
@@ -481,7 +482,7 @@ struct NewSessionView: View {
                         fieldHint("使用独立分支与目录完成这个任务。")
                     }
                     HStack { Spacer(); Button("完成") { showTaskOptions = false }.buttonStyle(WandSecondaryButtonStyle()) }
-                }.padding(18).frame(width: 340)
+                }.padding(20).frame(width: 340).background(Theme.workspaceBackground)
             }
     }
 
@@ -505,21 +506,18 @@ struct NewSessionView: View {
                     fieldHint(modeHint)
                     if draft.mode == .fullAccess { fullAccessWarning }
                     HStack { Spacer(); Button("完成") { showRunSettings = false }.buttonStyle(WandSecondaryButtonStyle()) }
-                }.padding(18).frame(width: 360)
+                }.padding(20).frame(width: 360).background(Theme.workspaceBackground)
             }
     }
 
     private var startButton: some View {
         Button(action: prepareCreate) {
             ZStack {
-                if draft.creating { ProgressView().controlSize(.small) }
+                if draft.creating { ProgressView().controlSize(.small).tint(.white) }
                 else { Image(systemName: "arrow.up").font(.system(size: 15, weight: .semibold)) }
             }.frame(width: 34, height: 34)
-                .foregroundColor(Theme.workspaceBackground)
-                .background(Circle().fill(Theme.textPrimary))
-                .opacity(readyToStart ? 1 : 0.35)
         }
-        .buttonStyle(.plain).disabled(!readyToStart)
+        .buttonStyle(WandSendButtonStyle()).disabled(!readyToStart)
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityLabel(draft.creating ? "正在启动会话" : "启动会话")
         .help("启动会话 · ⌘↵")
@@ -643,9 +641,11 @@ struct NewSessionView: View {
                         .foregroundColor(Theme.wandAccent)
                 }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DesktopNavigationButtonStyle())
     }
 
     private var compactModelLabel: String {
@@ -663,8 +663,7 @@ struct NewSessionView: View {
         .accessibilityLabel("模型：\(selectedModelLabel)")
         .popover(isPresented: $showModelPicker, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
-                TextField("搜索模型", text: $modelQuery)
-                    .textFieldStyle(.roundedBorder)
+                SessionModelSearchField(query: $modelQuery)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         if defaultNewSessionModelMatchesQuery {
@@ -689,6 +688,7 @@ struct NewSessionView: View {
             }
             .padding(12)
             .frame(width: 280)
+            .background(Theme.workspaceBackground)
         }
         .onChange(of: showModelPicker) { open in
             if !open { modelQuery = "" }
@@ -976,6 +976,42 @@ struct NewSessionView: View {
     }
 }
 
+/// 首页和会话中的模型搜索共用焦点、清空和输入表面。
+struct SessionModelSearchField: View {
+    @Binding var query: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.textMuted)
+            TextField("搜索模型", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .focused($focused)
+                .accessibilityLabel("搜索模型")
+            Button {
+                query = ""
+                focused = true
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textMuted)
+                    .frame(width: 22, height: 26)
+            }
+            .buttonStyle(DesktopNavigationButtonStyle())
+            .opacity(query.isEmpty ? 0 : 1)
+            .disabled(query.isEmpty)
+            .accessibilityHidden(query.isEmpty)
+            .accessibilityLabel("清除模型搜索")
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 34)
+        .wandInputSurface(focused: focused, cornerRadius: Theme.Radius.control)
+    }
+}
+
 // MARK: - 目录浏览器
 
 /// 极简目录浏览器：基于 /api/directory 逐层进入，选中当前目录。
@@ -998,38 +1034,47 @@ struct DirectoryBrowserView: View {
                     .foregroundColor(Theme.textPrimary)
                 Spacer()
                 Button("取消") { dismiss() }
-                    .buttonStyle(.plain)
-                    .foregroundColor(Theme.textSecondary)
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
             .wandGlass(.chrome)
             pathHeader
-            Divider()
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             if loading {
                 Spacer()
                 ProgressView().tint(Theme.wandAccent)
                 Spacer()
             } else if let errorMessage {
                 Spacer()
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundColor(Theme.danger)
-                    .padding()
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 24))
+                        .foregroundColor(Theme.warning)
+                    Text(errorMessage)
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                    Button("重试") { Task { await load() } }
+                        .buttonStyle(WandSecondaryButtonStyle())
+                }
+                .padding(24)
                 Spacer()
             } else {
                 directoryList
             }
-            Divider()
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             HStack {
                 Spacer()
                 Button("选择此目录") { onPick(currentPath) }
                     .buttonStyle(WandPrimaryButtonStyle())
             }
-            .padding(14)
-            .background(Theme.surface)
+            .padding(16)
+            .background(Theme.workspaceBackground)
         }
         .frame(minWidth: 620, minHeight: 520)
+        .background(Theme.workspaceBackground)
         .task {
             currentPath = startPath.isEmpty ? "~" : startPath
             await load()
@@ -1048,11 +1093,15 @@ struct DirectoryBrowserView: View {
                     .font(.system(size: 14))
                     .foregroundColor(Theme.wandAccent)
             }
+            .buttonStyle(WandIconButtonStyle())
+            .accessibilityLabel("上一级目录")
+            .help("上一级目录")
             Text(currentPath)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.head)
+                .help(currentPath)
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -1079,7 +1128,8 @@ struct DirectoryBrowserView: View {
                             .foregroundColor(Theme.textSecondary)
                     }
                 }
-                .listRowBackground(Theme.background)
+                .buttonStyle(DesktopNavigationButtonStyle())
+                .listRowBackground(Theme.workspaceBackground)
             }
         }
         .listStyle(.plain)

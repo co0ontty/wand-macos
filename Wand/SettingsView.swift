@@ -41,6 +41,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 700, idealWidth: 800, minHeight: 540, idealHeight: 620)
         .background(WandAmbientBackground())
+        .tint(Theme.accentSolid)
         .task {
             serverVersion = (try? await api.serverConfig())?.currentVersion
             LocalNetworkPermission.probeDenied { permissionDenied = $0 }
@@ -71,61 +72,53 @@ struct SettingsView: View {
 
     private var settingsHeader: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("设置")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Text("连接、设备和工作流偏好")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textSecondary)
-            }
+            Text("设置")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
             Spacer()
-            Text(appVersion)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(Theme.textSecondary)
             Button("完成") { dismiss() }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.brand)
+                .buttonStyle(WandSecondaryButtonStyle())
                 .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .wandGlass(.chrome)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(Theme.background)
     }
 
     private var settingsSidebar: some View {
-        List {
-            ForEach(SettingsPane.allCases) { pane in
-                Button {
-                    selectedPane = pane
-                } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: pane.systemImage)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(selectedPane == pane ? Theme.textPrimary : Theme.textSecondary)
-                            .frame(width: 16)
-                        Text(pane.title)
-                            .font(.system(size: 13, weight: .medium))
-                        Spacer(minLength: 0)
+        ScrollView {
+            VStack(spacing: 4) {
+                ForEach(SettingsPane.allCases) { pane in
+                    Button {
+                        selectedPane = pane
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: pane.systemImage)
+                                .font(.system(size: 13, weight: .regular))
+                                .frame(width: 18)
+                            Text(pane.title)
+                                .font(.system(size: 13, weight: selectedPane == pane ? .medium : .regular))
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundColor(selectedPane == pane ? Theme.textPrimary : Theme.textSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(DesktopNavigationButtonStyle(active: selectedPane == pane))
+                    .accessibilityValue(selectedPane == pane ? "已选择" : "")
                 }
-                .buttonStyle(.plain)
-                .foregroundColor(selectedPane == pane ? Theme.textPrimary : Theme.textSecondary)
-                .padding(.vertical, 4)
-                .listRowBackground(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(selectedPane == pane ? Theme.textPrimary.opacity(0.065) : Color.clear)
-                )
             }
+            .padding(12)
         }
-        .listStyle(.sidebar)
-        .frame(minWidth: 190, idealWidth: 210, maxWidth: 240)
+        .frame(minWidth: 176, idealWidth: 190, maxWidth: 220)
+        .background(Theme.sidebarBackground)
+        .wandMotion(value: selectedPane)
     }
 
     private var detailPane: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 28) {
                 detailHeader
                 switch selectedPane {
                 case .general:
@@ -141,15 +134,16 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: 620, alignment: .leading)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 24)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 30)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WandAmbientBackground())
+        .background(Theme.background)
+        .id(selectedPane)
     }
 
     private var generalContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 28) {
             settingsCard("外观", description: "应用于这台 Mac，切换后立即生效。") {
                 HStack(spacing: 12) {
                     appearanceOption("system", title: "跟随系统", symbol: "circle.lefthalf.filled")
@@ -179,38 +173,40 @@ struct SettingsView: View {
     private func appearanceOption(_ value: String, title: String, symbol: String) -> some View {
         let isSelected = appearanceMode == value
         return Button { appearanceMode = value } label: {
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 Image(systemName: symbol)
                     .font(.system(size: 23, weight: .regular))
                     .frame(height: 34)
                 HStack(spacing: 5) {
                     Text(title).font(.system(size: 12, weight: .medium))
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 11))
-                    }
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.brand)
+                        .opacity(isSelected ? 1 : 0)
                 }
             }
-            .foregroundColor(isSelected ? Theme.brand : Theme.textSecondary)
+            .foregroundColor(isSelected ? Theme.textPrimary : Theme.textSecondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(RoundedRectangle(cornerRadius: 10).fill(
-                isSelected ? Theme.brand.opacity(0.07) : Theme.surface
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(
+                isSelected ? Theme.surfaceElevated : Theme.surface
             ))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(
-                isSelected ? Theme.brand : Theme.border, lineWidth: isSelected ? 1.5 : 0.75
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).stroke(
+                isSelected ? Theme.brand : Theme.border.opacity(0.7), lineWidth: isSelected ? 1 : 0.5
             ))
-            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DesktopNavigationButtonStyle())
+        .wandMotion(value: isSelected)
         .accessibilityLabel("\(title)外观")
         .accessibilityValue(isSelected ? "已选择" : "未选择")
     }
 
     private var detailHeader: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(selectedPane.title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 24, weight: .semibold))
+                .tracking(-0.4)
                 .foregroundColor(Theme.textPrimary)
             Text(selectedPane.subtitle)
                 .font(.system(size: 13))
@@ -238,10 +234,13 @@ struct SettingsView: View {
                     } label: {
                         Label("切换服务器", systemImage: "server.rack")
                     }
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    Spacer(minLength: 8)
                     Button("断开连接", role: .destructive) {
                         confirmDisconnect = true
                     }
-                    Spacer()
+                    .buttonStyle(.link)
+                    .foregroundColor(Theme.danger)
                 }
                 .font(.system(size: 13))
             }
@@ -268,6 +267,7 @@ struct SettingsView: View {
                     Button("打开系统设置") {
                         LocalNetworkPermission.openSettings()
                     }
+                    .buttonStyle(WandSecondaryButtonStyle())
                 }
             }
         }
@@ -278,16 +278,15 @@ struct SettingsView: View {
             Button { showTroubleshooting = true } label: {
                 Label("打开故障排查", systemImage: "stethoscope")
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.brand)
+            .buttonStyle(WandPrimaryButtonStyle())
         }
     }
 
     private var aboutContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            settingsCard("Wand") {
+        VStack(alignment: .leading, spacing: 28) {
+            settingsCard("应用") {
                 HStack(spacing: 14) {
-                    WandBrandMark(size: 48)
+                    WandBrandMark(size: 36)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Wand")
                             .font(.system(size: 17, weight: .semibold))
@@ -311,13 +310,12 @@ struct SettingsView: View {
 
     /// macOS 客户端更新通道是本机偏好，不跟随当前连接服务的 Web 更新通道。
     private var updateControlDeck: some View {
-        settingsCard("保持在最新版本", description: "直接检查官方 GitHub Release；下载后校验并原位替换，失败时自动恢复旧版。") {
+        settingsCard("客户端更新", description: "检查新版本，选择适合你的更新通道。") {
             HStack(spacing: 11) {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(Theme.success)
-                    .frame(width: 36, height: 36)
-                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Theme.success.opacity(0.13)))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 24, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(updateManager.isChecking ? "正在检查 GitHub Release" : "当前 \(appVersion)")
                         .font(.system(size: 13, weight: .semibold))
@@ -382,24 +380,22 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 if updateManager.pendingInstall != nil {
                     Button("重启完成更新") { UpdateFlowController.shared.relaunchPending() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.brand)
+                        .buttonStyle(WandPrimaryButtonStyle())
                 } else {
                     Button("强制检查更新") { Task { _ = await updateManager.check(.manual) } }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.brand)
+                        .buttonStyle(WandPrimaryButtonStyle())
                         .disabled(updateManager.isChecking)
                 }
                 if let update = updateManager.availableUpdate {
                     if update.preferredAsset != nil, UpdateInstaller.canInstallInPlace {
                         Button("立即更新") { installUpdate() }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(WandSecondaryButtonStyle())
                     }
                     Button("查看 Release") { NSWorkspace.shared.open(update.releaseURL) }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(WandSecondaryButtonStyle())
                 } else if let pending = updateManager.pendingInstall {
                     Button("查看 Release") { NSWorkspace.shared.open(pending.releaseURL) }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(WandSecondaryButtonStyle())
                 }
             }
             Text(updateManager.channel == .beta
@@ -442,29 +438,25 @@ struct SettingsView: View {
         description: String? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                 if let description {
                     Text(description)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundColor(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                .fill(Theme.surfaceElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                        .stroke(Theme.border.opacity(0.72), lineWidth: 0.75)
-                )
-        )
+        .padding(.top, 20)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.border.opacity(0.6)).frame(height: 0.5)
+        }
     }
 
     private var appVersion: String {
@@ -514,7 +506,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .general: return "让 Wand 适合你的工作习惯。"
-        case .connection: return "管理当前连接和服务器上的功能设置。"
+        case .connection: return "查看当前服务器，或切换连接。"
         case .permissions: return "查看 Wand 在这台 Mac 上使用的系统权限。"
         case .troubleshooting: return "诊断连接与本地网络权限问题。"
         case .about: return "版本信息与项目链接。"

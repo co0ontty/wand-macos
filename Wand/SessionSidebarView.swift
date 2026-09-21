@@ -707,7 +707,7 @@ struct SessionTile: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
                     .foregroundColor(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -717,12 +717,12 @@ struct SessionTile: View {
                     if prominentStatus {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                         Text(statusLabel)
-                            .font(.system(size: 9.5, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundColor(statusColor)
                             .lineLimit(1)
                     } else if !recentTime.isEmpty {
                         Text(recentTime)
-                            .font(.system(size: 9.5, weight: .regular))
+                            .font(.system(size: 11, weight: .regular))
                             .foregroundColor(Theme.textMuted)
                     }
                     if !prominentStatus && recentTime.isEmpty {
@@ -734,7 +734,7 @@ struct SessionTile: View {
                                 .foregroundColor(Theme.textMuted.opacity(0.7))
                         }
                         Text(folderName)
-                            .font(.system(size: 9.5))
+                            .font(.system(size: 11))
                             .foregroundColor(Theme.textMuted)
                             .lineLimit(1)
                             .help(session.cwd ?? folderName)
@@ -748,8 +748,8 @@ struct SessionTile: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
-        .frame(minHeight: 46)
-        .wandSelectionSurface(isSelected: isSelected && !isSelecting, isHovered: hovering, cornerRadius: 7)
+        .frame(minHeight: 50)
+        .wandSelectionSurface(isSelected: isSelected && !isSelecting, isHovered: hovering, cornerRadius: Theme.Radius.control)
         .onHover { hovering = $0 }
     }
 }
@@ -776,7 +776,7 @@ struct HistoryTile: View {
                 .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayTitle)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -785,11 +785,11 @@ struct HistoryTile: View {
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(Theme.providerColor(history.provider))
                     Text(dateText.isEmpty ? "可恢复" : "\(dateText) · 可恢复")
-                        .font(.system(size: 9.5, weight: .regular))
+                        .font(.system(size: 11, weight: .regular))
                         .foregroundColor(Theme.textMuted)
                     if !history.cwd.isEmpty {
                         Text("·").foregroundColor(Theme.textMuted.opacity(0.55))
-                        WandPathText(path: history.cwd, fontSize: 9.5, color: Theme.textMuted)
+                        WandPathText(path: history.cwd, fontSize: 11, color: Theme.textMuted)
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -797,8 +797,8 @@ struct HistoryTile: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
-        .frame(minHeight: 46)
-        .wandSelectionSurface(isSelected: false, isHovered: hovering, cornerRadius: 7)
+        .frame(minHeight: 50)
+        .wandSelectionSurface(isSelected: false, isHovered: hovering, cornerRadius: Theme.Radius.control)
         .onHover { hovering = $0 }
     }
 }

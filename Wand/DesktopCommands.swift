@@ -189,10 +189,10 @@ struct DesktopCommandPalette: View {
                     .accessibilityLabel("搜索会话、工作空间或命令")
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).help("清除搜索").accessibilityLabel("清除搜索")
+                        .buttonStyle(WandIconButtonStyle()).help("清除搜索").accessibilityLabel("清除搜索")
                 }
                 Button("关闭", action: onDismiss).keyboardShortcut(.cancelAction)
-                    .buttonStyle(.plain).foregroundColor(Theme.textSecondary)
+                    .buttonStyle(WandSecondaryButtonStyle())
             }
             .padding(20)
             Divider()
@@ -231,9 +231,8 @@ struct DesktopCommandPalette: View {
                                     }
                                 }
                                 .foregroundColor(Theme.textPrimary).padding(11).contentShape(Rectangle())
-                                .background(RoundedRectangle(cornerRadius: 9).fill(index == selection ? Theme.textPrimary.opacity(0.08) : .clear))
                             }
-                            .buttonStyle(.plain).id(result.id)
+                            .buttonStyle(DesktopNavigationButtonStyle(active: index == selection)).id(result.id)
                             .accessibilityAddTraits(index == selection ? .isSelected : [])
                         }
                     }.padding(10)
@@ -248,8 +247,9 @@ struct DesktopCommandPalette: View {
                 Spacer()
                 Text("\(results.count) 个结果")
             }.font(.system(size: 11)).foregroundColor(Theme.textSecondary).padding(14)
+                .background(Theme.surface)
         }
-        .frame(width: 640, height: 540).background(Theme.surfaceElevated)
+        .frame(width: 640, height: 540).background(Theme.workspaceBackground)
         .onChange(of: query) { _ in selection = 0 }
         .task { await load() }
     }

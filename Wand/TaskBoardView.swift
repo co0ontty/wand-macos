@@ -22,11 +22,12 @@ struct TaskBoardView: View {
     @State private var busy = false
     @State private var lastAgent = WandBoardTaskAgent.default
     @State private var archiveExpanded = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             header.frame(maxWidth: embedded ? 1120 : .infinity)
-            Divider()
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             Group {
                 if let selected {
                     TaskBoardDetailView(
@@ -54,8 +55,13 @@ struct TaskBoardView: View {
                         onOpenSession: onOpenSession
                     )
                 } else if loading && tasks.isEmpty {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 12) {
+                        ProgressView().tint(Theme.wandAccent)
+                        Text("正在加载任务…")
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     listContent.frame(maxWidth: embedded ? 1120 : .infinity)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,7 +69,8 @@ struct TaskBoardView: View {
             }
         }
         .frame(minWidth: embedded ? 0 : 640, minHeight: embedded ? 0 : 520)
-        .background(embedded ? Theme.workspaceBackground : Theme.background)
+        .background(Theme.workspaceBackground)
+        .wandMotion(value: archiveExpanded, layout: true)
         .sheet(isPresented: $showCreate) {
             TaskBoardCreateView(
                 workspaces: workspaces,
@@ -115,27 +122,47 @@ struct TaskBoardView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             if !embedded || selected != nil {
-                Button(selected == nil ? "关闭" : "返回") {
+                Button {
                     if selected != nil { selected = nil } else { close() }
+                } label: {
+                    Label(selected == nil ? "关闭" : "返回", systemImage: selected == nil ? "xmark" : "chevron.left")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .frame(height: 30)
                 }
+                .buttonStyle(DesktopNavigationButtonStyle())
             }
             if let selected {
-                Text(selected.title).font(.headline)
+                Text(selected.title)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                    .help(selected.title)
             } else if !embedded {
-                Text("任务管理").font(.headline)
+                Text("任务看板")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
             } else {
-                Text("安排工作，跟踪进度").font(.system(size: 13)).foregroundColor(Theme.textSecondary)
+                Text("安排工作，跟踪进度")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.textSecondary)
             }
-            Spacer()
+            Spacer(minLength: 12)
             if selected == nil {
-                Button("刷新") { Task { await refresh(showProgress: false) } }
-                Button("新建") { openCreate("todo") }
+                Button { Task { await refresh(showProgress: false) } } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(WandIconButtonStyle())
+                .help("刷新任务")
+                .accessibilityLabel("刷新任务")
+                Button("新建任务") { openCreate("todo") }
+                    .buttonStyle(WandPrimaryButtonStyle())
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
     }
 
     private func openCreate(_ status: String) {
@@ -156,8 +183,26 @@ struct TaskBoardView: View {
     private var listContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                TextField("搜索任务", text: $query)
-                    .textFieldStyle(.roundedBorder)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(Theme.textMuted)
+                    TextField("搜索任务", text: $query)
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
+                    Button { query = ""; searchFocused = true } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(WandIconButtonStyle())
+                    .opacity(query.isEmpty ? 0 : 1)
+                    .disabled(query.isEmpty)
+                    .accessibilityHidden(query.isEmpty)
+                    .accessibilityLabel("清除任务搜索")
+                    .help("清除搜索")
+                }
+                .font(.system(size: 13))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .wandInputSurface(focused: searchFocused, cornerRadius: Theme.Radius.control)
                 Picker("项目", selection: $filterWorkspaceId) {
                     Text("所有项目").tag("")
                     ForEach(workspaces) { workspace in
@@ -166,8 +211,9 @@ struct TaskBoardView: View {
                 }
                 .frame(width: 220)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 8)
             List {
                 ForEach(WandBoardStatus.allCases) { status in
                     let items = visibleTasks.filter { $0.status == status.rawValue }
@@ -175,7 +221,12 @@ struct TaskBoardView: View {
                         ? visibleTasks.filter { $0.status == "archived" }
                         : []
                     Section(header: HStack(spacing: 8) {
-                        Text("\(status.label)  \(items.count)")
+                        Text(status.label)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Theme.textPrimary)
+                        Text("\(items.count)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(Theme.textMuted)
                         Spacer()
                         Button {
                             openCreate(status.rawValue)
@@ -184,12 +235,15 @@ struct TaskBoardView: View {
                                 .font(.system(size: 11, weight: .semibold))
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(WandIconButtonStyle())
                         .help("在\(status.label)中新建任务")
                         .accessibilityLabel("在\(status.label)中新建任务")
                     }) {
                         if items.isEmpty && archived.isEmpty {
-                            Text(status.empty).foregroundColor(Theme.textMuted)
+                            Text(status.empty)
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.textSecondary)
+                                .padding(.vertical, 12)
                         } else {
                             ForEach(items) { task in
                                 Button {
@@ -197,7 +251,7 @@ struct TaskBoardView: View {
                                 } label: {
                                     TaskBoardRow(task: task)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(DesktopNavigationButtonStyle())
                             }
                             if !archived.isEmpty {
                                 DisclosureGroup(isExpanded: Binding(
@@ -210,7 +264,7 @@ struct TaskBoardView: View {
                                         } label: {
                                             TaskBoardRow(task: task)
                                         }
-                                        .buttonStyle(.plain)
+                                        .buttonStyle(DesktopNavigationButtonStyle())
                                     }
                                 } label: {
                                     Label("归档任务  \(archived.count)", systemImage: "folder")
@@ -219,10 +273,12 @@ struct TaskBoardView: View {
                             }
                         }
                     }
-                    .listRowBackground(embedded ? Theme.workspaceBackground : Theme.background)
+                    .listRowBackground(Theme.workspaceBackground)
                 }
             }
-            .modifier(TaskBoardListSurface(embedded: embedded))
+            .listStyle(.plain)
+            .modifier(TaskBoardListSurface(embedded: true))
+            .padding(.horizontal, 12)
         }
     }
 
@@ -288,26 +344,39 @@ private struct TaskBoardRow: View {
     let task: WandBoardTask
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 14) {
             Text(task.identifier.isEmpty ? String(task.id.prefix(8)) : task.identifier)
-                .font(.caption)
+                .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(Theme.textMuted)
-            Text(task.title)
-                .font(.headline)
-                .foregroundColor(Theme.textPrimary)
-                .lineLimit(2)
-            HStack(spacing: 8) {
-                Text(task.workspace?.name ?? "未指定项目")
-                if task.priority != "none" {
-                    Text(WandBoardPriority(rawValue: task.priority)?.label ?? task.priority)
-                        .foregroundColor(Theme.warning)
+                .frame(width: 72, alignment: .leading)
+                .padding(.top, 3)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(task.title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(2)
+                HStack(spacing: 10) {
+                    Text(task.workspace?.name ?? "未指定项目")
+                        .lineLimit(1)
+                    if task.priority != "none" {
+                        Text(WandBoardPriority(rawValue: task.priority)?.label ?? task.priority)
+                            .foregroundColor(Theme.warning)
+                    }
+                    Text(task.agent.map { wandBoardProviderLabel($0.provider) } ?? "未指派")
                 }
-                Text(task.agent.map { wandBoardProviderLabel($0.provider) } ?? "未指派")
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textSecondary)
             }
-            .font(.caption)
-            .foregroundColor(Theme.textMuted)
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(Theme.textMuted)
+                .padding(.top, 4)
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 
@@ -326,6 +395,8 @@ private struct TaskBoardDetailView: View {
     @State private var title: String
     @State private var description: String
     @State private var agent: WandBoardTaskAgent
+    @State private var attributesExpanded = false
+    @FocusState private var focusedField: String?
 
     init(
         task: WandBoardTask,
@@ -355,134 +426,197 @@ private struct TaskBoardDetailView: View {
     }
 
     var body: some View {
-        Form {
-            Section(header: Text("内容")) {
-                TextField("任务标题", text: $title)
-                TextField("描述", text: $description)
-                Button("保存标题与描述") {
-                    Task { await onPatch(["title": title.trimmingCharacters(in: .whitespacesAndNewlines), "description": description]) }
-                }
-                .disabled(busy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            Section(header: Text("属性")) {
-                Picker("状态", selection: Binding(
-                    get: { task.status },
-                    set: { status in Task { await onPatch(["status": status]) } }
-                )) {
-                    ForEach(WandBoardStatus.allCases) { status in
-                        Text(status.label).tag(status.rawValue)
-                    }
-                }
-                Picker("优先级", selection: Binding(
-                    get: { task.priority },
-                    set: { priority in Task { await onPatch(["priority": priority]) } }
-                )) {
-                    ForEach(WandBoardPriority.allCases) { priority in
-                        Text(priority.label).tag(priority.rawValue)
-                    }
-                }
-                Picker("项目", selection: Binding(
-                    get: { task.workspaceId ?? "" },
-                    set: { value in
-                        Task { await onPatch(["workspaceId": value.isEmpty ? NSNull() : value]) }
-                    }
-                )) {
-                    Text("不指定项目（使用全局目录）").tag("")
-                    ForEach(workspaces) { workspace in
-                        Text(workspace.name).tag(workspace.id)
-                    }
-                }
-            }
-            Section(header: Text(task.sessions.isEmpty ? "指派 Agent" : "再指派一个 Agent")) {
-                Picker("CLI 工具", selection: Binding(
-                    get: { agent.provider },
-                    set: { provider in
-                        agent.provider = provider
-                        let options = wandBoardModelOptions(from: catalog, provider: provider)
-                        if !options.contains(where: { $0.id == agent.model }) {
-                            agent.model = options.first?.id ?? "default"
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                TaskBoardFormSection(title: "任务内容") {
+                    TextField("任务标题", text: $title)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 16, weight: .medium))
+                        .focused($focusedField, equals: "title")
+                        .padding(12)
+                        .wandInputSurface(focused: focusedField == "title", cornerRadius: Theme.Radius.control)
+                    TextEditor(text: $description)
+                        .font(.system(size: 13))
+                        .lineSpacing(4)
+                        .focused($focusedField, equals: "description")
+                        .modifier(TaskBoardListSurface(embedded: true))
+                        .padding(10)
+                        .frame(minHeight: 130, idealHeight: 170)
+                        .wandInputSurface(focused: focusedField == "description", cornerRadius: Theme.Radius.control)
+                        .accessibilityLabel("任务描述")
+                    Button("保存标题与描述") {
+                        Task {
+                            await onPatch([
+                                "title": title.trimmingCharacters(in: .whitespacesAndNewlines),
+                                "description": description,
+                            ])
                         }
-                        onRemember(agent)
                     }
-                )) {
-                    ForEach(wandBoardProviders, id: \.self) { provider in
-                        Text(wandBoardProviderLabel(provider)).tag(provider)
-                    }
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    .disabled(busy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                Picker("模型", selection: Binding(
-                    get: { agent.model },
-                    set: { model in
-                        agent.model = model
-                        onRemember(agent)
+                DisclosureGroup("任务属性", isExpanded: $attributesExpanded) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Picker(
+                            "状态",
+                            selection: Binding(
+                                get: { task.status },
+                                set: { status in Task { await onPatch(["status": status]) } }
+                            )
+                        ) {
+                            ForEach(WandBoardStatus.allCases) { status in
+                                Text(status.label).tag(status.rawValue)
+                            }
+                        }
+                        Picker(
+                            "优先级",
+                            selection: Binding(
+                                get: { task.priority },
+                                set: { priority in Task { await onPatch(["priority": priority]) } }
+                            )
+                        ) {
+                            ForEach(WandBoardPriority.allCases) { priority in
+                                Text(priority.label).tag(priority.rawValue)
+                            }
+                        }
+                        Picker(
+                            "项目",
+                            selection: Binding(
+                                get: { task.workspaceId ?? "" },
+                                set: { value in
+                                    Task { await onPatch(["workspaceId": value.isEmpty ? NSNull() : value]) }
+                                }
+                            )
+                        ) {
+                            Text("不指定项目（使用全局目录）").tag("")
+                            ForEach(workspaces) { workspace in
+                                Text(workspace.name).tag(workspace.id)
+                            }
+                        }
                     }
-                )) {
-                    ForEach(wandBoardModelOptions(from: catalog, provider: agent.provider), id: \.id) { option in
-                        Text(option.label).tag(option.id)
-                    }
+                    .padding(.top, 12)
                 }
-                Picker("思考深度", selection: Binding(
-                    get: { agent.thinkingEffort },
-                    set: { effort in
-                        agent.thinkingEffort = effort
-                        onRemember(agent)
+                .font(.system(size: 13, weight: .medium))
+                TaskBoardFormSection(title: task.sessions.isEmpty ? "指派工具" : "继续指派") {
+                    Picker(
+                        "工具",
+                        selection: Binding(
+                            get: { agent.provider },
+                            set: { provider in
+                                agent.provider = provider
+                                let options = wandBoardModelOptions(from: catalog, provider: provider)
+                                if !options.contains(where: { $0.id == agent.model }) {
+                                    agent.model = options.first?.id ?? "default"
+                                }
+                                onRemember(agent)
+                            }
+                        )
+                    ) {
+                        ForEach(wandBoardProviders, id: \.self) { provider in
+                            Text(wandBoardProviderLabel(provider)).tag(provider)
+                        }
                     }
-                )) {
-                    ForEach(wandBoardEfforts, id: \.self) { effort in
-                        Text(wandBoardEffortLabel(effort)).tag(effort)
+                    Picker(
+                        "模型",
+                        selection: Binding(
+                            get: { agent.model },
+                            set: { model in
+                                agent.model = model
+                                onRemember(agent)
+                            }
+                        )
+                    ) {
+                        ForEach(wandBoardModelOptions(from: catalog, provider: agent.provider), id: \.id) { option in
+                            Text(option.label).tag(option.id)
+                        }
                     }
+                    Picker(
+                        "思考深度",
+                        selection: Binding(
+                            get: { agent.thinkingEffort },
+                            set: { effort in
+                                agent.thinkingEffort = effort
+                                onRemember(agent)
+                            }
+                        )
+                    ) {
+                        ForEach(wandBoardEfforts, id: \.self) { effort in
+                            Text(wandBoardEffortLabel(effort)).tag(effort)
+                        }
+                    }
+                    Button(task.sessions.isEmpty ? "派发 Agent" : "再派发一次") {
+                        Task { await onDispatch(agent) }
+                    }
+                    .buttonStyle(WandPrimaryButtonStyle())
+                    .disabled(busy)
                 }
-                Button(task.sessions.isEmpty ? "派发 Agent" : "再派发一次") {
-                    Task { await onDispatch(agent) }
-                }
-                .disabled(busy)
-            }
-            Section(header: Text("已指派的 Agent")) {
-                let groups = wandBoardSessionGroups(sessions: task.sessions, assigned: task.agent)
-                if groups.isEmpty {
-                    Text("还没有指派 Agent。描述会作为第一次派发的任务内容。")
-                        .foregroundColor(Theme.textMuted)
-                } else {
-                    ForEach(groups) { group in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(wandBoardProviderLabel(group.provider))
-                                .font(.subheadline.weight(.semibold))
-                            if group.sessions.isEmpty {
-                                Text("已指派，等待派发")
-                                    .font(.caption)
-                                    .foregroundColor(Theme.textMuted)
-                            } else {
-                                ForEach(group.sessions) { session in
-                                    Button {
-                                        onOpenSession(session.id)
-                                    } label: {
-                                        HStack {
-                                            BrandLogo(provider: session.provider, color: Theme.textPrimary)
-                                                .frame(width: 14, height: 14)
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(session.title.isEmpty ? wandBoardProviderLabel(session.provider) : session.title)
-                                                Text([session.model, session.status].filter { !$0.isEmpty }.joined(separator: " · "))
+                TaskBoardFormSection(title: "相关会话") {
+                    let groups = wandBoardSessionGroups(sessions: task.sessions, assigned: task.agent)
+                    if groups.isEmpty {
+                        Text("还没有指派 Agent。描述会作为第一次派发的任务内容。")
+                            .foregroundColor(Theme.textMuted)
+                    } else {
+                        ForEach(groups) { group in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(wandBoardProviderLabel(group.provider))
+                                    .font(.subheadline.weight(.semibold))
+                                if group.sessions.isEmpty {
+                                    Text("已指派，等待派发")
+                                        .font(.caption)
+                                        .foregroundColor(Theme.textMuted)
+                                } else {
+                                    ForEach(group.sessions) { session in
+                                        Button {
+                                            onOpenSession(session.id)
+                                        } label: {
+                                            HStack {
+                                                BrandLogo(provider: session.provider, color: Theme.textPrimary)
+                                                    .frame(width: 14, height: 14)
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(
+                                                        session.title.isEmpty
+                                                            ? wandBoardProviderLabel(session.provider) : session.title)
+                                                    Text(
+                                                        [session.model, session.status].filter { !$0.isEmpty }.joined(
+                                                            separator: " · ")
+                                                    )
                                                     .font(.caption)
                                                     .foregroundColor(Theme.textMuted)
+                                                }
+                                                Spacer()
+                                                Image(systemName: "arrow.up.right")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(Theme.textMuted)
                                             }
-                                            Spacer()
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 10)
+                                            .contentShape(Rectangle())
                                         }
+                                        .buttonStyle(DesktopNavigationButtonStyle())
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
                         }
                     }
                 }
-            }
-            Section {
-                Button("归档") {
-                    Task { await onDelete() }
+                HStack {
+                    Spacer()
+                    Button("归档") {
+                        Task { await onDelete() }
+                    }
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    .foregroundColor(Theme.danger)
+                    .disabled(busy)
                 }
-                .foregroundColor(Theme.danger)
-                .disabled(busy)
             }
+            .font(.system(size: 13))
+            .foregroundColor(Theme.textPrimary)
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(32)
+            .frame(maxWidth: .infinity)
+            .wandMotion(value: attributesExpanded, layout: true)
         }
-        .padding(8)
+        .background(Theme.workspaceBackground)
         .onChange(of: task.id) { _ in
             title = task.title
             description = task.description
@@ -505,6 +639,9 @@ private struct TaskBoardCreateView: View {
     @State private var priority = "none"
     @State private var workspaceId = ""
     @State private var agent: WandBoardTaskAgent
+    @State private var creating = false
+    @State private var optionsExpanded = false
+    @FocusState private var focusedField: String?
 
     init(
         workspaces: [Workspace],
@@ -527,81 +664,171 @@ private struct TaskBoardCreateView: View {
     private var dispatches: Bool { wandBoardCreateDispatches(status: status) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 0) {
             HStack {
-                Text("新建任务").font(.headline)
+                Text("新建任务")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .windowDrag()
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    TaskBoardFormSection(title: "任务内容") {
+                        TextField("任务标题（可选）", text: $title, prompt: Text("不填写则按描述自动生成"))
+                            .textFieldStyle(.plain)
+                            .focused($focusedField, equals: "title")
+                            .padding(12)
+                            .wandInputSurface(focused: focusedField == "title", cornerRadius: Theme.Radius.control)
+                        Text(dispatches ? "描述将作为首次指派的任务内容" : "描述（只创建任务）")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
+                        TextEditor(text: $description)
+                            .font(.system(size: 13))
+                            .lineSpacing(4)
+                            .focused($focusedField, equals: "description")
+                            .modifier(TaskBoardListSurface(embedded: true))
+                            .padding(10)
+                            .frame(height: 132)
+                            .wandInputSurface(
+                                focused: focusedField == "description", cornerRadius: Theme.Radius.control
+                            )
+                            .accessibilityLabel("任务描述")
+                    }
+                    Picker("目录", selection: $workspaceId) {
+                        Text("不指定目录（使用全局目录）").tag("")
+                        ForEach(workspaces) { workspace in
+                            Text(workspace.name).tag(workspace.id)
+                        }
+                    }
+                    if dispatches {
+                        Picker(
+                            "第一次指派",
+                            selection: Binding(
+                                get: { agent.provider },
+                                set: { provider in
+                                    agent.provider = provider
+                                    let options = wandBoardModelOptions(from: catalog, provider: provider)
+                                    if !options.contains(where: { $0.id == agent.model }) {
+                                        agent.model = options.first?.id ?? "default"
+                                    }
+                                }
+                            )
+                        ) {
+                            ForEach(wandBoardProviders, id: \.self) { provider in
+                                Text(wandBoardProviderLabel(provider)).tag(provider)
+                            }
+                        }
+                        Picker(
+                            "模型",
+                            selection: Binding(
+                                get: { agent.model },
+                                set: { agent.model = $0 }
+                            )
+                        ) {
+                            ForEach(wandBoardModelOptions(from: catalog, provider: agent.provider), id: \.id) {
+                                option in
+                                Text(option.label).tag(option.id)
+                            }
+                        }
+                        Picker(
+                            "思考深度",
+                            selection: Binding(
+                                get: { agent.thinkingEffort },
+                                set: { agent.thinkingEffort = $0 }
+                            )
+                        ) {
+                            ForEach(wandBoardEfforts, id: \.self) { effort in
+                                Text(wandBoardEffortLabel(effort)).tag(effort)
+                            }
+                        }
+                    }
+                    DisclosureGroup("状态与优先级", isExpanded: $optionsExpanded) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Picker("状态", selection: $status) {
+                                ForEach(WandBoardStatus.allCases) { item in
+                                    Text(item.label).tag(item.rawValue)
+                                }
+                            }
+                            Picker("优先级", selection: $priority) {
+                                ForEach(WandBoardPriority.allCases) { item in
+                                    Text(item.label).tag(item.rawValue)
+                                }
+                            }
+                        }
+                        .padding(.top, 12)
+                    }
+                }
+                .font(.system(size: 13))
+                .foregroundColor(Theme.textPrimary)
+                .padding(24)
+                .disabled(creating)
+                .wandMotion(value: optionsExpanded, layout: true)
+                .wandMotion(value: dispatches, layout: true)
+            }
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+            HStack(spacing: 8) {
                 Spacer()
                 Button("取消") { dismiss() }
-                Button(dispatches && !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "创建并指派" : "创建任务") {
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    .disabled(creating)
+                Button {
+                    guard !creating else { return }
+                    creating = true
                     Task {
                         await onCreate(
                             title.trimmingCharacters(in: .whitespacesAndNewlines),
-                            description,
-                            status,
-                            priority,
-                            workspaceId.isEmpty ? nil : workspaceId,
-                            agent
+                            description, status, priority,
+                            workspaceId.isEmpty ? nil : workspaceId, agent
                         )
+                        creating = false
                     }
+                } label: {
+                    Text(
+                        creating
+                            ? "创建中…"
+                            : (dispatches && !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "创建并指派" : "创建任务")
+                    )
+                    .frame(minWidth: 88)
                 }
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    && description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .buttonStyle(WandPrimaryButtonStyle())
+                .disabled(
+                    creating
+                        || (title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                )
             }
-            TextField("任务标题（可选）", text: $title, prompt: Text("不填写则按描述自动生成"))
-            TextField(dispatches ? "描述（作为第一次指派）" : "描述（只创建任务）", text: $description)
-            Picker("目录", selection: $workspaceId) {
-                Text("不指定目录（使用全局目录）").tag("")
-                ForEach(workspaces) { workspace in
-                    Text(workspace.name).tag(workspace.id)
-                }
-            }
-            if dispatches {
-                Picker("第一次指派", selection: Binding(
-                    get: { agent.provider },
-                    set: { provider in
-                        agent.provider = provider
-                        let options = wandBoardModelOptions(from: catalog, provider: provider)
-                        if !options.contains(where: { $0.id == agent.model }) {
-                            agent.model = options.first?.id ?? "default"
-                        }
-                    }
-                )) {
-                    ForEach(wandBoardProviders, id: \.self) { provider in
-                        Text(wandBoardProviderLabel(provider)).tag(provider)
-                    }
-                }
-                Picker("模型", selection: Binding(
-                    get: { agent.model },
-                    set: { agent.model = $0 }
-                )) {
-                    ForEach(wandBoardModelOptions(from: catalog, provider: agent.provider), id: \.id) { option in
-                        Text(option.label).tag(option.id)
-                    }
-                }
-                Picker("思考深度", selection: Binding(
-                    get: { agent.thinkingEffort },
-                    set: { agent.thinkingEffort = $0 }
-                )) {
-                    ForEach(wandBoardEfforts, id: \.self) { effort in
-                        Text(wandBoardEffortLabel(effort)).tag(effort)
-                    }
-                }
-            }
-            Picker("状态", selection: $status) {
-                ForEach(WandBoardStatus.allCases) { item in
-                    Text(item.label).tag(item.rawValue)
-                }
-            }
-            Picker("优先级", selection: $priority) {
-                ForEach(WandBoardPriority.allCases) { item in
-                    Text(item.label).tag(item.rawValue)
-                }
-            }
-            Spacer()
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
-        .padding(20)
-        .frame(minWidth: 420, minHeight: 420)
+        .frame(width: 560)
+        .frame(minHeight: 460, idealHeight: 540, maxHeight: 580)
+        .background(Theme.workspaceBackground)
+        .hideNativeTitleBar()
         .onAppear { workspaceId = defaultWorkspaceId }
+    }
+}
+
+private struct TaskBoardFormSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textSecondary)
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

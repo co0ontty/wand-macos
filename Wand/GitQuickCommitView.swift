@@ -1,9 +1,6 @@
 import SwiftUI
 
-/// 快速提交面板：交互对齐 Web 端 quick-commit 的「磁吸 dock」。
-/// Commit / Tag / Push（+ 可选 Sub）四颗气泡散落在力场里，抓任意一颗拖动，
-/// 途经其他气泡会被磁吸进队伍；丢进右侧发射区执行组合动作（commit 永远隐含），
-/// 松手在别处则全员弹回原位；单击气泡直接执行该气泡自己的动作。
+/// 快速提交面板：常用操作保持线性，额外的组合操作收在菜单和可选磁吸 dock 中。
 ///
 /// message 留空 → 服务端 AI 根据 staged diff 生成；tag 留空且带 Tag 动作 → AI 推荐
 /// 版本号；「AI」按钮可预生成两者填进表单。提交未推送时结果面板提供 Push & Close。
@@ -78,9 +75,9 @@ struct GitQuickCommitView: View {
     var body: some View {
         VStack(spacing: 0) {
             sheetHeader
-            Divider().opacity(0.35)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 20) {
                     headerSubtitle
                     statusFilesSection
                     if outcome != nil {
@@ -107,7 +104,7 @@ struct GitQuickCommitView: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                 Text("检查改动，确认提交信息与后续操作")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer()
@@ -117,12 +114,11 @@ struct GitQuickCommitView: View {
                     .accessibilityLabel(committing ? "正在提交" : "正在推送")
             }
             Button(outcome == nil ? "取消" : "完成") { dismiss() }
-                .buttonStyle(.bordered)
-                .tint(outcome == nil ? Theme.textSecondary : Theme.brand)
+                .buttonStyle(WandSecondaryButtonStyle())
                 .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
         .wandGlass(.chrome)
     }
 
@@ -137,9 +133,16 @@ struct GitQuickCommitView: View {
                     .foregroundColor(Theme.textSecondary)
             }
         } else if let statusError {
-            Text(statusError)
-                .font(.footnote)
-                .foregroundColor(Theme.danger)
+            HStack(spacing: 12) {
+                Text(statusError)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("重试") { Task { await loadStatus(force: true) } }
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    .disabled(statusLoading)
+            }
         } else if let s = status, !s.isGit {
             Text("当前会话目录不是 git 仓库")
                 .font(.system(size: 13))
@@ -155,11 +158,11 @@ struct GitQuickCommitView: View {
                         HStack(spacing: 8) {
                             Text(file.shortStatus)
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundColor(.white)
+                                .foregroundColor(file.shortStatus == "?" ? Theme.textSecondary : Theme.brand)
                                 .frame(width: 18, height: 18)
                                 .background(
                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(file.shortStatus == "?" ? Theme.textSecondary : Theme.brand)
+                                        .fill((file.shortStatus == "?" ? Theme.textSecondary : Theme.brand).opacity(0.10))
                                 )
                             Text(file.path)
                                 .font(.system(size: 12, design: .monospaced))
@@ -210,10 +213,9 @@ struct GitQuickCommitView: View {
                     Text(generating ? "生成中…" : "AI 生成")
                 }
                 .font(.system(size: 12, weight: .medium))
+                .frame(minWidth: 84)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .foregroundColor(Theme.textSecondary)
+            .buttonStyle(WandSecondaryButtonStyle())
             .disabled(generating || committing || !hasChanges)
         }
 
@@ -231,7 +233,7 @@ struct GitQuickCommitView: View {
                 .padding(.horizontal, 12)
                 .frame(minHeight: 44)
                 .focused($focusedInput, equals: .message)
-                .wandInputSurface(focused: focusedInput == .message)
+                .wandInputSurface(focused: focusedInput == .message, cornerRadius: Theme.Radius.control)
                 .disabled(committing)
         }
 
@@ -241,7 +243,7 @@ struct GitQuickCommitView: View {
             Text("新 Tag（可选）")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
-            TextField("留空则 AI 生成（拖入 Tag 球时生效）", text: $tagName)
+            TextField("选择含 Tag 的提交方式时生效；留空自动生成", text: $tagName)
                 .font(.system(size: 14, design: .monospaced))
                 .textFieldStyle(.plain)
                 .foregroundColor(Theme.textPrimary)
@@ -249,7 +251,7 @@ struct GitQuickCommitView: View {
                 .padding(.horizontal, 12)
                 .frame(minHeight: 44)
                 .focused($focusedInput, equals: .tag)
-                .wandInputSurface(focused: focusedInput == .tag)
+                .wandInputSurface(focused: focusedInput == .tag, cornerRadius: Theme.Radius.control)
                 .disabled(committing)
                 .onChange(of: tagName) { _ in tagEdited = true }
         }
@@ -271,8 +273,7 @@ struct GitQuickCommitView: View {
             }
             .padding(.horizontal, 16)
             .frame(height: 64)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Theme.surface))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.lg).fill(Theme.surface))
         } else {
             standardCommitActions
 
@@ -294,6 +295,7 @@ struct GitQuickCommitView: View {
                     .foregroundColor(Theme.textSecondary)
             }
             .tint(Theme.textSecondary)
+            .wandMotion(value: showMagneticComposer, layout: true)
         }
 
         // 工作区干净但本地领先远端：dock 无事可做，给一个「仅推送」直达按钮。
@@ -305,10 +307,8 @@ struct GitQuickCommitView: View {
                         .font(.system(size: 13, weight: .medium))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 12).stroke(Theme.brand.opacity(0.5), lineWidth: 1))
             }
-            .foregroundColor(Theme.brand)
+            .buttonStyle(WandPrimaryButtonStyle())
             .disabled(pushing)
             if let pushError {
                 Text(pushError).font(.footnote).foregroundColor(Theme.danger)
@@ -328,8 +328,7 @@ struct GitQuickCommitView: View {
                 Label("提交", systemImage: "arrow.up.circle.fill")
                     .frame(minWidth: 92)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.brand)
+            .buttonStyle(WandPrimaryButtonStyle())
             .disabled(!hasChanges || committing)
 
             Menu {
@@ -362,15 +361,7 @@ struct GitQuickCommitView: View {
                 .font(.system(size: 11))
                 .foregroundColor(Theme.textMuted)
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Theme.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Theme.border, lineWidth: 0.75)
-                )
-        )
+        .padding(.vertical, 4)
     }
 
     private var oldCommitLine: String {
@@ -408,9 +399,10 @@ struct GitQuickCommitView: View {
                     .foregroundColor(Theme.textSecondary)
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.surface))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.border, lineWidth: 0.75))
+        .padding(.bottom, 16)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+        }
     }
 
     /// 拼接非空片段；全空时回退占位文案。
@@ -471,8 +463,7 @@ struct GitQuickCommitView: View {
                 }
                 HStack {
                     Button("关闭") { dismiss() }
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.textSecondary)
+                        .buttonStyle(WandSecondaryButtonStyle())
                     Spacer()
                     if r.pushed {
                         Label("已推送", systemImage: "icloud.and.arrow.up")
@@ -482,14 +473,12 @@ struct GitQuickCommitView: View {
                         Button(action: pushAfterCommit) {
                             HStack(spacing: 6) {
                                 if pushing { ProgressView().controlSize(.small).tint(.white) }
-                                Text(pushing ? "推送中…" : "Push & Close")
+                                Text(pushing ? "推送中…" : "推送并关闭")
                                     .font(.system(size: 13, weight: .semibold))
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(Theme.brand))
-                            .foregroundColor(.white)
+                            .frame(minWidth: 98)
                         }
+                        .buttonStyle(WandPrimaryButtonStyle())
                         .disabled(pushing)
                     }
                 }
@@ -699,9 +688,9 @@ private struct MagneticDockView: View {
 
     private static let chipColors: [String: Color] = [
         "commit": Theme.brand,
-        "tag": Color(red: 0.290, green: 0.435, blue: 0.647),   // #4A6FA5
-        "push": Color(red: 0.310, green: 0.478, blue: 0.345),  // #4F7A58
-        "sub": Color(red: 0.227, green: 0.541, blue: 0.561),   // #3A8A8F
+        "tag": Theme.info,
+        "push": Theme.success,
+        "sub": Theme.textSecondary,
     ]
     private static let chipLabels: [String: String] = [
         "commit": "Commit", "tag": "Tag", "push": "Push", "sub": "Sub",
@@ -743,9 +732,9 @@ private struct MagneticDockView: View {
         ZStack(alignment: .topLeading) {
             // 队伍光环（多球抱团时的描边框）
             if let box = clusterBox {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: Theme.Radius.lg)
                     .fill(launchTone.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(launchTone.opacity(0.4), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg).stroke(launchTone.opacity(0.4), lineWidth: 1))
                     .frame(width: box.width, height: box.height)
                     .offset(x: box.minX, y: box.minY)
             }
@@ -755,9 +744,9 @@ private struct MagneticDockView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
                 .fill(Theme.surface)
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg).stroke(Theme.border, lineWidth: 1))
         )
         .coordinateSpace(name: "qcdock")
         .background(
@@ -820,14 +809,14 @@ private struct MagneticDockView: View {
         .frame(width: 76)
         .frame(maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
                 .fill(hot ? launchTone.opacity(0.14) : Theme.surface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14)
+                    RoundedRectangle(cornerRadius: Theme.Radius.lg)
                         .stroke(launchTone.opacity(hot ? 0.85 : 0.3), lineWidth: 1.5)
                 )
         )
-        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
         .onTapGesture {
             if hasChanges && dragAnchor == nil { onAction("commit", false) }
         }
@@ -870,7 +859,7 @@ private struct MagneticDockView: View {
         let homes = homePositions()
         guard !homes.isEmpty, allIds.allSatisfy({ chipSizes[$0] != nil }) else { return }
         if animated && !reduceMotion {
-            withAnimation(.spring(response: 0.24, dampingFraction: 1)) { chipPos = homes }
+            withAnimation(Theme.Motion.structure) { chipPos = homes }
         } else {
             chipPos = homes
         }

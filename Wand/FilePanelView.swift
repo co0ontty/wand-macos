@@ -85,8 +85,11 @@ struct EmptyTabState: View {
                 .font(.system(size: 12))
                 .foregroundColor(Theme.textSecondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 220)
             Spacer()
         }
+        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
     }
@@ -137,7 +140,7 @@ struct SessionGitStatusView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().opacity(0.3)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             content
         }
         .background(Theme.background)
@@ -169,8 +172,10 @@ struct SessionGitStatusView: View {
                     Label("快捷提交", systemImage: "arrow.up.circle")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(Theme.wandAccent)
+                        .padding(.horizontal, 6)
+                        .frame(height: 30)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
             }
             Button {
                 Task { await gitStatusStore.refresh(sessionId: sessionId, api: api) }
@@ -178,10 +183,11 @@ struct SessionGitStatusView: View {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(Theme.textSecondary)
-                    .padding(4)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WandIconButtonStyle())
+            .disabled(loading)
+            .help(loading ? "正在刷新 Git 状态" : "刷新 Git 状态")
+            .accessibilityLabel("刷新 Git 状态")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -196,15 +202,24 @@ struct SessionGitStatusView: View {
                 Spacer()
             }
         } else if let loadError {
-            VStack(spacing: 6) {
+            VStack(spacing: 10) {
                 Spacer()
                 Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 24))
                     .foregroundColor(Theme.warning)
                 Text(loadError)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("重试") {
+                    Task { await gitStatusStore.refresh(sessionId: sessionId, api: api) }
+                }
+                .buttonStyle(WandSecondaryButtonStyle())
+                .disabled(loading)
                 Spacer()
             }
+            .padding(20)
         } else if let s = status {
             VStack(alignment: .leading, spacing: 0) {
                 if let branch = s.branch {
@@ -241,7 +256,7 @@ struct SessionGitStatusView: View {
 
     @ViewBuilder
     private func countsList(_ c: Counts) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             countRow(symbol: "plus.circle.fill", color: Theme.success, label: "新增", count: c.added)
             countRow(symbol: "pencil.circle.fill", color: Theme.warning, label: "修改", count: c.modified)
             countRow(symbol: "minus.circle.fill", color: Theme.danger, label: "删除", count: c.deleted)
@@ -284,11 +299,11 @@ struct SessionDetailsView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            Divider().opacity(0.3)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 14) {
                     detailRow("会话 ID", session.id, mono: true)
-                    detailRow("Provider", session.providerLabel)
+                    detailRow("工具", session.providerLabel)
                     detailRow("模式", session.mode ?? "—")
                     detailRow("类型", session.isStructured ? "结构化" : "PTY")
                     if let cwd = session.cwd {
@@ -305,7 +320,7 @@ struct SessionDetailsView: View {
                         detailRow("开始时间", started, mono: true)
                     }
                 }
-                .padding(12)
+                .padding(14)
             }
         }
         .background(Theme.background)
@@ -314,14 +329,14 @@ struct SessionDetailsView: View {
     private func detailRow(_ label: String, _ value: String, mono: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(label)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
                 .frame(width: 72, alignment: .leading)
             Text(value)
-                .font(.system(size: 11, design: mono ? .monospaced : .default))
+                .font(.system(size: 12, design: mono ? .monospaced : .default))
                 .foregroundColor(Theme.textPrimary)
-                .lineLimit(2)
-                .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             Spacer()
         }
     }

@@ -19,7 +19,6 @@ private enum ChatLayoutMetrics {
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
 /// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
-    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let sessionId: String
@@ -78,11 +77,11 @@ struct ChatView: View {
                             .textSelection(.enabled)
                         HStack(spacing: 10) {
                             Button("重新加载") { store.retryLoad() }
-                                .buttonStyle(.borderedProminent).tint(Theme.brand)
+                                .buttonStyle(WandPrimaryButtonStyle())
                             Button { showTroubleshooting = true } label: {
                                 Label("故障排查", systemImage: "stethoscope")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(WandSecondaryButtonStyle())
                         }
                     }
                     .padding(32)
@@ -194,12 +193,12 @@ struct ChatView: View {
                         messageItemView(item, proxy: proxy)
                             .padding(4)
                             .background(
-                                RoundedRectangle(cornerRadius: 10)
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
                                     .fill(selectedFindResult == absoluteIndex && showingFind
                                         ? Theme.brand.opacity(0.08) : .clear)
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 10)
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
                                     .stroke(selectedFindResult == absoluteIndex && showingFind
                                         ? Theme.brand.opacity(0.65) : .clear, lineWidth: 1)
                             )
@@ -377,12 +376,10 @@ struct ChatView: View {
         } label: {
             Image(systemName: "arrow.down")
                 .font(.system(size: 15, weight: .bold))
-                .foregroundColor(.white)
                 .frame(width: 42, height: 42)
-                .background(Circle().fill(Theme.brand))
-                .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
-                .shadow(color: Color.black.opacity(0.22), radius: 8, y: 3)
         }
+        .buttonStyle(WandSendButtonStyle())
+        .shadow(color: Color.black.opacity(0.10), radius: 8, y: 3)
         .accessibilityLabel("回到最新消息并继续跟随")
         .padding(.trailing, 16)
         .padding(.bottom, 12)
@@ -445,7 +442,7 @@ struct ChatView: View {
     /// 常停在半中间——立即滚一次，再按递增延迟补几次，直到布局稳定。
     private func pinToBottom(_ proxy: ScrollViewProxy, animated: Bool = false) {
         if animated && !reduceMotion {
-            withAnimation(.easeOut(duration: 0.22)) {
+            withAnimation(Theme.Motion.structure) {
                 proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
         } else {
@@ -535,10 +532,11 @@ struct ChatView: View {
                         .foregroundColor(Theme.brand)
                 }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
-            .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DesktopNavigationButtonStyle(active: selected))
     }
 
     private var thinkingLevels: [ThinkingEffortOption] {
@@ -601,8 +599,6 @@ struct ChatView: View {
     private var inputBar: some View {
         // macOS 有稳定的桌面空间：输入区始终保持“正文 + 工具栏”两层，
         // 鼠标或键盘聚焦只改变描边颜色，不再触发布局放大/缩小。
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .bottom, spacing: ComposerMetrics.actionSpacing) {
                 composerInputContent
@@ -624,13 +620,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(shape.fill(Theme.surface))
-        .overlay(
-            shape.stroke(
-                inputFocused ? Theme.wandAccent.opacity(contrast == .increased ? 1 : 0.62) : Theme.border,
-                lineWidth: contrast == .increased ? 2 : (inputFocused ? 1.2 : 0.75)
-            )
-        )
+        .wandInputSurface(focused: inputFocused, cornerRadius: Theme.Radius.lg)
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
@@ -677,7 +667,7 @@ struct ChatView: View {
             Button(action: { showStopConfirm = true }) {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.workspaceBackground)
                     .frame(
                         width: ComposerMetrics.actionVisualSize,
                         height: ComposerMetrics.actionVisualSize
@@ -691,17 +681,13 @@ struct ChatView: View {
         Button(action: sendDraft) {
             Image(systemName: "arrow.up")
                 .font(.system(size: 16, weight: .bold))
-                .foregroundColor(canSend ? Theme.surface : Theme.textSecondary.opacity(0.55))
                 .frame(
                     width: ComposerMetrics.actionVisualSize,
                     height: ComposerMetrics.actionVisualSize
                 )
-                .background(
-                    Circle().fill(canSend ? Theme.textPrimary : Theme.textSecondary.opacity(0.16))
-                )
         }
         .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
-        .buttonStyle(.plain)
+        .buttonStyle(WandSendButtonStyle())
         .disabled(!canSend)
         .accessibilityLabel(store.isResponding ? "加入发送队列" : "发送消息")
         .help(store.isResponding ? "在当前回复完成后发送" : (sendWithCommandEnter ? "发送消息（⌘ Return）" : "发送消息（Return）"))
@@ -729,7 +715,7 @@ struct ChatView: View {
             .frame(minHeight: ComposerMetrics.actionTouchSize)
         }
         .accessibilityLabel("模型与思考深度")
-        .buttonStyle(.plain)
+        .buttonStyle(DesktopNavigationButtonStyle())
         .popover(isPresented: $showModelThinkingPanel, arrowEdge: .bottom) {
             modelThinkingPanel
         }
@@ -765,8 +751,8 @@ struct ChatView: View {
 
     private var thinkingTint: Color {
         switch store.thinkingEffort {
-        case "standard": return .green
-        case "deep": return .orange
+        case "standard": return Theme.success
+        case "deep": return Theme.warning
         case "max": return Theme.danger
         default: return Theme.brand
         }
@@ -811,17 +797,14 @@ struct ChatView: View {
             Text("模型")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(Theme.textSecondary)
-            TextField("搜索模型", text: $modelQuery)
-                .textFieldStyle(.roundedBorder)
+            SessionModelSearchField(query: $modelQuery)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if defaultModelMatchesQuery {
                         modelButton(id: nil, label: "默认")
-                            .buttonStyle(.plain)
                     }
                     ForEach(filteredPanelModels) { model in
                         modelButton(id: model.id, label: model.label)
-                            .buttonStyle(.plain)
                     }
                     if !defaultModelMatchesQuery && filteredPanelModels.isEmpty {
                         Text("没有匹配的模型")
@@ -843,6 +826,7 @@ struct ChatView: View {
         }
         .padding(14)
         .frame(width: 300)
+        .background(Theme.workspaceBackground)
     }
 
     private var gitChangesButton: some View {
@@ -855,7 +839,7 @@ struct ChatView: View {
                 Text("-\(gitChangeCounts.deleted)")
                     .foregroundColor(Theme.danger)
                 Text("+\(gitChangeCounts.added)")
-                    .foregroundColor(.green)
+                    .foregroundColor(Theme.success)
             }
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .foregroundColor(Theme.textSecondary)
@@ -2140,9 +2124,9 @@ private struct PendingAttachmentsPreview: View {
             if isImageAttachment(file) {
                 ComposerAttachmentImage(baseURL: baseURL, path: file.savedPath)
                     .frame(width: 96, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .stroke(Theme.border, lineWidth: 1)
                     )
                     .accessibilityLabel("图片附件 \(attachmentDisplayName(file))")
@@ -2166,11 +2150,11 @@ private struct PendingAttachmentsPreview: View {
                 .padding(.vertical, 8)
                 .frame(maxWidth: 210, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(Theme.surface.opacity(0.72))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .stroke(Theme.border, lineWidth: 1)
                 )
             }
@@ -2931,11 +2915,12 @@ private struct AssistantReplyHeader: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(Theme.textSecondary)
                         .rotationEffect(.degrees(collapsed ? 0 : 180))
+                        .wandMotion(value: collapsed)
                 }
                 .padding(.vertical, 3)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DesktopNavigationButtonStyle())
             Rectangle()
                 .fill(Theme.border.opacity(0.65))
                 .frame(height: 0.5)
@@ -2958,45 +2943,6 @@ private func replyPreview(_ content: [ContentBlock]) -> String {
         return total
     }
     return toolCount > 0 ? "\(toolCount) 个工具调用" : ""
-}
-
-private struct ActivityTextShimmer: View {
-    let text: String
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        let base = Text(text)
-            .font(.system(size: 11, design: .monospaced))
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        if reduceMotion {
-            base.foregroundColor(Theme.textSecondary)
-        } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
-                let t = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2
-                base
-                    .foregroundColor(Theme.textMuted)
-                    .overlay {
-                        base
-                            .foregroundColor(Theme.brand)
-                            .mask {
-                                GeometryReader { geo in
-                                    let width = max(geo.size.width, 1)
-                                    let band = max(width * 0.28, 28)
-                                    let x = CGFloat(t) * (width + band) - band
-                                    LinearGradient(
-                                        colors: [.clear, .white, .clear],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                    .frame(width: band)
-                                    .offset(x: x)
-                                }
-                            }
-                    }
-            }
-        }
-    }
 }
 
 private struct ActivityFoldCompactKey: EnvironmentKey {
@@ -3045,16 +2991,21 @@ private struct ActivityFoldCard<Content: View>: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(Theme.textMuted)
                             .rotationEffect(.degrees(expanded ? 180 : 0))
+                            .wandMotion(value: expanded)
                     }
                     if group.running {
-                        ActivityTextShimmer(text: group.latest)
+                        Text(group.latest)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(.horizontal, 2)
                 .padding(.vertical, 4)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DesktopNavigationButtonStyle())
             .help(expanded ? "收起活动" : "展开活动")
 
             if expanded {
@@ -3166,15 +3117,14 @@ private struct SubagentRoleWindow<Content: View>: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .fill(Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Theme.codex.opacity(0.28), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.75)
         )
-        .shadow(color: Color.black.opacity(0.04), radius: 8, y: 2)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title)，\(subtitle)")
@@ -3335,11 +3285,11 @@ private struct TurnView: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                                 .fill(Theme.surface)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                                 .stroke(Theme.border, lineWidth: 0.75)
                         )
                         .textSelection(.enabled)
@@ -3355,9 +3305,9 @@ private struct TurnView: View {
                 if let baseURL, isImageAttachmentPath(path) {
                     ComposerAttachmentImage(baseURL: baseURL, path: path, fill: false)
                         .frame(maxWidth: 240, maxHeight: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                                 .stroke(Theme.border, lineWidth: 1)
                         )
                         .accessibilityLabel("图片附件 \((path as NSString).lastPathComponent)")
@@ -3374,11 +3324,11 @@ private struct TurnView: View {
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
                     .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                             .fill(Theme.surface)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                             .stroke(Theme.border, lineWidth: 0.75)
                     )
                     .accessibilityLabel("文件附件 \((path as NSString).lastPathComponent)")
@@ -3736,8 +3686,8 @@ private struct MarkdownText: View {
                         .padding(.vertical, 8)
                 }
             }
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.surface))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.surface))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).stroke(Theme.border, lineWidth: 1))
         case .table(let headers, let rows):
             markdownTable(headers: headers, rows: rows)
         case .divider:
@@ -3755,10 +3705,10 @@ private struct MarkdownText: View {
                 }
             }
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                     .stroke(Theme.border, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         }
     }
 
@@ -4004,7 +3954,7 @@ private struct ExplorationGroupCard: View {
             } label: {
                 HStack(spacing: 11) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .fill(tint.opacity(0.11))
                         if running {
                             ProgressView()
@@ -4082,15 +4032,14 @@ private struct ExplorationGroupCard: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .fill(Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(tint.opacity(failedCount > 0 ? 0.42 : 0.16), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(failedCount > 0 ? Theme.danger.opacity(0.42) : Theme.border, lineWidth: 0.75)
         )
-        .shadow(color: Color.black.opacity(0.035), radius: 7, y: 2)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
     }
 
     private var activitySummary: String {
@@ -4177,15 +4126,14 @@ private struct ToolUseCard: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .fill(Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(statusColor.opacity(isError ? 0.42 : 0.16), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(isError ? Theme.danger.opacity(0.42) : Theme.border, lineWidth: 0.75)
         )
-        .shadow(color: Color.black.opacity(0.035), radius: 7, y: 2)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
     }
 
     private var header: some View {
@@ -4196,7 +4144,7 @@ private struct ToolUseCard: View {
             HStack(spacing: 11) {
                 if running {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .fill(statusColor.opacity(0.12))
                         ProgressView()
                             .controlSize(.small)
@@ -4205,7 +4153,7 @@ private struct ToolUseCard: View {
                     .frame(width: 34, height: 34)
                 } else {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .fill(statusColor.opacity(isSuccess ? 0.10 : 0.12))
                         Image(systemName: iconName)
                             .font(.system(size: 14, weight: .semibold))
@@ -4291,7 +4239,7 @@ private struct ToolResultBody: View {
                     .padding(10)
             }
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                     .fill(Theme.background.opacity(0.6))
             )
             if result.truncated {
@@ -4331,11 +4279,11 @@ private struct CollapsibleSection<Content: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .fill(Theme.surface)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .stroke(Theme.border, lineWidth: 1)
                     )
             }
@@ -4355,7 +4303,7 @@ private struct PermissionCard: View {
             HStack(spacing: 8) {
                 Image(systemName: "lock.shield")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.orange)
+                    .foregroundColor(Theme.warning)
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
@@ -4400,12 +4348,12 @@ private struct PermissionCard: View {
         }
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .fill(Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.orange.opacity(0.55), lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.warning.opacity(0.55), lineWidth: 1)
         )
     }
 
@@ -4426,7 +4374,7 @@ private struct PermissionCard: View {
 
 // MARK: - 共享语义色（Web 端 --success 同款 #4F7A58）
 
-private let chatSuccess = Color(red: 0.310, green: 0.478, blue: 0.345)
+private let chatSuccess = Theme.success
 
 // MARK: - AskUserQuestion 交互卡片（对齐 Web 端 ask-user 卡）
 
@@ -4472,14 +4420,14 @@ private struct AskUserQuestionCard: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .fill(Theme.brand.opacity(0.05))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .stroke(isAnswered ? chatSuccess.opacity(0.55) : Theme.brand.opacity(0.35), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         .onAppear { expanded = !isAnswered }
         .onChange(of: isAnswered) { answered in
             // 回答送达后自动折叠（对齐 Web 已答默认折叠）。
@@ -4576,11 +4524,11 @@ private struct AskUserQuestionCard: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                     .fill(optionFill(chosen: chosen))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                     .stroke(optionBorder(chosen: chosen), lineWidth: chosen ? 1.5 : 1)
             )
             .opacity(isAnswered && !chosen ? 0.55 : 1)
@@ -4616,13 +4564,13 @@ private struct AskUserQuestionCard: View {
                 if chosen {
                     Image(systemName: "checkmark")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.workspaceBackground)
                 }
             } else {
                 Circle().fill(chosen ? tint : Color.clear)
                 Circle().stroke(chosen ? tint : Theme.border, lineWidth: 2)
                 if chosen {
-                    Circle().fill(Color.white).frame(width: 6, height: 6)
+                    Circle().fill(Theme.workspaceBackground).frame(width: 6, height: 6)
                 }
             }
         }
@@ -4643,16 +4591,9 @@ private struct AskUserQuestionCard: View {
                 onSubmit(lines.joined(separator: "\n"))
             } label: {
                 Text(selection.submitted ? "已提交…" : "确认提交")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill((allAnswered && !selection.submitted) ? Theme.brand : Theme.brand.opacity(0.4))
-                    )
+                    .frame(minWidth: 68)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(WandPrimaryButtonStyle())
             .disabled(!allAnswered || selection.submitted)
         }
     }
@@ -4717,14 +4658,14 @@ private struct DiffCard: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .fill(Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .stroke(Theme.border, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         .onAppear {
             // 默认展开态对齐 Web：执行中展开，已完成折叠。只在首次出现时定初值。
             if !initialized {
@@ -4841,12 +4782,12 @@ private struct TerminalCard: View {
                 .padding(.bottom, 10)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(termBg))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).fill(termBg))
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 
     private var header: some View {
@@ -4940,12 +4881,11 @@ struct TodoProgressBar: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .fill(Theme.surface)
-                .shadow(color: Color.black.opacity(0.08), radius: 6, y: 2)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .stroke(Theme.border, lineWidth: 1)
         )
     }
@@ -5043,11 +4983,11 @@ private struct QueueBar: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .fill(Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
                 .stroke(Theme.border, lineWidth: 1)
         )
     }
@@ -5091,7 +5031,7 @@ private struct QueueItemRow: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                 .fill(Theme.background.opacity(0.55))
         )
     }
@@ -5102,18 +5042,39 @@ private struct PermissionButtonStyle: ButtonStyle {
     let kind: Kind
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundColor(kind == .primary ? .white : (kind == .destructive ? Theme.danger : Theme.textPrimary))
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(kind == .primary ? Theme.brand : Theme.background)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(kind == .primary ? Color.clear : Theme.border, lineWidth: 1)
-            )
-            .opacity(configuration.isPressed ? 0.7 : 1)
+        PermissionButtonBody(configuration: configuration, kind: kind)
+    }
+
+    private struct PermissionButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        let kind: Kind
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(kind == .primary ? .white : (kind == .destructive ? Theme.danger : Theme.textPrimary))
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(kind == .primary
+                              ? (isEnabled && hovering ? Theme.accentSolidHover : Theme.accentSolid)
+                              : Theme.surfaceElevated)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(Theme.textPrimary.opacity(kind != .primary && isEnabled && hovering ? 0.045 : 0))
+                        .allowsHitTesting(false)
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .stroke(kind == .primary ? Color.clear : Theme.border, lineWidth: 1)
+                )
+                .brightness(isEnabled && configuration.isPressed ? -0.06 : 0)
+                .opacity(isEnabled ? 1 : 0.45)
+                .onHover { hovering = $0 }
+                .wandMotion(value: hovering)
+        }
     }
 }

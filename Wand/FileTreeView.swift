@@ -27,6 +27,7 @@ struct FileTreeView: View {
     @State private var searchResults: [FileSearchResult] = []
     @State private var searchLoading = false
     @State private var searchError: String?
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,7 +37,7 @@ struct FileTreeView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            Divider().opacity(0.3)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !trimmedSearchQuery.isEmpty {
@@ -86,6 +87,7 @@ struct FileTreeView: View {
                 .foregroundColor(Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .help(displayPath)
             Spacer()
             Button {
                 Task { await reload() }
@@ -93,11 +95,11 @@ struct FileTreeView: View {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(Theme.textSecondary)
-                    .padding(4)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .help("刷新")
+            .buttonStyle(WandIconButtonStyle())
+            .disabled(loading)
+            .help(loading ? "正在刷新目录" : "刷新目录")
+            .accessibilityLabel("刷新目录")
         }
     }
 
@@ -109,29 +111,34 @@ struct FileTreeView: View {
             TextField("搜索此工作目录", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
-            if searchLoading {
-                ProgressView().controlSize(.small).scaleEffect(0.65)
-            } else if !searchQuery.isEmpty {
+                .focused($searchFocused)
+            HStack(spacing: 2) {
+                ZStack {
+                    if searchLoading {
+                        ProgressView().controlSize(.small).scaleEffect(0.65)
+                            .accessibilityLabel("正在搜索文件")
+                    }
+                }
+                .frame(width: 12, height: 20)
                 Button {
                     searchQuery = ""
+                    searchFocused = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
                         .foregroundColor(Theme.textMuted)
+                        .frame(width: 20, height: 24)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
+                .opacity(searchQuery.isEmpty ? 0 : 1)
+                .disabled(searchQuery.isEmpty)
+                .accessibilityHidden(searchQuery.isEmpty)
                 .accessibilityLabel("清除文件搜索")
             }
         }
         .padding(.horizontal, 9)
-        .frame(height: 30)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Theme.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Theme.border.opacity(0.8), lineWidth: 0.75)
-                )
-        )
+        .frame(height: 32)
+        .wandInputSurface(focused: searchFocused, cornerRadius: Theme.Radius.control)
     }
 
     @ViewBuilder
@@ -205,7 +212,7 @@ struct FileTreeView: View {
             } label: {
                 label
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DesktopNavigationButtonStyle())
             .accessibilityLabel("预览文件 \(result.name)")
         }
     }
@@ -435,7 +442,7 @@ struct FileTreeRow: View {
                 } label: {
                     rowLabel(isExpanded: isExpanded, isLoadingChildren: isLoadingChildren)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
                 .accessibilityLabel("\(item.name)，文件夹")
                 .accessibilityValue(isExpanded ? "已展开" : "已折叠")
                 .accessibilityHint(isExpanded ? "按下以折叠文件夹" : "按下以展开文件夹")
@@ -446,10 +453,10 @@ struct FileTreeRow: View {
                 } label: {
                     rowLabel(isExpanded: false, isLoadingChildren: false)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DesktopNavigationButtonStyle())
                 .accessibilityLabel("\(item.name)，文件")
-                .accessibilityHint("按下以显示文件信息并复制服务器路径；不会打开或下载远端文件")
-                .help("显示文件信息")
+                .accessibilityHint("按下以预览文件内容并复制服务器路径")
+                .help("预览文件")
             }
 
             if isDir, isExpanded, let children = childCache[item.path] {
@@ -471,10 +478,12 @@ struct FileTreeRow: View {
     private func rowLabel(isExpanded: Bool, isLoadingChildren: Bool) -> some View {
         HStack(spacing: 6) {
             if item.isDirectory {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(Theme.textMuted)
                     .frame(width: 10)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .wandMotion(value: isExpanded)
             } else {
                 Spacer().frame(width: 10)
             }
@@ -495,7 +504,7 @@ struct FileTreeRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, CGFloat(depth) * 14 + 12)
         .padding(.trailing, 12)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .contentShape(Rectangle())
     }
 
@@ -560,29 +569,32 @@ private struct FilePreviewSheet: View {
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
+                        .help(file.name)
                     Text(file.path)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(Theme.textMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .help(file.path)
                 }
                 Spacer()
                 Button {
                     copyServerPath()
                 } label: {
                     Label(copied ? "已复制" : "复制路径", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .frame(minWidth: 76)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(WandSecondaryButtonStyle())
                 .accessibilityHint("将服务器上的完整文件路径复制到剪贴板")
                 Button("完成") { dismiss() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(WandSecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
             .wandGlass(.chrome)
 
-            Divider().opacity(0.35)
+            Rectangle().fill(Theme.border).frame(height: 0.5)
 
             previewBody
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -594,7 +606,7 @@ private struct FilePreviewSheet: View {
                     if let lang = preview.lang, !lang.isEmpty { Text(lang) }
                     Spacer()
                 }
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(Theme.textMuted)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -627,7 +639,7 @@ private struct FilePreviewSheet: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 460)
                 Button("重试") { Task { await loadPreview() } }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(WandSecondaryButtonStyle())
             }
             .padding(32)
         } else if let preview {
@@ -641,7 +653,7 @@ private struct FilePreviewSheet: View {
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                         .padding(18)
                 }
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.26))
+                .background(Theme.workspaceBackground)
             case .image:
                 if let rawData, let image = NSImage(data: rawData) {
                     ScrollView([.horizontal, .vertical]) {

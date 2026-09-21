@@ -23,12 +23,19 @@ struct DesktopNavigationButtonStyle: ButtonStyle {
         let active: Bool
         @State private var hovering = false
         @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.colorSchemeContrast) private var contrast
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Theme.textPrimary.opacity(configuration.isPressed ? 0.12 : (active ? 0.07 : (hovering ? 0.045 : 0)))))
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.textPrimary.opacity(isEnabled && configuration.isPressed ? 0.12 : (active ? 0.075 : (isEnabled && hovering ? 0.045 : 0)))))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .stroke(contrast == .increased && active ? Theme.textSecondary : .clear, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
                 .opacity(isEnabled ? 1 : 0.45)
                 .onHover { hovering = $0 }
+                .wandMotion(value: hovering)
         }
     }
 }

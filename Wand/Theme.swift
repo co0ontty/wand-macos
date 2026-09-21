@@ -2,8 +2,8 @@ import SwiftUI
 import AppKit
 
 /// macOS 客户端的视觉 token。
-/// 主壳参考 Codex Desktop：中性灰侧栏、近白工作区、极细分隔线，品牌色只用于
-/// 关键动作和状态，不再用大面积暖色卡片包裹结构区域。
+/// 沿用 Web 登录页的暖纸、墨色与赤陶色，保留原生桌面控件和阅读密度。
+/// 颜色与交互反馈在此统一，内容页面不再各自复制一套表面和动效。
 enum Theme {
     private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> NSColor {
         NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
@@ -31,9 +31,12 @@ enum Theme {
 
     /// 新品牌主色,对齐 web --accent。暖珊瑚,深一档更接近 web。
     static let wandAccent = dynamic(
-        light: rgb(0.773, 0.396, 0.239),
-        dark: rgb(0.831, 0.459, 0.314)
-    ) // #C5653D / #D47550
+        light: rgb(0.663, 0.310, 0.169),
+        dark: rgb(0.878, 0.608, 0.471)
+    ) // #A94F2B / #E09B78; foreground contrast on paper and charcoal.
+    /// Solid actions retain enough contrast for white labels in both appearances.
+    static let accentSolid = Color(red: 0.722, green: 0.337, blue: 0.184)
+    static let accentSolidHover = Color(red: 0.616, green: 0.275, blue: 0.137)
     /// 加深版:active / pressed 状态。
     static let wandAccentStrong = Color(red: 0.686, green: 0.325, blue: 0.188)  // #AF5330
     /// 0.12 透明,卡片背景用。
@@ -75,43 +78,47 @@ enum Theme {
 
     // MARK: - 背景层(对齐 web --bg-*)
 
-    /// 窗口底色。结构层保持中性，避免与代码、终端和 diff 内容争抢注意力。
+    /// 与 Web 登录页同源的暖纸底色。
     static let background = dynamic(
-        light: rgb(0.953, 0.953, 0.949),  // #F3F3F2
-        dark: rgb(0.090, 0.090, 0.086)    // #171716
+        light: rgb(0.980, 0.969, 0.949),  // #FAF7F2
+        dark: rgb(0.102, 0.094, 0.086)    // #1A1816
     )
 
-    /// Codex 风格的结构侧栏，比正文区域略深一档。
+    /// 侧栏只比正文深一档，靠留白和细线区分结构。
     static let sidebarBackground = dynamic(
-        light: rgb(0.941, 0.941, 0.937),  // #F0F0EF
-        dark: rgb(0.118, 0.118, 0.114)    // #1E1E1D
+        light: rgb(0.949, 0.929, 0.898),  // #F2EDE5
+        dark: rgb(0.125, 0.114, 0.102)    // #201D1A
     )
 
     /// 聊天、终端和空状态所在的主工作区。
     static let workspaceBackground = dynamic(
-        light: rgb(0.992, 0.992, 0.988),  // #FDFDFC
-        dark: rgb(0.075, 0.075, 0.073)    // #131312
+        light: rgb(0.980, 0.969, 0.949),
+        dark: rgb(0.102, 0.094, 0.086)
     )
 
     /// 二级背景：输入栏、静态控件和轻量卡片。
     static let surface = dynamic(
-        light: rgbA(0.976, 0.976, 0.973, 0.94),
-        dark: rgbA(0.145, 0.145, 0.141, 0.94)
+        light: rgb(0.949, 0.929, 0.898),
+        dark: rgb(0.149, 0.137, 0.125)
     )
 
     /// 浮起层背景。
     static let surfaceElevated = dynamic(
-        light: rgb(1.0, 1.0, 0.996),
-        dark: rgb(0.137, 0.137, 0.133)
+        light: rgb(1.0, 0.992, 0.980),
+        dark: rgb(0.165, 0.153, 0.141)
     )
 
     // MARK: - 边框(对齐 web --border-*)
 
-    static let borderSubtle = rgbA(0.0, 0.0, 0.0, 0.075)
-    static let borderDefault = rgbA(0.0, 0.0, 0.0, 0.12)
+    static let borderSubtle = dynamicNS(
+        light: rgb(0.898, 0.871, 0.827), dark: rgb(0.239, 0.220, 0.196)
+    )
+    static let borderDefault = dynamicNS(
+        light: rgb(0.812, 0.776, 0.722), dark: rgb(0.341, 0.310, 0.275)
+    )
     static let border = dynamic(
-        light: rgb(0.855, 0.855, 0.843),
-        dark: rgb(0.235, 0.235, 0.224)
+        light: rgb(0.898, 0.871, 0.827),
+        dark: rgb(0.275, 0.251, 0.224)
     )
     static let borderFocus = rgbA(0.773, 0.396, 0.239, 0.50)    // rgba(197,101,61,0.5)
     /// 玻璃表面的受光边缘。只用于结构性面板，避免每个控件都抢视觉注意力。
@@ -123,36 +130,40 @@ enum Theme {
     // MARK: - 文本(对齐 web --text-*)
 
     static let textPrimary = dynamic(
-        light: rgb(0.125, 0.125, 0.118),
-        dark: rgb(0.941, 0.941, 0.925)
+        light: rgb(0.122, 0.106, 0.094),
+        dark: rgb(0.953, 0.925, 0.886)
     )
     static let textSecondary = dynamic(
-        light: rgb(0.365, 0.365, 0.349),
-        dark: rgb(0.745, 0.745, 0.722)
+        light: rgb(0.341, 0.314, 0.290),
+        dark: rgb(0.769, 0.729, 0.678)
     )
     static let textTertiary = dynamic(
-        light: rgb(0.455, 0.455, 0.435),
-        dark: rgb(0.635, 0.635, 0.608)
+        light: rgb(0.435, 0.400, 0.361),
+        dark: rgb(0.690, 0.647, 0.592)
     )
     static let textMuted = dynamic(
-        light: rgb(0.545, 0.545, 0.522),
-        dark: rgb(0.565, 0.565, 0.537)
+        light: rgb(0.435, 0.400, 0.361),
+        dark: rgb(0.690, 0.647, 0.592)
     )
     // MARK: - 语义色(对齐 web --success/--warning/--danger/--info)
 
-    static let success = Color(red: 0.310, green: 0.478, blue: 0.345)       // #4F7A58
-    static let warning = Color(red: 0.663, green: 0.416, blue: 0.184)       // #A96A2F
-
-    static let danger = Color(red: 0.698, green: 0.310, blue: 0.271)        // #B24F45
-
-    static let info = Color(red: 0.290, green: 0.435, blue: 0.647)          // #4A6FA5
+    static let success = dynamic(light: rgb(0.290, 0.455, 0.325), dark: rgb(0.580, 0.749, 0.600))
+    static let warning = dynamic(light: rgb(0.584, 0.365, 0.153), dark: rgb(0.871, 0.694, 0.439))
+    static let danger = dynamic(light: rgb(0.678, 0.290, 0.255), dark: rgb(0.890, 0.565, 0.525))
+    static let info = dynamic(light: rgb(0.275, 0.416, 0.624), dark: rgb(0.580, 0.706, 0.863))
     static let infoMuted = rgbA(0.290, 0.435, 0.647, 0.14)
 
     // MARK: - 圆角(对齐 web --radius-*)
 
     enum Radius {
+        static let control: CGFloat = 8
         static let md: CGFloat = 10
         static let lg: CGFloat = 12
+    }
+
+    enum Motion {
+        static let feedback = Animation.easeOut(duration: 0.12)
+        static let structure = Animation.easeInOut(duration: 0.18)
     }
 
     // MARK: - 阴影(对齐 web --shadow-*,暖色调)
@@ -206,7 +217,7 @@ enum Theme {
 
     /// WKWebView overscroll 区域底色,避免加载前/回弹时露出白底。
     static var nsBackground: NSColor {
-        dynamicNS(light: rgb(0.992, 0.992, 0.988), dark: rgb(0.075, 0.075, 0.073))
+        dynamicNS(light: rgb(0.980, 0.969, 0.949), dark: rgb(0.102, 0.094, 0.086))
     }
 
     // MARK: - 渐变背景(对齐 web body 径向渐变)
@@ -227,7 +238,7 @@ enum Theme {
 // MARK: - 液态玻璃修饰符
 
 extension View {
-    /// 挂原生 Liquid Glass；旧系统和辅助功能模式使用实色描边表面。
+    /// Quiet surface shared by native toolbars and panels.
     func wandGlass(_ kind: Theme.Glass) -> some View {
         modifier(WandGlassModifier(kind: kind))
     }
@@ -248,6 +259,21 @@ extension View {
                 cornerRadius: cornerRadius
             )
         )
+    }
+
+    /// Animate only the named interaction state; streamed content stays immediate.
+    func wandMotion<Value: Equatable>(value: Value, layout: Bool = false) -> some View {
+        modifier(WandMotionModifier(value: value, layout: layout))
+    }
+}
+
+private struct WandMotionModifier<Value: Equatable>: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let value: Value
+    let layout: Bool
+
+    func body(content: Content) -> some View {
+        content.animation(reduceMotion ? nil : (layout ? Theme.Motion.structure : Theme.Motion.feedback), value: value)
     }
 }
 
@@ -294,7 +320,7 @@ private struct WandGlassModifier: ViewModifier {
             content.background(Theme.workspaceBackground)
         } else {
             content
-                .background(shape.fill(Theme.surfaceElevated.opacity(0.92)))
+                .background(shape.fill(Theme.surfaceElevated))
                 .overlay(
                     shape.stroke(
                         Theme.border,
@@ -356,6 +382,7 @@ private struct WandSelectionSurfaceModifier: ViewModifier {
                     lineWidth: highContrast && isSelected ? 1 : 0
                 )
             )
+            .wandMotion(value: isHovered)
     }
 }
 
@@ -416,7 +443,7 @@ private struct WandInputSurfaceModifier: ViewModifier {
                 shape.fill(
                     reduceTransparency || highContrast
                         ? Theme.surfaceElevated
-                        : Theme.surface.opacity(focused ? 0.98 : 0.86)
+                        : Theme.surfaceElevated
                 )
             }
             .overlay {
@@ -430,6 +457,8 @@ private struct WandInputSurfaceModifier: ViewModifier {
                 radius: 6,
                 y: 2
             )
+            .wandMotion(value: focused)
+            .wandMotion(value: invalid)
     }
 }
 
@@ -613,6 +642,7 @@ struct WandPrimaryButtonStyle: ButtonStyle {
     struct Body: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
 
         var body: some View {
             configuration.label
@@ -621,11 +651,38 @@ struct WandPrimaryButtonStyle: ButtonStyle {
                 .padding(.vertical, 9)
                 .padding(.horizontal, 14)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isEnabled ? Theme.wandAccent : Theme.wandAccent.opacity(0.45))
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(isEnabled && hovering ? Theme.accentSolidHover : Theme.accentSolid)
                 )
-                .brightness(configuration.isPressed ? -0.06 : 0)
+                .brightness(isEnabled && configuration.isPressed ? -0.06 : 0)
+                .opacity(isEnabled ? 1 : 0.45)
                 .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .wandMotion(value: hovering)
+        }
+    }
+}
+
+/// Compact primary action shared by the home and conversation composers.
+struct WandSendButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        SendButtonBody(configuration: configuration)
+    }
+
+    private struct SendButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundColor(.white)
+                .background(Circle().fill(isEnabled && hovering ? Theme.accentSolidHover : Theme.accentSolid))
+                .brightness(isEnabled && configuration.isPressed ? -0.06 : 0)
+                .opacity(isEnabled ? 1 : 0.4)
+                .contentShape(Circle())
+                .onHover { hovering = $0 }
+                .wandMotion(value: hovering)
         }
     }
 }
@@ -640,6 +697,8 @@ struct WandSecondaryButtonStyle: ButtonStyle {
     struct Body: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+        @Environment(\.colorSchemeContrast) private var contrast
 
         var body: some View {
             configuration.label
@@ -648,21 +707,27 @@ struct WandSecondaryButtonStyle: ButtonStyle {
                 .padding(.vertical, 9)
                 .padding(.horizontal, 14)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(Theme.surfaceElevated)
                 )
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(Theme.textPrimary.opacity(isEnabled ? (configuration.isPressed ? 0.10 : (hovering ? 0.045 : 0)) : 0))
+                        .allowsHitTesting(false)
+                }
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Theme.border, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .stroke(contrast == .increased ? Theme.textSecondary : Theme.border, lineWidth: 1)
                 )
-                .opacity(configuration.isPressed ? 0.78 : 1)
+                .opacity(isEnabled ? 1 : 0.45)
                 .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .wandMotion(value: hovering)
         }
     }
 }
 
-/// 工具栏和面板标题里的图标按钮。按下时立即出现像玻璃受压后的暖色高光；
-/// 高频操作的反馈只发生在按住期间，不引入切换页或延迟。
+/// Toolbar actions share a quiet hover and immediate pressed state.
 struct WandIconButtonStyle: ButtonStyle {
     var isActive: Bool = false
 
@@ -675,6 +740,7 @@ struct WandIconButtonStyle: ButtonStyle {
         let configuration: ButtonStyleConfiguration
         let isActive: Bool
         @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
 
         var body: some View {
             configuration.label
@@ -685,14 +751,17 @@ struct WandIconButtonStyle: ButtonStyle {
                 )
                 .frame(width: 30, height: 30)
                 .background(
-                    Circle()
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(
-                            configuration.isPressed
+                            isEnabled && configuration.isPressed
                                 ? Theme.textPrimary.opacity(0.10)
-                                : (isActive ? Theme.textPrimary.opacity(0.065) : .clear)
+                                : Theme.textPrimary.opacity(isActive ? 0.075 : (isEnabled && hovering ? 0.045 : 0))
                         )
                 )
-                .contentShape(Circle())
+                .opacity(isEnabled ? 1 : 0.45)
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .wandMotion(value: hovering)
         }
     }
 }
