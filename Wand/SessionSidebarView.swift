@@ -95,7 +95,6 @@ struct SidebarColumn: View {
     @Binding var selectedSessionId: String?
     var query: String = ""
     @Binding var presentNewSession: Bool
-    let onOpenMissions: () -> Void
     let onSessionSelected: (SessionSnapshot) -> Void
     var onRequestNewSession: ((String?) -> Void)? = nil
 
@@ -258,11 +257,6 @@ struct SidebarColumn: View {
                             isSelecting = true
                         } label: {
                             Label("选择多个会话", systemImage: "checkmark.circle")
-                        }
-                        Button {
-                            onOpenMissions()
-                        } label: {
-                            Label("并行任务", systemImage: "square.stack.3d.up")
                         }
                     }
                 } label: {

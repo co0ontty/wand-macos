@@ -38,25 +38,6 @@ final class DesktopLifecycleTests: XCTestCase {
         }
     }
 
-    func testWebProcessFailureCannotDiscardFileDraftsEvenWithStaleReadyValue() {
-        let error = NSError(domain: "WKErrorDomain", code: 2)
-        XCTAssertEqual(DesktopToolCloseDecision.resolve(value: nil, error: error), .retry)
-        XCTAssertEqual(DesktopToolCloseDecision.resolve(value: "ready", error: error), .retry)
-    }
-
-    func testInvalidCloseStateRequiresRetryInsteadOfClaimingNoDrafts() {
-        for value: Any? in [nil, NSNull(), false, "", "unknown", ["status": "ready"]] {
-            XCTAssertEqual(DesktopToolCloseDecision.resolve(value: value, error: nil), .retry)
-        }
-    }
-
-    func testCloseStatePreservesSavingAndUnsavedWorkAndSupportsOlderServers() {
-        XCTAssertEqual(DesktopToolCloseDecision.resolve(value: "busy", error: nil), .waitForSave)
-        XCTAssertEqual(DesktopToolCloseDecision.resolve(value: "unsaved", error: nil), .confirmDiscard)
-        XCTAssertEqual(DesktopToolCloseDecision.resolve(value: "ready", error: nil), .close)
-        XCTAssertEqual(DesktopToolCloseDecision.resolve(value: "unsupported", error: nil), .close)
-    }
-
     func testFirstLaunchUsesComfortableDesktopSize() {
         let screen = CGRect(x: 0, y: 40, width: 1920, height: 1040)
         let frame = DesktopWindowGeometry.initialFrame(in: screen)

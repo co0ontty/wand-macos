@@ -27,7 +27,6 @@ struct WorkspaceListView: View {
     var onOpenTaskSession: ((Workspace, WorkspaceTask, WorkspaceSessionSummary) -> Void)? = nil
     var onRequestNewSession: ((Workspace, WorkspaceTask) -> Void)? = nil
     var onRequestNewTask: ((NewTaskSheetRequest) -> Void)? = nil
-    var onOpenParallel: ((Workspace, WorkspaceTask) -> Void)? = nil
     var onMergeAgentStarted: ((Workspace, SessionSnapshot) -> Void)? = nil
     var onWorkspaceDeleted: ((String) -> Void)? = nil
     var onCreateWorkspace: (() -> Void)? = nil
@@ -589,13 +588,6 @@ struct WorkspaceListView: View {
                         clearTarget = summary
                     } label: {
                         Label("清空会话(\(summary.listedSessionCount))", systemImage: "trash.slash")
-                    }
-                }
-                if onOpenParallel != nil {
-                    Button {
-                        onOpenParallel?(workspace, task)
-                    } label: {
-                        Label("并行任务", systemImage: "square.stack.3d.up")
                     }
                 }
                 Button(role: .destructive) {

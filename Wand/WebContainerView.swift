@@ -15,78 +15,20 @@ final class WebViewModel: ObservableObject {
     }
 
     @Published var phase: Phase = .loading
-    enum DesktopToolNavigation: Equatable {
-        case idle
-        case opening
-        case opened
-        case failed(String)
-    }
-
-    @Published var desktopToolNavigation: DesktopToolNavigation = .idle
-    private var requestedDesktopTool: DesktopWebTool?
-    private var desktopNavigationTask: Task<Void, Never>?
     /// 终端缩放百分比标签，由 JS 回填（"100%" 等）。
     @Published var terminalScaleLabel = "100%"
     /// 终端尺寸（列 × 行），由 JS 回填，驱动状态栏显示。
     @Published var terminalSizeLabel = ""
-    /// WebBridge 收到 backToNative 消息时调用，由容器视图注入（关闭嵌套网页会话）。
-    var requestClose: (() -> Void)?
     /// WebBridge attach 时回填，供"重试"调用 reload()。
     weak var webView: WKWebView?
 
     func retry() {
         phase = .loading
-        desktopNavigationTask?.cancel()
-        if requestedDesktopTool != nil { desktopToolNavigation = .opening }
         webView?.reload()
-    }
-
-    func openDesktopTool(_ tool: DesktopWebTool) {
-        requestedDesktopTool = tool
-        desktopNavigationTask?.cancel()
-        desktopToolNavigation = .opening
-        guard phase == .ready, let webView else { return }
-        desktopNavigationTask = Task { @MainActor [weak self, weak webView] in
-            // didFinish only means that HTML arrived. Authentication restoration
-            // and React mount finish later, so readiness is checked explicitly.
-            for _ in 0..<80 {
-                guard !Task.isCancelled, let self, let webView else { return }
-                let status: String = await withCheckedContinuation { continuation in
-                    webView.evaluateJavaScript(tool.navigationScript) { value, _ in
-                        let result = value as? [String: Any]
-                        continuation.resume(returning: result?["status"] as? String ?? "waiting")
-                    }
-                }
-                guard !Task.isCancelled else { return }
-                switch status {
-                case "opened":
-                    self.desktopToolNavigation = .opened
-                    return
-                case "unsupported":
-                    self.desktopToolNavigation = .failed("当前服务版本还不支持直接打开此工具。可在完整控制台中使用，或更新服务端后重试。")
-                    return
-                case "busy":
-                    self.desktopToolNavigation = .failed("当前页面正在处理操作。请先完成操作，再打开此工具。")
-                    return
-                default:
-                    break
-                }
-                do { try await Task.sleep(nanoseconds: 150_000_000) }
-                catch { return }
-            }
-            guard !Task.isCancelled else { return }
-            self?.desktopToolNavigation = .failed("页面尚未就绪。请完成下方的登录，或检查连接后重试。")
-        }
     }
 
     func finishNavigation() {
         phase = .ready
-        if let tool = requestedDesktopTool { openDesktopTool(tool) }
-    }
-
-    func cancelDesktopToolNavigation() {
-        desktopNavigationTask?.cancel()
-        desktopNavigationTask = nil
     }
 
     // MARK: - 终端缩放（对称 iOS WebContainerView）
@@ -239,8 +181,6 @@ struct WebContainerView: View {
     /// xterm 是唯一输入目标。桌面端键盘事件直达 xterm helper-textarea →
     /// WebSocket pty_input，不再经过原生 composer / HTTP API。
     var embedPassthrough: Bool = false
-    /// 「返回原生界面」回调；非 nil 时注入 `__wandBackToNative`，网页侧边栏显示「返回App」。
-    var onRequestClose: (() -> Void)? = nil
 
     @EnvironmentObject private var store: ServerStore
     @StateObject private var model: WebViewModel
@@ -252,8 +192,7 @@ struct WebContainerView: View {
         embedTerminal: Bool = false,
         embedNativeInput: Bool = false,
         embedPassthrough: Bool = false,
-        webViewModel: WebViewModel? = nil,
-        onRequestClose: (() -> Void)? = nil
+        webViewModel: WebViewModel? = nil
     ) {
         self.serverURL = serverURL
         self.token = token
@@ -261,7 +200,6 @@ struct WebContainerView: View {
         self.embedTerminal = embedTerminal
         self.embedNativeInput = embedNativeInput
         self.embedPassthrough = embedPassthrough
-        self.onRequestClose = onRequestClose
         _model = StateObject(wrappedValue: webViewModel ?? WebViewModel())
     }
 
@@ -287,12 +225,10 @@ struct WebContainerView: View {
                 embedTerminal: embedTerminal,
                 embedNativeInput: embedNativeInput,
                 embedPassthrough: embedPassthrough,
-                injectsBackToNative: onRequestClose != nil,
                 model: model
             )
             overlay
         }
-        .onAppear { model.requestClose = onRequestClose }
     }
 
     @ViewBuilder private var overlay: some View {
@@ -397,9 +333,6 @@ struct WebViewRepresentable: NSViewRepresentable {
     var embedTerminal: Bool = false
     var embedNativeInput: Bool = false
     var embedPassthrough: Bool = false
-    /// 是否注入「返回原生界面」入口：注入后新版网页会在侧边栏渲染「返回App」按钮，
-    /// 点击 → backToNative 消息 → model.requestClose。网页版主入口不注入（无处可返回）。
-    var injectsBackToNative: Bool = false
     let model: WebViewModel
 
     func makeCoordinator() -> WebBridge {
@@ -410,18 +343,6 @@ struct WebViewRepresentable: NSViewRepresentable {
         let cfg = WKWebViewConfiguration()
         let userController = WKUserContentController()
         userController.add(context.coordinator, name: "wandNative")
-        if injectsBackToNative {
-            userController.addUserScript(WKUserScript(
-                source: """
-                window.__wandMacNative = true;
-                window.__wandBackToNative = function() {
-                  try { window.webkit.messageHandlers.wandNative.postMessage({ type: "backToNative" }); } catch (e) {}
-                };
-                """,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            ))
-        }
         // PTY passthrough 模式注入终端增强：选中即复制、禁用右键菜单干扰、
         // 确保终端 viewport 满铺。这是让 macOS 客户端接近原生终端体验的关键。
         if embedPassthrough {

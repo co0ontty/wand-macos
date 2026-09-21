@@ -10,8 +10,6 @@ struct ContentView: View {
     }
     @State private var connectionRequest: ConnectionRequest?
     @AppStorage("wand.appearanceMode") private var appearanceMode = "system"
-    @State private var showGuide = false
-    @State private var showShortcuts = false
 
     var body: some View {
         ZStack {
@@ -27,13 +25,6 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(appearanceMode == "dark" ? .dark : appearanceMode == "light" ? .light : nil)
-        .sheet(isPresented: $showGuide) { DesktopOnboardingView(onFinish: { showGuide = false }, isConnected: false) }
-        .sheet(isPresented: $showShortcuts) { DesktopShortcutsView() }
-        .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
-            guard store.serverURL == nil, let command = note.object as? DesktopCommand else { return }
-            if command == .onboarding { showGuide = true }
-            if command == .shortcuts { showShortcuts = true }
-        }
         .sheet(item: $connectionRequest) { request in
             ConnectView(isPresentedAsSheet: true, reconnectingServerURL: request.reconnectingServerURL) {
                 connectionRequest = nil

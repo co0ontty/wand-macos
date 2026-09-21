@@ -40,10 +40,6 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
             Task { @MainActor in
                 await UpdateFlowController.shared.checkManually()
             }
-        case "backToNative":
-            DispatchQueue.main.async { [weak self] in
-                self?.model.requestClose?()
-            }
         default:
             break
         }
@@ -121,7 +117,6 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
         if !hasLoadedOnce {
             model.phase = .loading
         }
-        model.cancelDesktopToolNavigation()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

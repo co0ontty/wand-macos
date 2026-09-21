@@ -36,13 +36,8 @@ struct MainShellView: View {
 
     @State private var filePanelOpen: Bool = false
     @AppStorage("wand.desktop.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("wand.desktop.onboardingVersion") private var onboardingVersion = 0
     @State private var showCommandPalette = false
-    @State private var showOnboarding = false
-    @State private var showShortcuts = false
-    @State private var webTool: DesktopWebTool?
     @State private var pendingCommand: DesktopCommand?
-    @State private var pendingTool: DesktopWebTool?
     @FocusState private var sidebarSearchFocused: Bool
     @State private var rightPanelTab: RightPanelTab = .files
     /// 当前选中的会话 id。
@@ -59,7 +54,6 @@ struct MainShellView: View {
     /// 连接状态(给顶栏的 connection dot 用)。
     @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
-    @State private var showMissions = false
     @State private var showTaskBoard = false
     @StateObject private var gitStatusStore = GitStatusStore()
     @StateObject private var workspaceStore: WorkspaceStore
@@ -131,78 +125,12 @@ struct MainShellView: View {
     }
 
     var body: some View {
-        Group {
-            if showWebFallback {
-                WebFallbackContainer(
-                    serverURL: serverURL,
-                    token: token,
-                    sessionId: selectedSessionId
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // 网页版兜底没有原生顶栏，返回入口做成悬浮胶囊，避开左上角红绿灯。
-                .overlay(alignment: .topLeading) {
-                    Button(action: { showWebFallback = false }) {
-                        Label("返回原生界面", systemImage: "chevron.backward")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Theme.textPrimary)
-                            .padding(.horizontal, 10)
-                            .frame(height: 26)
-                            .background(Capsule(style: .continuous).fill(Theme.surfaceElevated))
-                            .overlay(
-                                Capsule(style: .continuous)
-                                    .stroke(Theme.border, lineWidth: 0.8)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 80)
-                    .padding(.top, 6)
-                }
-                .ignoresSafeArea(.container, edges: .top)
-            } else {
-                nativeShell
-            }
-        }
+        nativeShell
         .focusedSceneValue(\.wandDesktopCommandsEnabled, !hasPresentedSheet)
-        .sheet(isPresented: $presentSettings, onDismiss: openPendingDestination) {
-            SettingsView(
-                serverURL: serverURL,
-                token: token,
-                onOpenWeb: {
-                    presentSettings = false
-                    pendingTool = .completeWeb
-                },
-                onShowOnboarding: {
-                    presentSettings = false
-                    pendingCommand = .onboarding
-                },
-                onOpenWebSettings: {
-                    presentSettings = false
-                    pendingTool = .general
-                }
-            )
-            .environmentObject(ServerStore.shared)
+        .sheet(isPresented: $presentSettings) {
+            SettingsView(serverURL: serverURL, token: token)
+                .environmentObject(ServerStore.shared)
         }
-        .sheet(item: $webTool) { tool in
-            DesktopWebToolsView(serverURL: serverURL, token: token, initialTool: tool,
-                                sessionId: selectedSessionId, onDismiss: { webTool = nil })
-        }
-        .sheet(isPresented: $showOnboarding, onDismiss: openPendingDestination) {
-            DesktopOnboardingView(onFinish: {
-                onboardingVersion = 1
-                showOnboarding = false
-            }, onOpenSettings: {
-                onboardingVersion = 1
-                showOnboarding = false
-                pendingCommand = .settings
-            }, onOpenFeature: { raw in
-                onboardingVersion = 1
-                showOnboarding = false
-                if let command = DesktopCommand(rawValue: raw) {
-                    pendingCommand = command
-                }
-            })
-        }
-        .sheet(isPresented: $showShortcuts) { DesktopShortcutsView() }
         .sheet(isPresented: $showCommandPalette, onDismiss: openPendingDestination) {
             DesktopCommandPalette(api: api, onCommand: { command in
                 showCommandPalette = false
@@ -228,16 +156,6 @@ struct MainShellView: View {
                 onRetry: recoverConnection
             )
         }
-        .sheet(isPresented: $showMissions) {
-            MissionsView(
-                api: api,
-                linkedTaskId: selectedWorkspaceTask?.task.id,
-                linkedTaskName: selectedWorkspaceTask?.task.name,
-                linkedTaskCwd: workspaceStore.taskState.detail?.cwd ?? selectedWorkspaceTask?.workspace.cwd,
-                onOpenSession: openSessionFromMissions,
-                onDismiss: { showMissions = false }
-            )
-        }
         .sheet(isPresented: $showCreateWorkspace) {
             WorkspaceCreateView(api: api, store: workspaceStore) { created in
                 showCreateWorkspace = false
@@ -251,7 +169,6 @@ struct MainShellView: View {
         }
         .task {
             await checkConnectionAsync()
-            if onboardingVersion < 1 { showOnboarding = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
             guard let command = note.object as? DesktopCommand else { return }
@@ -273,9 +190,6 @@ struct MainShellView: View {
             selectedSessionId = snapshot.id
             selectedSessionProvider = snapshot.provider ?? "claude"
             selectedSession = snapshot
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .wandRequestOpenMissions)) { _ in
-            showMissions = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandRequestSidebarSection)) { note in
             if let section = note.object as? SidebarSection {
@@ -356,7 +270,6 @@ struct MainShellView: View {
         selectedWorkspaceTask = nil
         showTaskBoard = false
         showCreation = false
-        showMissions = false
         Task {
             do {
                 let session = try await api.getSession(id: sessionId)
@@ -433,8 +346,8 @@ struct MainShellView: View {
     }
 
     private var creationDestinationVisible: Bool {
-        !showWebFallback && (showCreation || (!showTaskBoard
-            && selectedWorkspaceTask == nil && selectedSessionId == nil))
+        showCreation || (!showTaskBoard
+            && selectedWorkspaceTask == nil && selectedSessionId == nil)
     }
 
     private func openCreatedSession(_ session: SessionSnapshot, originDraftID: UUID) {
@@ -473,7 +386,6 @@ struct MainShellView: View {
 
     // MARK: - 状态
 
-    @State private var showWebFallback: Bool = false
     @State private var presentSettings: Bool = false
 
     // MARK: - 三栏
@@ -545,7 +457,6 @@ struct MainShellView: View {
                                 get: { showTaskBoard || showCreation ? nil : selectedSessionId },
                                 set: { selectedSessionId = $0 }),
                               query: sidebarQuery, presentNewSession: .constant(false),
-                              onOpenMissions: { showMissions = true },
                               onSessionSelected: { presentSession($0) },
                               onRequestNewSession: { cwd in
                                   if let cwd {
@@ -609,13 +520,6 @@ struct MainShellView: View {
                     beginTaskSession(workspace: workspace, task: task)
                 },
                 onRequestNewTask: beginNewTask,
-                onOpenParallel: { workspace, task in
-                    selectedWorkspaceTask = WorkspaceTaskSelection(
-                        workspace: workspace,
-                        task: task
-                    )
-                    showMissions = true
-                },
                 onMergeAgentStarted: { _, started in
                     presentSession(started, keepWorkspaceContext: true)
                 },
@@ -824,24 +728,6 @@ struct MainShellView: View {
 
     private var sidebarFooter: some View {
         VStack(spacing: 8) {
-            Menu {
-                Button("并行任务与收件箱") { handle(.missions) }
-                Button("新建工作任务") { handle(.newTask) }
-                Divider()
-                Button("工具与服务器设置") { handle(.webTools) }
-                Button("完整控制台") { webTool = .completeWeb }
-                Divider()
-                Button("使用入门") { handle(.onboarding) }
-                Button("键盘快捷键") { handle(.shortcuts) }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "square.grid.2x2").frame(width: 20)
-                    Text("工具与帮助").font(.system(size: 13))
-                    Spacer()
-                    Image(systemName: "chevron.up").font(.system(size: 9))
-                }.foregroundColor(Theme.textSecondary).padding(.horizontal, 9).frame(height: 34)
-            }.menuStyle(.borderlessButton)
-                .help("并行任务、服务端工具与使用帮助")
             Divider()
             HStack(spacing: 10) {
                 WandBrandMark(size: 30).accessibilityHidden(true)
@@ -893,19 +779,14 @@ struct MainShellView: View {
     }
 
     private func openPendingDestination() {
-        if let tool = pendingTool {
-            pendingTool = nil
-            webTool = tool
-        } else if let command = pendingCommand {
+        if let command = pendingCommand {
             pendingCommand = nil
             command.send()
         }
     }
 
     private var hasPresentedSheet: Bool {
-        presentSettings || showCommandPalette || showOnboarding
-            || showShortcuts || webTool != nil || showTroubleshooting || showMissions
-            || showCreateWorkspace
+        presentSettings || showCommandPalette || showTroubleshooting || showCreateWorkspace
     }
 
     private func handle(_ command: DesktopCommand) {
@@ -921,11 +802,7 @@ struct MainShellView: View {
         case .workspaces: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .workspaces
         case .sessions: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .sessions
         case .taskBoard: showCreation = false; showTaskBoard = true; filePanelOpen = false
-        case .missions: showMissions = true
         case .settings: presentSettings = true
-        case .webTools: webTool = .general
-        case .onboarding: showOnboarding = true
-        case .shortcuts: showShortcuts = true
         case .reconnect: recoverConnection()
         case .focusComposer, .findConversation: break
         }
@@ -1232,20 +1109,6 @@ struct SessionHeaderView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(providerLabel) 会话：\(displayTitle)")
-    }
-}
-
-// MARK: - 网页版兜底容器(从 NativeRootView 提到 MainShellView 共用)
-
-struct WebFallbackContainer: View {
-    let serverURL: URL
-    let token: String?
-    var sessionId: String? = nil
-
-    var body: some View {
-        WebContainerView(serverURL: serverURL, token: token, sessionId: sessionId)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.background)
     }
 }
 

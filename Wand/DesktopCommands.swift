@@ -4,8 +4,8 @@ import SwiftUI
 /// One catalog owns the menu bar, command palette and keyboard reference.
 enum DesktopCommand: String, CaseIterable, Identifiable {
     case newSession, newTask, search, toggleSidebar, toggleInspector
-    case workspaces, sessions, taskBoard, missions, settings, webTools
-    case focusComposer, findConversation, onboarding, shortcuts, reconnect
+    case workspaces, sessions, taskBoard, settings
+    case focusComposer, findConversation, reconnect
 
     var id: String { rawValue }
     var title: String {
@@ -18,13 +18,9 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "工作空间"
         case .sessions: return "所有会话"
         case .taskBoard: return "任务看板"
-        case .missions: return "并行任务与收件箱"
         case .settings: return "设置"
-        case .webTools: return "工具与服务器设置"
         case .focusComposer: return "聚焦消息输入框"
         case .findConversation: return "查找当前对话"
-        case .onboarding: return "使用入门"
-        case .shortcuts: return "键盘快捷键"
         case .reconnect: return "刷新连接"
         }
     }
@@ -38,13 +34,9 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "按项目管理任务和工作窗口"
         case .sessions: return "最近会话、历史记录与恢复"
         case .taskBoard: return "管理待办、进度、优先级与归档"
-        case .missions: return "并行执行与处理需要关注的事项"
         case .settings: return "外观、输入、连接和客户端更新"
-        case .webTools: return "连接器、AI、安全、通知、文件编辑与 GitHub"
         case .focusComposer: return "继续当前对话；终端保持自己的按键语义"
         case .findConversation: return "在已加载的聊天内容中定位文字"
-        case .onboarding: return "从连接服务器到完成第一项工作"
-        case .shortcuts: return "所有快捷键与终端输入说明"
         case .reconnect: return "重新检查服务器连接并刷新列表"
         }
     }
@@ -58,13 +50,9 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "folder"
         case .sessions: return "bubble.left.and.bubble.right"
         case .taskBoard: return "checklist"
-        case .missions: return "tray"
         case .settings: return "gearshape"
-        case .webTools: return "square.grid.2x2"
         case .focusComposer: return "text.cursor"
         case .findConversation: return "text.magnifyingglass"
-        case .onboarding: return "sparkles"
-        case .shortcuts: return "keyboard"
         case .reconnect: return "arrow.clockwise"
         }
     }
@@ -78,14 +66,10 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "⌘2"
         case .sessions: return "⌘1"
         case .taskBoard: return "⌘3"
-        case .missions: return "⌘4"
         case .settings: return "⌘,"
-        case .webTools: return "⌘5"
         case .focusComposer: return "⌘L"
         case .findConversation: return "⌘F"
-        case .shortcuts: return "⇧⌘/"
         case .reconnect: return "⇧⌘R"
-        case .onboarding: return ""
         }
     }
     var key: KeyEquivalent {
@@ -97,19 +81,15 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "2"
         case .sessions: return "1"
         case .taskBoard: return "3"
-        case .missions: return "4"
         case .settings: return ","
-        case .webTools: return "5"
         case .focusComposer: return "l"
         case .findConversation: return "f"
-        case .shortcuts: return "/"
         case .reconnect: return "r"
-        case .onboarding: return "?"
         }
     }
     var modifiers: EventModifiers {
         switch self {
-        case .newTask, .search, .shortcuts, .reconnect: return [.command, .shift]
+        case .newTask, .search, .reconnect: return [.command, .shift]
         case .toggleSidebar: return [.command, .control]
         case .toggleInspector: return [.command, .option]
         default: return .command
@@ -133,7 +113,7 @@ struct DesktopCommandMenuItem: View {
     var body: some View {
         Button(command.title) { command.send() }
             .keyboardShortcut(command.key, modifiers: command.modifiers)
-            .disabled(enabled != true && command != .shortcuts)
+            .disabled(enabled != true)
     }
 }
 

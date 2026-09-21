@@ -5,10 +5,6 @@ import SwiftUI
 struct SettingsView: View {
     let serverURL: URL
     let token: String?
-    /// 请求打开网页版（由 NativeRootView 在当前 sheet 关闭后呈现）。
-    let onOpenWeb: () -> Void
-    let onShowOnboarding: () -> Void
-    let onOpenWebSettings: (() -> Void)?
 
     @EnvironmentObject private var store: ServerStore
     @Environment(\.dismiss) private var dismiss
@@ -25,16 +21,10 @@ struct SettingsView: View {
     init(
         serverURL: URL,
         token: String?,
-        onOpenWeb: @escaping () -> Void,
-        onShowOnboarding: @escaping () -> Void = {},
-        onOpenWebSettings: (() -> Void)? = nil,
         initialPane: String = "general"
     ) {
         self.serverURL = serverURL
         self.token = token
-        self.onOpenWeb = onOpenWeb
-        self.onShowOnboarding = onShowOnboarding
-        self.onOpenWebSettings = onOpenWebSettings
         _selectedPane = State(initialValue: SettingsPane(rawValue: initialPane) ?? .general)
     }
 
@@ -142,8 +132,6 @@ struct SettingsView: View {
                     generalContent
                 case .connection:
                     connectionContent
-                case .shortcuts:
-                    shortcutsContent
                 case .permissions:
                     permissionsContent
                 case .troubleshooting:
@@ -185,18 +173,6 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundColor(Theme.textTertiary)
             }
-
-            settingsCard("开始使用 Wand", description: "了解会话、工作空间、项目工具和桌面快捷键。") {
-                HStack(spacing: 10) {
-                    Button {
-                        dismiss()
-                        onShowOnboarding()
-                    } label: {
-                        Label("打开使用指南", systemImage: "sparkles")
-                    }
-                    Button("查看快捷键") { selectedPane = .shortcuts }
-                }
-            }
         }
     }
 
@@ -229,29 +205,6 @@ struct SettingsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(title)外观")
         .accessibilityValue(isSelected ? "已选择" : "未选择")
-    }
-
-    private var shortcutsContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            settingsCard("在 Wand 中导航") {
-                DesktopShortcutList()
-            }
-            settingsCard("编辑消息") {
-                shortcutRow("发送消息", shortcut: sendWithCommandEnter ? "⌘ ↩" : "↩")
-                rowDivider
-                shortcutRow("插入换行", shortcut: sendWithCommandEnter ? "↩" : "⇧ ↩")
-                rowDivider
-                shortcutRow("关闭当前弹窗", shortcut: "esc")
-            }
-        }
-    }
-
-    private func shortcutRow(_ title: String, shortcut: String) -> some View {
-        HStack {
-            Text(title).font(.system(size: 12)).foregroundColor(Theme.textPrimary)
-            Spacer()
-            DesktopKeycap(label: shortcut)
-        }
     }
 
     private var detailHeader: some View {
@@ -291,17 +244,6 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .font(.system(size: 13))
-            }
-
-            settingsCard("服务端设置", description: "管理模型、供应商、通知、更新通道与扩展。设置保存在当前服务器。") {
-                Button {
-                    dismiss()
-                    (onOpenWebSettings ?? onOpenWeb)()
-                } label: {
-                    Label("打开服务端设置", systemImage: "slider.horizontal.3")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.brand)
             }
         }
     }
@@ -553,7 +495,6 @@ struct SettingsView: View {
 private enum SettingsPane: String, CaseIterable, Identifiable {
     case general
     case connection
-    case shortcuts
     case permissions
     case troubleshooting
     case about
@@ -564,7 +505,6 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "通用"
         case .connection: return "连接与服务"
-        case .shortcuts: return "键盘快捷键"
         case .permissions: return "权限"
         case .troubleshooting: return "故障排查"
         case .about: return "关于"
@@ -575,7 +515,6 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "让 Wand 适合你的工作习惯。"
         case .connection: return "管理当前连接和服务器上的功能设置。"
-        case .shortcuts: return "让双手留在键盘上，快速进入下一项工作。"
         case .permissions: return "查看 Wand 在这台 Mac 上使用的系统权限。"
         case .troubleshooting: return "诊断连接与本地网络权限问题。"
         case .about: return "版本信息与项目链接。"
@@ -586,7 +525,6 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "slider.horizontal.3"
         case .connection: return "server.rack"
-        case .shortcuts: return "keyboard"
         case .permissions: return "hand.raised"
         case .troubleshooting: return "stethoscope"
         case .about: return "info.circle"

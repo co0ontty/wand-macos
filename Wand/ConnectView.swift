@@ -13,8 +13,6 @@ struct ConnectView: View {
     @State private var error: String? = nil
     @State private var isConnecting = false
     @State private var showTroubleshooting = false
-    @State private var showSetupHelp = false
-    @State private var copiedCommand = false
     @FocusState private var inputFocused: Bool
 
     /// 「本地网络」权限引导：nil = 不展示；false = 提示性引导（无法确定是否被拒）；
@@ -185,14 +183,6 @@ struct ConnectView: View {
             }
 
             footerHint
-            if !isPresentedAsSheet {
-                DisclosureGroup("第一次使用？", isExpanded: $showSetupHelp) {
-                    setupHelp.padding(.top, 10)
-                }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Theme.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
     }
 
@@ -238,45 +228,6 @@ struct ConnectView: View {
             .padding(.vertical, 11)
             .wandInputSurface(focused: inputFocused, invalid: error != nil, cornerRadius: 10)
         }
-    }
-
-    private var setupHelp: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("1. 在运行 AI 工具的电脑上启动 Wand。")
-                .font(.system(size: 11))
-            HStack {
-                Text("wand web").font(.system(size: 12, design: .monospaced))
-                Spacer()
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("wand web", forType: .string)
-                    copiedCommand = true
-                } label: {
-                    Label(copiedCommand ? "已复制" : "复制", systemImage: copiedCommand ? "checkmark" : "doc.on.doc")
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11))
-                .help("复制启动命令")
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.surface))
-            Text("2. 打开 Web 设置中的「连接 App」，复制连接码。\n3. 粘贴到上方输入框，然后连接。")
-                .font(.system(size: 11))
-                .lineSpacing(5)
-                .fixedSize(horizontal: false, vertical: true)
-            Button("服务器就在这台 Mac 上") {
-                input = "127.0.0.1:7777"
-                inputFocused = true
-            }
-            .buttonStyle(.link)
-            .font(.system(size: 11))
-            .disabled(isConnecting)
-            Text("使用自定义端口时，请填写服务器实际地址。启用密码的服务器请使用连接码。")
-                .font(.system(size: 10))
-                .foregroundColor(Theme.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundColor(Theme.textSecondary)
     }
 
     private func errorBanner(_ message: String) -> some View {

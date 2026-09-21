@@ -49,16 +49,13 @@ struct WandApp: App {
                 DesktopCommandMenuItem(command: .toggleInspector)
                 Divider()
                 Menu("前往") {
-                    ForEach([DesktopCommand.sessions, .workspaces, .taskBoard, .missions, .webTools]) {
+                    ForEach([DesktopCommand.sessions, .workspaces, .taskBoard]) {
                         DesktopCommandMenuItem(command: $0)
                     }
                 }
                 DesktopCommandMenuItem(command: .reconnect)
             }
-            CommandGroup(replacing: .help) {
-                Button("Wand 使用入门") { DesktopCommand.onboarding.send() }
-                DesktopCommandMenuItem(command: .shortcuts)
-            }
+            CommandGroup(replacing: .help) {}
         }
     }
 }
@@ -126,6 +123,5 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let wandRequestSwitchServer = Notification.Name("WandRequestSwitchServer")
-    static let wandRequestOpenMissions = Notification.Name("WandRequestOpenMissions")
     static let wandRequestSidebarSection = Notification.Name("WandRequestSidebarSection")
 }
