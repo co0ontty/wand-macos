@@ -1,13 +1,14 @@
 # macOS 客户端
 
 Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的会话与工作空间侧栏、专注阅读区、
-按需文件检查器，配合原生命令面板、快捷键和三步使用指南。交互参考 ChatGPT 桌面端，
-保留 Wand 的六种 AI 工具、PTY、工作树和并行任务语义。
+按需文件与 Git 检查器，配合原生命令面板和操作快捷键。交互参考 ChatGPT 桌面端，
+核心流程围绕六种 AI 工具、聊天、PTY、工作任务和工作树展开。
 
-聊天、会话、工作空间、任务看板、收件箱、Git 和文件预览使用原生界面；完整文件编辑、
-GitHub Issues、连接器与服务器设置通过应用内可定位工具页提供。具体支持方式和边界见
-[功能对齐矩阵](docs/macOS-parity.md)，视觉与行为规范见 [DESIGN.md](DESIGN.md) 和
-[UX-CONTRACT.md](UX-CONTRACT.md)。
+首页、会话、工作空间和任务看板共用主窗口。输入框底部按需配置工具、模型、目录与任务归属；
+设置保留外观、发送方式、连接、系统权限、故障排查和客户端更新。
+原生附加的并行任务/收件箱、网页工具目录、完整控制台包装层、入门页与快捷键说明页已移除；
+服务端与 Web 的功能及已有数据保持原状。当前视觉与行为规范见 [DESIGN.md](DESIGN.md) 和
+[UX-CONTRACT.md](UX-CONTRACT.md)；[功能对齐矩阵](docs/macOS-parity.md) 记录此前的对齐状态。
 
 ## 桌面快捷键
 
@@ -15,12 +16,13 @@ GitHub Issues、连接器与服务器设置通过应用内可定位工具页提�
 | --- | --- |
 | 新建会话 / 工作任务 | ⌘N / ⇧⌘N |
 | 搜索与命令 | ⇧⌘P |
-| 会话 / 工作空间 / 看板 / 收件箱 / 工具 | ⌘1 … ⌘5 |
+| 会话 / 工作空间 / 看板 | ⌘1 / ⌘2 / ⌘3 |
 | 显示侧栏 / 检查器 | ⌃⌘S / ⌥⌘I |
 | 聚焦输入 / 查找对话 | ⌘L / ⌘F |
-| 设置 / 快捷键说明 | ⌘, / ⇧⌘/ |
+| 设置 / 切换服务器 | ⌘, / ⇧⌘, |
+| 刷新连接 | ⇧⌘R |
 
-菜单、命令面板和说明由 `DesktopCommand` 同一目录驱动。Return 默认发送，Shift-Return
+操作快捷键由 `DesktopCommand` 统一提供给系统菜单和命令面板。Return 默认发送，Shift-Return
 换行；设置中可改为 Command-Return 发送。中文输入法选词不提交；PTY 保留终端按键行为。
 草稿只在本次 App 运行期间按服务器和会话恢复，不承诺退出后恢复。
 
@@ -38,7 +40,6 @@ GitHub Issues、连接器与服务器设置通过应用内可定位工具页提�
 - 新建：`POST /api/structured-sessions` 或 `POST /api/commands`
 - 输入与权限：`POST /api/sessions/:id/input` 及 escalation / permission 端点
 - 实时更新：连接 `/ws`，订阅会话并合并 `init` / `output` / `status` / `ended`
-- 工具：原生「工具与服务器设置」提供完整控制台、文件编辑、GitHub 和分组设置
 
 ## 本地构建（仅 macOS）
 
@@ -136,14 +137,13 @@ macos/Wand/
 ├── MainShellView.swift        # 主导航、模态路由、稳定阅读区与检查器
 ├── SessionSidebarView.swift   # 会话列表、目录、旧服务器历史兼容与删除流程
 ├── DesktopCommands.swift     # 菜单/命令/快捷键共用目录与搜索面板
-├── DesktopWelcomeView.swift  # 有直接操作入口的欢迎页
-├── DesktopOnboardingView.swift # 三步入门与可搜索快捷键
-├── DesktopWebToolsView.swift # 有上下文和文件草稿关闭保护的服务端工具
+├── DesktopWelcomeView.swift   # 包装共享首页输入区与导航按钮样式
 ├── WorkspaceListView.swift    # 项目树、任务、worktree 审查入口
 ├── WorkspaceTaskView.swift    # 任务工作窗口与标签条
+├── TaskBoardView.swift        # 看板任务与详情
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
-├── NewSessionView.swift       # 六个 Provider、会话类型、目录与权限模式
+├── NewSessionView.swift       # 首页输入、底部配置入口、默认值与创建草稿
 ├── GitQuickCommitView.swift   # 原生快捷提交面板
 ├── MacUpdateManager.swift     # 唯一更新状态源、Stable/Beta、缓存与待重启事务
 ├── UpdateInstaller.swift      # 下载、校验、原位替换、失败回滚与自动重启
@@ -151,5 +151,14 @@ macos/Wand/
 ├── WandSocket.swift           # WebSocket 订阅、重连与 resync
 ├── WandModels.swift           # 服务端协议 Codable 模型
 ├── LocalNetworkPermission.swift # macOS 15+ 本地网络权限：触发弹窗/被拒探测/设置深链
-└── WebContainerView.swift     # PTY 终端画布与完整网页版兜底
+└── WebContainerView.swift     # PTY 终端画布、登录与加载状态
 ```
+
+## 验收环境
+
+功能验收、真机验收与最终端到端验收统一连接这台机器已安装运行的 Wand 服务。
+连接信息从 `~/.wand/acceptance-connection.json` 读取，遵循父仓库 `AGENTS.md`；
+连接码不得写入仓库、提交、日志或截图。独立环境仅用于单元测试和开发期检查，不能代替最终验收。
+此前的桌面和首页截图属于历史记录；本次附加功能清理的验收结果将单独记录。
+
+附加功能清理及最终安装包验证见 [清理验收记录](docs/desktop-cleanup-2026-09-21/verification.md)。
