@@ -104,6 +104,36 @@ final class DesktopLifecycleTests: XCTestCase {
         XCTAssertEqual(SessionCreationDraft(context: .init(cwd: " \n\t ")).cwd, "")
     }
 
+    @MainActor
+    func testCreationToolbarUsesRefreshedTaskNameWithoutReplacingTheDraft() {
+        let draft = SessionCreationDraft(
+            context: .init(taskId: "task-1", taskName: "原任务名称"), initialMessage: "保留草稿"
+        )
+        let originalID = draft.id
+        XCTAssertEqual(SessionCreationToolbarTitle.title(for: draft), "原任务名称")
+        draft.tasks = [SessionTaskOption(
+            id: "task-1", workspaceId: "workspace", name: "重命名后的任务", workspaceName: "项目", cwd: "/repo"
+        )]
+        XCTAssertEqual(SessionCreationToolbarTitle.title(for: draft), "重命名后的任务")
+        XCTAssertEqual(draft.id, originalID)
+        XCTAssertEqual(draft.firstMessage, "保留草稿")
+        XCTAssertEqual(draft.context.taskName, "原任务名称", "Entry context remains an immutable identity snapshot")
+    }
+
+    @MainActor
+    func testCreationToolbarFollowsCurrentDestinationInsteadOfTheOriginalTask() {
+        let draft = SessionCreationDraft(context: .init(taskId: "task-1", taskName: "原任务"))
+        draft.tasks = [SessionTaskOption(
+            id: "task-2", workspaceId: "workspace", name: "当前任务", workspaceName: "项目", cwd: "/repo"
+        )]
+        draft.destination = "task-2"
+        XCTAssertEqual(SessionCreationToolbarTitle.title(for: draft), "当前任务")
+        for destination in ["new", "none", "not-yet-loaded"] {
+            draft.destination = destination
+            XCTAssertEqual(SessionCreationToolbarTitle.title(for: draft), "新建会话")
+        }
+    }
+
     private func withStore(_ body: (ServerStore, UserDefaults) -> Void) {
         let suite = "WandDesktopLifecycleTests-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!

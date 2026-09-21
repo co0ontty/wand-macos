@@ -750,9 +750,7 @@ struct MainShellView: View {
                     .accessibilityLabel("显示侧栏")
             }
             if showCreation {
-                Text(creationDraft.context.taskName ?? "新建会话")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(Theme.textSecondary).lineLimit(1)
+                SessionCreationToolbarTitle(draft: creationDraft)
             } else if showTaskBoard {
                 Text("任务看板").font(.system(size: 15, weight: .medium))
             } else if selectedWorkspaceTask == nil, let session = selectedSession {
@@ -1042,6 +1040,24 @@ struct MainColumn: View {
                     .id(sessionId)
             }
         }
+    }
+}
+
+/// Observe the draft itself so a refreshed task name updates the toolbar without replacing its identity.
+struct SessionCreationToolbarTitle: View {
+    @ObservedObject var draft: SessionCreationDraft
+
+    @MainActor
+    static func title(for draft: SessionCreationDraft) -> String {
+        draft.resolvedTaskName ?? "新建会话"
+    }
+
+    var body: some View {
+        Text(Self.title(for: draft))
+            .font(.system(size: 15, weight: .medium))
+            .foregroundColor(Theme.textSecondary)
+            .lineLimit(1)
+            .help(Self.title(for: draft))
     }
 }
 

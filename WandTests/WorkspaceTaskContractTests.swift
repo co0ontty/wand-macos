@@ -295,6 +295,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
     }
 
     func testUnassignedSessionDoesNotSendTaskBindingOrOverrideServerModelDefaults() async throws {
+        let message = "只检查当前目录\n保留第二行消息"
         let api = makeAPI { request in
             let body = try Self.requestBody(request)
             XCTAssertEqual(body["cwd"] as? String, "/repo")
@@ -303,13 +304,21 @@ final class WorkspaceTaskContractTests: XCTestCase {
             XCTAssertNil(body["model"])
             XCTAssertNil(body["mode"])
             XCTAssertNil(body["thinkingEffort"])
+            if request.url?.path == "/api/structured-sessions" {
+                XCTAssertEqual(body["prompt"] as? String, message)
+                XCTAssertNil(body["initialInput"])
+            } else {
+                XCTAssertEqual(request.url?.path, "/api/commands")
+                XCTAssertEqual(body["initialInput"] as? String, message)
+                XCTAssertNil(body["prompt"])
+            }
             return Data(#"{"id":"new-session"}"#.utf8)
         }
         _ = try await api.createStructuredSession(
-            provider: "codex", cwd: "/repo", mode: nil, model: "", prompt: nil
+            provider: "codex", cwd: "/repo", mode: nil, model: "", prompt: message
         )
         _ = try await api.createPtySession(
-            provider: "codex", cwd: "/repo", mode: nil, model: "", initialInput: nil
+            provider: "codex", cwd: "/repo", mode: nil, model: "", initialInput: message
         )
     }
 
@@ -362,6 +371,187 @@ final class WorkspaceTaskContractTests: XCTestCase {
         _ = try await store.createTask(name: "Isolated", directory: "/repo", worktree: nil)
         _ = try await store.createTask(name: "Shared", directory: "/repo", worktree: false)
         _ = try await store.createTask(name: "Scratch", directory: "", worktree: nil)
+    }
+
+    @MainActor
+    func testCachedCreationDraftRefreshesNewTasksWithoutReapplyingDefaults() async throws {
+        let groups = try JSONEncoder().encode(searchGroups())
+        let workspace = Workspace(id: "ui", name: "Updated project", cwd: "/repo/ui",
+            defaultProvider: .codex, layout: nil, createdAt: "", lastOpenedAt: nil)
+        let workspaces = try JSONEncoder().encode([workspace])
+        let api = makeAPI { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            switch request.url?.path {
+            case "/api/tasks": return groups
+            case "/api/workspaces": return workspaces
+            default:
+                XCTFail("Refreshing destinations must not reload or save defaults")
+                throw URLError(.unsupportedURL)
+            }
+        }
+        let draft = SessionCreationDraft(context: .init(cwd: "/chosen/directory"),
+                                         initialMessage: "  保留首页草稿\n以及第二行  ")
+        draft.initialized = true
+        draft.loading = false
+        draft.provider = .pi
+        draft.providerWasEdited = true
+        draft.selectedModel = "chosen-model"
+        draft.mode = .fullAccess
+        draft.fullAccessAcknowledged = true
+        draft.thinkingEffort = "high"
+        draft.sessionType = .pty
+        draft.taskName = "用户填写的名称"
+        draft.worktree = false
+        draft.tasks = [SessionTaskOption(id: "old-task", workspaceId: "ui", name: "Old",
+                                        workspaceName: "Old project", cwd: "/old")]
+
+        await draft.refreshOptions(api: api)
+
+        XCTAssertEqual(draft.tasks.map(\.id), ["checkout", "backend"])
+        XCTAssertEqual(draft.tasks.first?.cwd, "/repo/ui/.wand-worktrees/checkout")
+        XCTAssertEqual(draft.workspaces, [workspace])
+        XCTAssertEqual(draft.firstMessage, "  保留首页草稿\n以及第二行  ")
+        XCTAssertEqual(draft.cwd, "/chosen/directory")
+        XCTAssertEqual(draft.unboundCwd, "/chosen/directory")
+        XCTAssertEqual(draft.destination, "new")
+        XCTAssertEqual(draft.provider, .pi)
+        XCTAssertTrue(draft.providerWasEdited)
+        XCTAssertEqual(draft.selectedModel, "chosen-model")
+        XCTAssertEqual(draft.mode, .fullAccess)
+        XCTAssertTrue(draft.fullAccessAcknowledged)
+        XCTAssertEqual(draft.thinkingEffort, "high")
+        XCTAssertEqual(draft.sessionType, .pty)
+        XCTAssertEqual(draft.taskName, "用户填写的名称")
+        XCTAssertFalse(draft.worktree)
+        XCTAssertNil(draft.optionsRefreshError)
+        XCTAssertFalse(draft.refreshingOptions)
+    }
+
+    @MainActor
+    func testCreationOptionsKeepSelectedTaskWhenFreshListOmitsIt() async {
+        let api = makeAPI { _ in Data("[]".utf8) }
+        let draft = SessionCreationDraft()
+        draft.initialized = true
+        draft.destination = "selected-task"
+        draft.cwd = "/actual/worktree"
+        let binding = WorkspaceBinding(workspaceId: "ui", workspaceTaskId: "selected-task",
+                                       cwd: draft.cwd)
+        draft.binding = binding
+        draft.tasks = [
+            SessionTaskOption(id: "selected-task", workspaceId: "ui", name: "Selected",
+                              workspaceName: "Project", cwd: draft.cwd),
+            SessionTaskOption(id: "removed-task", workspaceId: "ui", name: "Removed",
+                              workspaceName: "Project", cwd: "/removed")
+        ]
+
+        await draft.refreshOptions(api: api)
+
+        XCTAssertEqual(draft.tasks.map(\.id), ["selected-task"])
+        XCTAssertEqual(draft.tasks.first?.label, "Project / Selected")
+        XCTAssertEqual(draft.destination, "selected-task")
+        XCTAssertEqual(draft.binding, binding)
+        XCTAssertEqual(draft.cwd, binding.cwd)
+    }
+
+    @MainActor
+    func testFailedCreationOptionsRefreshRetainsChoicesAndCanRetry() async {
+        let offline = makeAPI { _ in throw URLError(.notConnectedToInternet) }
+        let draft = SessionCreationDraft(initialMessage: "Keep this draft")
+        draft.initialized = true
+        draft.tasks = [SessionTaskOption(id: "cached", workspaceId: "ui", name: "Cached",
+                                        workspaceName: "Project", cwd: "/repo")]
+
+        await draft.refreshOptions(api: offline)
+
+        XCTAssertEqual(draft.tasks.map(\.id), ["cached"])
+        XCTAssertEqual(draft.firstMessage, "Keep this draft")
+        XCTAssertNotNil(draft.optionsRefreshError)
+        XCTAssertFalse(draft.refreshingOptions)
+        XCTAssertNil(draft.loadError, "An options error must not invalidate the initialized form")
+
+        await draft.refreshOptions(api: makeAPI { _ in Data("[]".utf8) })
+
+        XCTAssertTrue(draft.tasks.isEmpty)
+        XCTAssertNil(draft.optionsRefreshError)
+    }
+
+    @MainActor
+    func testCreationOptionsCoalesceConcurrentRefreshAndRefetchAfterInvalidation() async throws {
+        let started = expectation(description: "First options request started")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let lock = NSLock()
+        var taskRequests = 0
+        let updatedGroups = try JSONEncoder().encode(searchGroups())
+        let api = makeAPI { request in
+            guard request.url?.path == "/api/tasks" else { return Data("[]".utf8) }
+            let requestNumber = lock.withLock {
+                taskRequests += 1
+                return taskRequests
+            }
+            if requestNumber == 1 {
+                started.fulfill()
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+                return Data("[]".utf8)
+            }
+            return updatedGroups
+        }
+        let draft = SessionCreationDraft()
+        draft.initialized = true
+        let refresh = Task { await draft.refreshOptions(api: api) }
+        await fulfillment(of: [started], timeout: 2)
+
+        await draft.refreshOptions(api: api)
+        await draft.refreshOptions(api: api, invalidated: true)
+        await draft.refreshOptions(api: api, invalidated: true)
+        release.signal()
+        await refresh.value
+
+        XCTAssertEqual(lock.withLock { taskRequests }, 2,
+                       "Concurrent opens share the first request; mutations cause one fresh snapshot")
+        XCTAssertEqual(draft.tasks.map(\.id), ["checkout", "backend"])
+        XCTAssertFalse(draft.refreshingOptions)
+    }
+
+    @MainActor
+    func testCreationOptionsSurviveCancelledPopoverAndReopenWithPendingInvalidation() async throws {
+        let started = expectation(description: "Popover options request started")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let lock = NSLock()
+        var taskRequests = 0
+        let updatedGroups = try JSONEncoder().encode(searchGroups())
+        let api = makeAPI { request in
+            guard request.url?.path == "/api/tasks" else { return Data("[]".utf8) }
+            let requestNumber = lock.withLock {
+                taskRequests += 1
+                return taskRequests
+            }
+            if requestNumber == 1 {
+                started.fulfill()
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+                return Data("[]".utf8)
+            }
+            return updatedGroups
+        }
+        let draft = SessionCreationDraft(initialMessage: "保留快速切换前的草稿")
+        draft.initialized = true
+        let popover = Task { await draft.refreshOptions(api: api) }
+        await fulfillment(of: [started], timeout: 2)
+
+        popover.cancel()
+        await draft.refreshOptions(api: api, invalidated: true)
+        await draft.refreshOptions(api: api)
+        XCTAssertTrue(draft.refreshingOptions)
+        release.signal()
+        await popover.value
+
+        XCTAssertEqual(lock.withLock { taskRequests }, 2,
+                       "Closing the initiating popover must not lose the pending fresh read")
+        XCTAssertEqual(draft.tasks.map(\.id), ["checkout", "backend"])
+        XCTAssertEqual(draft.firstMessage, "保留快速切换前的草稿")
+        XCTAssertNil(draft.optionsRefreshError)
+        XCTAssertFalse(draft.refreshingOptions)
     }
 
     private var testSessions: [URLSession] = []

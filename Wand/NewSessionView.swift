@@ -47,6 +47,8 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     @Published var worktree = true
     @Published var tasks: [SessionTaskOption] = []
     @Published var workspaces: [Workspace] = []
+    @Published private(set) var refreshingOptions = false
+    @Published private(set) var optionsRefreshError: String?
     @Published var binding: WorkspaceBinding?
     @Published var loading = true
     @Published var loadingTask = false
@@ -61,6 +63,8 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     var defaultThinkingEffort = "off"
     var unboundCwd: String
     var taskGeneration = 0
+    private var optionsRefreshPending = false
+    private var optionsRefreshTask: Task<Void, Never>?
 
     init(context: SessionCreationContext = .init(), initialMessage: String = "") {
         self.context = context
@@ -69,6 +73,75 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
         unboundCwd = initialCwd
         firstMessage = initialMessage
         destination = context.taskId ?? (context.startsNewTask ? "new" : "none")
+    }
+
+    var resolvedTaskName: String? {
+        guard destination != "new", destination != "none" else { return nil }
+        if let name = tasks.first(where: { $0.id == destination })?.name,
+           !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return name
+        }
+        if context.taskId == destination, let name = context.taskName,
+           !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return name
+        }
+        return nil
+    }
+
+    /// Updating available destinations must never reinitialize an edited creation draft.
+    fileprivate func updateOptions(groups: [TaskDirectoryGroup], workspaces: [Workspace]) {
+        var options = groups.flatMap { group in
+            group.tasks.map { task in
+                SessionTaskOption(id: task.id, workspaceId: task.workspaceId, name: task.name,
+                                  workspaceName: group.workspaceName, cwd: task.cwd)
+            }
+        }
+        if destination != "new", destination != "none",
+           !options.contains(where: { $0.id == destination }) {
+            let selected = tasks.first(where: { $0.id == destination })
+                ?? SessionTaskOption(id: destination,
+                    workspaceId: binding?.workspaceId ?? context.workspaceId ?? "",
+                    name: context.taskId == destination ? context.taskName ?? "所选任务" : "所选任务",
+                    workspaceName: "", cwd: cwd)
+            options.append(selected)
+        }
+        self.workspaces = workspaces
+        tasks = options
+    }
+
+    func refreshOptions(api: WandAPI, invalidated: Bool = false) async {
+        guard initialized else { return }
+        if optionsRefreshTask != nil {
+            optionsRefreshPending = optionsRefreshPending || invalidated
+            return
+        }
+        refreshingOptions = true
+        // A popover or page can disappear while other callers still need this snapshot.
+        // Keep the shared read independent of the initiating SwiftUI task's cancellation.
+        let refresh = Task { await performOptionsRefresh(api: api) }
+        optionsRefreshTask = refresh
+        await refresh.value
+    }
+
+    private func performOptionsRefresh(api: WandAPI) async {
+        defer {
+            refreshingOptions = false
+            optionsRefreshTask = nil
+        }
+        repeat {
+            optionsRefreshPending = false
+            do {
+                async let groupsRequest = api.listTaskGroups()
+                async let workspacesRequest = api.listWorkspaces()
+                let (groups, workspaces) = try await (groupsRequest, workspacesRequest)
+                guard !Task.isCancelled else { return }
+                updateOptions(groups: groups, workspaces: workspaces)
+                optionsRefreshError = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                optionsRefreshError = "无法更新任务列表：" + error.localizedDescription
+            }
+        } while optionsRefreshPending
     }
 }
 
@@ -352,13 +425,16 @@ struct NewSessionView: View {
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
             if note.object as? DesktopCommand == .focusComposer { composerFocused = true }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .wandRefreshLists)) { _ in
+            Task { await draft.refreshOptions(api: api, invalidated: true) }
+        }
     }
 
     private var form: some View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 26) {
-                    Text(isExistingTask ? draft.tasks.first(where: { $0.id == draft.destination })?.name ?? "开始新的会话" : "今天，想完成什么？")
+                    Text(isExistingTask ? draft.resolvedTaskName ?? "开始新的会话" : "今天，想完成什么？")
                         .font(.system(size: 30, weight: .medium)).tracking(-0.7)
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(2).multilineTextAlignment(.center)
@@ -464,7 +540,7 @@ struct NewSessionView: View {
     private var taskLabel: String {
         if draft.destination == "new" { return "新建任务" }
         if draft.destination == "none" { return "不归属任务" }
-        return draft.tasks.first(where: { $0.id == draft.destination })?.name ?? "所选任务"
+        return draft.resolvedTaskName ?? "所选任务"
     }
 
     private var taskButton: some View {
@@ -476,6 +552,16 @@ struct NewSessionView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("归属任务").font(.system(size: 14, weight: .semibold))
                     destinationPicker
+                    if draft.refreshingOptions {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("正在更新任务列表…").font(.system(size: 12))
+                        }.foregroundColor(Theme.textSecondary)
+                    } else if let error = draft.optionsRefreshError {
+                        Text(error).font(.system(size: 12)).foregroundColor(Theme.danger)
+                        Button("重试更新") { Task { await draft.refreshOptions(api: api) } }
+                            .buttonStyle(WandSecondaryButtonStyle())
+                    }
                     if draft.destination == "new" {
                         TextField("任务名称（留空自动命名）", text: $draft.taskName).textFieldStyle(.roundedBorder)
                         Toggle("独立工作树", isOn: $draft.worktree).toggleStyle(.checkbox)
@@ -483,6 +569,7 @@ struct NewSessionView: View {
                     }
                     HStack { Spacer(); Button("完成") { showTaskOptions = false }.buttonStyle(WandSecondaryButtonStyle()) }
                 }.padding(20).frame(width: 340).background(Theme.workspaceBackground)
+                    .task { await draft.refreshOptions(api: api) }
             }
     }
 
@@ -851,7 +938,10 @@ struct NewSessionView: View {
     }
 
     private func loadInitial() async {
-        guard !draft.initialized else { return }
+        if draft.initialized {
+            await draft.refreshOptions(api: api)
+            return
+        }
         draft.loading = true
         draft.loadError = nil
         do {
@@ -864,17 +954,7 @@ struct NewSessionView: View {
                 configRequest, groupsRequest, workspacesRequest, modelsRequest, recentRequest
             )
             guard !Task.isCancelled else { return }
-            draft.workspaces = workspaces
-            draft.tasks = groups.flatMap { group in
-                group.tasks.map { task in
-                    SessionTaskOption(id: task.id, workspaceId: task.workspaceId, name: task.name,
-                                      workspaceName: group.workspaceName, cwd: task.cwd)
-                }
-            }
-            if let id = draft.context.taskId, !draft.tasks.contains(where: { $0.id == id }) {
-                draft.tasks.append(SessionTaskOption(id: id, workspaceId: draft.context.workspaceId ?? "",
-                    name: draft.context.taskName ?? "所选任务", workspaceName: "", cwd: draft.cwd))
-            }
+            draft.updateOptions(groups: groups, workspaces: workspaces)
             draft.defaultProvider = config.defaultProvider ?? "claude"
             draft.defaultMode = config.defaultMode ?? "managed"
             draft.defaultThinkingEffort = config.defaultThinkingEffort ?? "off"
