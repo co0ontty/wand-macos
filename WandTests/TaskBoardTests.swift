@@ -259,6 +259,50 @@ final class TaskBoardTests: XCTestCase {
         XCTAssertEqual(Set(wandBoardCollectLabels(tasks: tasks)), ["测试", "缺陷"])
     }
 
+    func testSearchScopeMatchesWebAndExcludesProjectName() throws {
+        let json = """
+        [
+          {"id":"a","title":"修登录","identifier":"TASK-1","description":"OAuth","labels":["缺陷"],
+           "workspaceId":"ws-1","workspace":{"id":"ws-1","name":"wand","cwd":"/repo"}}
+        ]
+        """.data(using: .utf8)!
+        let task = try JSONDecoder().decode([WandBoardTask].self, from: json)[0]
+        // 标题 / 编号 / 描述 / 标签命中（与 Web filterIssues 一致）。
+        XCTAssertTrue(wandBoardMatches(task: task, query: "修登录", workspaceId: "", filters: .empty))
+        XCTAssertTrue(wandBoardMatches(task: task, query: "task-1", workspaceId: "", filters: .empty))
+        XCTAssertTrue(wandBoardMatches(task: task, query: "oauth", workspaceId: "", filters: .empty))
+        XCTAssertTrue(wandBoardMatches(task: task, query: "缺陷", workspaceId: "", filters: .empty))
+        // 项目名不在搜索范围内。
+        XCTAssertEqual(task.workspace?.name, "wand")
+        XCTAssertFalse(wandBoardMatches(task: task, query: "wand", workspaceId: "", filters: .empty))
+    }
+
+    func testNewTaskDefaultsToLowPriorityLikeWeb() {
+        // Web `DEFAULT_WAND_TASK_PRIORITY`：没挑优先级时默认「低」。
+        XCTAssertEqual(WandBoardDraft().priority, WandBoardPriority.low.rawValue)
+    }
+
+    func testCreateMoreKeepsOnlyProjectStatusAndAgent() {
+        var draft = WandBoardDraft()
+        draft.workspaceId = "ws-9"
+        draft.status = WandBoardStatus.doing.rawValue
+        draft.priority = WandBoardPriority.urgent.rawValue
+        draft.milestoneId = "ms-1"
+        draft.dueDate = "2026-09-30"
+        draft.labels = "缺陷, 界面"
+        draft.agent = WandBoardTaskAgent(provider: "pi", model: "default", thinkingEffort: "max", mode: "managed", kind: "structured")
+
+        let next = wandBoardDraftAfterCreateMore(draft)
+        XCTAssertEqual(next.workspaceId, "ws-9")
+        XCTAssertEqual(next.status, WandBoardStatus.doing.rawValue)
+        XCTAssertEqual(next.agent.provider, "pi")
+        XCTAssertEqual(next.priority, WandBoardPriority.low.rawValue)
+        XCTAssertEqual(next.milestoneId, "")
+        XCTAssertEqual(next.dueDate, "")
+        XCTAssertEqual(next.labels, "")
+        XCTAssertTrue(next.isEmpty)
+    }
+
     func testLabelTonesFollowWebConvention() {
         XCTAssertEqual(wandBoardLabelTone("缺陷"), .bug)
         XCTAssertEqual(wandBoardLabelTone("Bug"), .bug)

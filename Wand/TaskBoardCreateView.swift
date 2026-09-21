@@ -5,7 +5,8 @@ struct WandBoardDraft {
     var title = ""
     var description = ""
     var status = WandBoardStatus.todo.rawValue
-    var priority = WandBoardPriority.none.rawValue
+    /// 与 Web `DEFAULT_WAND_TASK_PRIORITY` 一致：没挑优先级时默认「低」，不落成「无优先级」。
+    var priority = WandBoardPriority.low.rawValue
     var workspaceId = ""
     var dueDate = ""
     var milestoneId = ""
@@ -64,6 +65,8 @@ struct WandBoardCreateView: View {
         self.onCreateMilestone = onCreateMilestone
         var initial = WandBoardDraft()
         initial.status = initialStatus
+        initial.priority = WandBoardPriority.low.rawValue
+        initial.workspaceId = defaultWorkspaceId
         initial.agent = lastAgent
         _draft = State(initialValue: initial)
     }
@@ -195,9 +198,6 @@ struct WandBoardCreateView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
-                    .onAppear {
-                        if draft.workspaceId.isEmpty { draft.workspaceId = defaultWorkspaceId }
-                    }
                 }
                 WandBoardField("状态") {
                     Picker("", selection: $draft.status) {
@@ -285,22 +285,8 @@ struct WandBoardCreateView: View {
                 return
             }
             if creationMore {
-                // 保留项目 / 状态 / 标签之外的选择，方便连续录入同一批任务。
-                let keepWorkspace = draft.workspaceId
-                let keepStatus = draft.status
-                let keepPriority = draft.priority
-                let keepMilestone = draft.milestoneId
-                let keepDue = draft.dueDate
-                let keepLabels = draft.labels
-                let keepAgent = draft.agent
-                draft = WandBoardDraft()
-                draft.workspaceId = keepWorkspace
-                draft.status = keepStatus
-                draft.priority = keepPriority
-                draft.milestoneId = keepMilestone
-                draft.dueDate = keepDue
-                draft.labels = keepLabels
-                draft.agent = keepAgent
+                // 连续创建只沿用项目 / 状态 / Agent，其余回默认值。
+                draft = wandBoardDraftAfterCreateMore(draft)
                 focusedField = "description"
             } else {
                 dismiss()

@@ -649,6 +649,10 @@ struct WandBoardCard: View {
             return true
         }
         .contextMenu {
+            // 与 Web `TaskBoardContextMenu` 一致：打开 / 复制 ID / 派发 / 归档 / 恢复。
+            Button("打开") { onOpen() }
+            Button("复制 ID") { onCopyIdentifier() }
+            Divider()
             if status == .archived {
                 Button("恢复到等待认领") { onRestore() }
             } else {
@@ -657,8 +661,6 @@ struct WandBoardCard: View {
                 Divider()
                 Button("归档") { onArchive() }
             }
-            Divider()
-            Button("复制 ID") { onCopyIdentifier() }
         }
         .help(task.title)
     }

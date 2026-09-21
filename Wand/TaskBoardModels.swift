@@ -579,6 +579,16 @@ func wandBoardModelOptions(from catalog: ModelsResponse?, provider: String) -> [
 
 // MARK: - 派发时机
 
+/// 「创建更多」后的草稿重置：与 Web `emptyDraft(draft.workspaceId, draft.status, draft.agent)` 一致，
+/// 只沿用项目 / 状态 / Agent，其余（优先级、里程碑、截止日期、标签）回默认值。
+func wandBoardDraftAfterCreateMore(_ draft: WandBoardDraft) -> WandBoardDraft {
+    var next = WandBoardDraft()
+    next.workspaceId = draft.workspaceId
+    next.status = draft.status
+    next.agent = draft.agent
+    return next
+}
+
 /// 新建任务是否顺带完成第一次指派：「等待认领」列只创建，「处理中」列创建后立刻派发。
 func wandBoardCreateDispatches(status: String) -> Bool { status == WandBoardStatus.doing.rawValue }
 
@@ -832,7 +842,8 @@ func wandBoardMatches(
     if !filters.labels.isEmpty, !filters.labels.contains(where: { task.labels.contains($0) }) { return false }
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
     if needle.isEmpty { return true }
-    let haystack = ([task.title, task.identifier, task.description, task.workspace?.name ?? ""] + task.labels)
+    // 搜索范围与 Web `filterIssues` 一致：标题 / 编号 / 描述 / 标签，不含项目名。
+    let haystack = ([task.title, task.identifier, task.description] + task.labels)
         .joined(separator: " ")
     return haystack.localizedCaseInsensitiveContains(needle)
 }
