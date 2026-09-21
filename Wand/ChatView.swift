@@ -48,7 +48,8 @@ struct ChatView: View {
     @State private var showTroubleshooting = false
     @State private var composerInputHeight: CGFloat = 36
     @State private var composerIsComposing = false
-    @FocusState private var inputFocused: Bool
+    // AppKit owns first responder; an unattached SwiftUI FocusState resets to false.
+    @State private var inputFocused = false
 
     init(sessionId: String, api: WandAPI, gitStatusStore: GitStatusStore) {
         self.sessionId = sessionId
@@ -92,9 +93,6 @@ struct ChatView: View {
                 }
             }
         }
-        // 点消息区任意空白处收起键盘；输入栏在 safeAreaInset 里不受影响，
-        // 点发送 / 权限按钮不会误收。
-        .dismissKeyboardOnTap()
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(isPresented: $showQuickCommit) {
             GitQuickCommitView(
@@ -1876,6 +1874,11 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
             context.coordinator.parent.onCompositionChange(active)
         }
         textView.onCommandReturn = { context.coordinator.parent.onSubmit() }
+        textView.onFocusChange = { focused in
+            if context.coordinator.parent.isFocused != focused {
+                context.coordinator.parent.onFocusChange(focused)
+            }
+        }
         textView.isRichText = false
         textView.importsGraphics = false
         // Chat prompts and PTY commands must stay byte-for-byte as typed.
@@ -1963,6 +1966,7 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
         if let textView = scrollView.documentView as? ComposerNSTextView {
             textView.onMarkedTextChange = nil
             textView.onCommandReturn = nil
+            textView.onFocusChange = nil
             textView.delegate = nil
         }
     }
@@ -2041,7 +2045,21 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
     }
 }
 
-private final class ComposerNSTextView: NSTextView {
+final class ComposerNSTextView: NSTextView {
+    var onFocusChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFocusChange?(true) }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { onFocusChange?(false) }
+        return accepted
+    }
+
     var onMarkedTextChange: ((Bool) -> Void)?
     var onCommandReturn: (() -> Void)?
     var placeholder = "" {

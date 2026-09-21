@@ -57,6 +57,35 @@ final class DesktopLifecycleTests: XCTestCase {
         XCTAssertEqual(DesktopToolCloseDecision.resolve(value: "unsupported", error: nil), .close)
     }
 
+    func testFirstLaunchUsesComfortableDesktopSize() {
+        let screen = CGRect(x: 0, y: 40, width: 1920, height: 1040)
+        let frame = DesktopWindowGeometry.initialFrame(in: screen)
+        XCTAssertEqual(frame.size, CGSize(width: 1440, height: 880))
+        XCTAssertEqual(frame.midX, screen.midX)
+        XCTAssertEqual(frame.midY, screen.midY)
+    }
+
+    func testFirstLaunchFitsLaptopVisibleAreaWithoutCoveringMenuBarOrDock() {
+        let screen = CGRect(x: 0, y: 80, width: 1280, height: 695)
+        let frame = DesktopWindowGeometry.initialFrame(in: screen)
+        XCTAssertEqual(frame.size, CGSize(width: 1232, height: 647))
+        XCTAssertTrue(screen.contains(frame))
+    }
+
+    func testRestoredWindowIsRecoveredFromDisconnectedDisplay() {
+        let screen = CGRect(x: -1440, y: 80, width: 1440, height: 800)
+        let oldFrame = CGRect(x: 2200, y: -300, width: 1600, height: 1000)
+        XCTAssertEqual(DesktopWindowGeometry.fittedFrame(oldFrame, in: screen), screen)
+        let compact = CGRect(x: -1400, y: 120, width: 960, height: 650)
+        XCTAssertEqual(DesktopWindowGeometry.fittedFrame(compact, in: screen), compact)
+    }
+
+    func testExpiredLoginRequiresCredentialsButNetworkFailureCanRetry() {
+        XCTAssertTrue(ShellConnectionState.failure(WandAPI.APIError.unauthorized).requiresAuthentication)
+        XCTAssertFalse(ShellConnectionState.failure(WandAPI.APIError.network("offline")).requiresAuthentication)
+        XCTAssertFalse(ShellConnectionState.failure(WandAPI.APIError.server(status: 403, message: "forbidden")).requiresAuthentication)
+    }
+
     private func withStore(_ body: (ServerStore, UserDefaults) -> Void) {
         let suite = "WandDesktopLifecycleTests-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!

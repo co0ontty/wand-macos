@@ -145,3 +145,19 @@ xcodebuild -project Wand.xcodeproj -scheme Wand -destination 'platform=macOS' te
 本次验证边界：原生 UI 自动化环境无法获取 App 与 Chrome 的 CGWindow（`cgWindowNotFound`）。
 离屏 NSHostingView 渲染可用于检查真实 SwiftUI 的布局，但不覆盖系统 sheet 几何、焦点、
 菜单、中文输入法、网络操作或完整用户流程。这些项目仍需在可交互的 macOS 桌面补验。
+
+## 2026-09-21 实机窗口修正
+
+- 窗口初始几何由 `DesktopWindowGeometry` 负责：1440 × 880 pt，上限为显示器可用区域，
+  独立保存尺寸位置并恢复；新几何键使旧版 900 × 600 的隐式默认尺寸不继续影响首次打开。
+- 主窗口在 Scene 创建阶段使用 hiddenTitleBar；保留系统菜单、交通灯与窗口管理。
+  标题行空白交给所属 NSWindow 原生拖拽，禁止整片正文背景移动窗口；attached sheet 不独立拖离主窗。
+- 侧栏设置一点击达；主标题行复用当前会话标题，避免第二条重复标题栏。
+  检查器在窄/宽布局之间保留打开状态。
+- 401 登录失效使用重新登录入口，打开可取消的连接 sheet，不先断开或清除原会话。
+  网络失败保留重试与切换服务器入口；重试成功刷新侧栏列表。
+- 切换/重新登录 sheet 的取消支持 Escape，最小高度 540 pt，长内容内部滚动。
+
+- 原生聊天输入的焦点由 `ComposerNSTextView` 的 first responder 回调驱动，
+  SwiftUI 只保存状态，不使用未绑定控件的 FocusState。点击与 Command-L 均可聚焦；
+  中文粘贴、输入与会话切换草稿恢复需在真实窗口验收。新建会话和快捷提交移除触屏式收键盘手势。

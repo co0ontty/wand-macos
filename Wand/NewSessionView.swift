@@ -315,7 +315,6 @@ struct NewSessionView: View {
                 .padding(.horizontal, 22)
                 .padding(.vertical, 14)
             }
-            .dismissKeyboardOnTap()
             .sheet(isPresented: $showBrowser) {
                 DirectoryBrowserView(api: api, startPath: cwd) { picked in
                     cwd = picked

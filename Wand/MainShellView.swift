@@ -6,7 +6,19 @@ import SwiftUI
 enum ShellConnectionState {
     case connecting
     case connected
-    case disconnected(String)
+    case disconnected(String, requiresAuthentication: Bool = false)
+
+    static func failure(_ error: Error) -> ShellConnectionState {
+        if let apiError = error as? WandAPI.APIError, case .unauthorized = apiError {
+            return .disconnected(error.localizedDescription, requiresAuthentication: true)
+        }
+        return .disconnected(error.localizedDescription)
+    }
+
+    var requiresAuthentication: Bool {
+        if case .disconnected(_, let required) = self { return required }
+        return false
+    }
 }
 
 enum SidebarSection: String {
@@ -196,7 +208,7 @@ struct MainShellView: View {
                     errorMessage: disconnectedMessage,
                     source: "主窗口连接状态"
                 ),
-                onRetry: checkConnection
+                onRetry: recoverConnection
             )
         }
         .sheet(isPresented: $showMissions) {
@@ -322,19 +334,7 @@ struct MainShellView: View {
                                 .padding(.bottom, 8)
                         }
                     }
-                    .onChange(of: geo.size.width) { newWidth in
-                        // 从常驻三栏进入紧凑布局时主动收起；用户随后仍可按需打开临时 Inspector。
-                        if newWidth < persistentRightPanelMinimumWidth && filePanelOpen {
-                            withAnimation(structuralAnimation) {
-                                filePanelOpen = false
-                            }
-                        }
-                    }
-                    .onAppear {
-                        if geo.size.width < persistentRightPanelMinimumWidth {
-                            filePanelOpen = false
-                        }
-                    }
+
             }
         .background(WandAmbientBackground())
         .frame(minWidth: 900, minHeight: 600)
@@ -350,12 +350,20 @@ struct MainShellView: View {
     }
 
     private var disconnectedMessage: String? {
-        if case .disconnected(let message) = connectionState { return message }
+        if case .disconnected(let message, _) = connectionState { return message }
         return nil
     }
 
-    private func checkConnection() {
-        Task { await checkConnectionAsync() }
+    private var recoveryTitle: String {
+        connectionState.requiresAuthentication ? "重新登录" : "重试连接"
+    }
+
+    private func recoverConnection() {
+        if connectionState.requiresAuthentication {
+            NotificationCenter.default.post(name: .wandRequestSwitchServer, object: serverURL)
+        } else {
+            Task { await checkConnectionAsync() }
+        }
     }
 
     private func checkConnectionAsync() async {
@@ -363,8 +371,10 @@ struct MainShellView: View {
         do {
             _ = try await api.listSessions()
             connectionState = .connected
+            NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+            await workspaceStore.loadTaskGroups(force: true)
         } catch {
-            connectionState = .disconnected(error.localizedDescription)
+            connectionState = .failure(error)
         }
     }
 
@@ -381,7 +391,7 @@ struct MainShellView: View {
                 selectedSession = session
                 connectionState = .connected
             } catch {
-                connectionState = .disconnected(error.localizedDescription)
+                connectionState = .failure(error)
             }
         }
     }
@@ -424,7 +434,7 @@ struct MainShellView: View {
                             Image(systemName: "wifi.exclamationmark")
                             Text("连接中断，当前内容已保留。" + message).lineLimit(1)
                             Spacer()
-                            Button("重新连接", action: checkConnection)
+                            Button(recoveryTitle, action: recoverConnection)
                         }.font(.system(size: 12)).foregroundColor(Theme.warning).padding(10)
                     }
                     mainColumn
@@ -503,7 +513,7 @@ struct MainShellView: View {
                             let snapshot = try await api.getSession(id: session.id)
                             presentSession(snapshot, keepWorkspaceContext: true)
                         } catch {
-                            connectionState = .disconnected(error.localizedDescription)
+                            connectionState = .failure(error)
                         }
                     }
                 },
@@ -557,8 +567,9 @@ struct MainShellView: View {
         }
         .padding(.leading, 74)
         .padding(.trailing, 6)
-        .frame(height: 40)
+        .frame(height: 44)
         .frame(maxWidth: .infinity)
+        .windowDrag()
     }
 
     private var filePanelToggleButton: some View {
@@ -577,29 +588,12 @@ struct MainShellView: View {
     }
 
     private var settingsMenu: some View {
-        Menu {
-            Button(action: { showTaskBoard = true }) {
-                Label("任务管理", systemImage: "checklist")
-            }
-            Button(action: { showMissions = true }) {
-                Label("并行任务", systemImage: "square.stack.3d.up")
-            }
-            Button(action: { presentSettings = true }) {
-                Label("设置…", systemImage: "gearshape")
-            }
-            Button(action: { webTool = .completeWeb }) {
-                Label("完整控制台", systemImage: "safari")
-            }
-        } label: {
-            Image(systemName: "gearshape")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(Theme.textSecondary)
-                .frame(width: 26, height: 26)
-                .contentShape(Circle())
+        Button { handle(.settings) } label: {
+            Image(systemName: "gearshape").frame(width: 28, height: 28)
         }
-        .menuStyle(.borderlessButton)
-        .help("设置与更多")
-        .accessibilityLabel("设置与更多")
+        .buttonStyle(WandIconButtonStyle())
+        .help("设置 · ⌘,")
+        .accessibilityLabel("设置")
     }
 
     /// 左侧只承载全局身份和连接状态。把服务器信息做成可点击的菜单，而非一个
@@ -613,8 +607,8 @@ struct MainShellView: View {
 
             Divider()
 
-            Button(action: checkConnection) {
-                Label("重新连接", systemImage: "arrow.clockwise")
+            Button(action: recoverConnection) {
+                Label(recoveryTitle, systemImage: "arrow.clockwise")
             }
 
             if case .disconnected = connectionState {
@@ -700,7 +694,7 @@ struct MainShellView: View {
         switch connectionState {
         case .connecting: return "正在连接"
         case .connected: return "已连接"
-        case .disconnected(let message): return "连接失败：\(message)"
+        case .disconnected(let message, _): return "连接失败：\(message)"
         }
     }
 
@@ -708,7 +702,7 @@ struct MainShellView: View {
         switch connectionState {
         case .connecting: return "正在连接服务器"
         case .connected: return "服务器已连接"
-        case .disconnected(let message): return "连接失败：\(message)"
+        case .disconnected(let message, _): return "连接失败：\(message)"
         }
     }
 
@@ -795,13 +789,22 @@ struct MainShellView: View {
 
     private var desktopToolbar: some View {
         HStack(spacing: 10) {
-            Button { handle(.toggleSidebar) } label: {
-                Image(systemName: "sidebar.left").frame(width: 28, height: 28)
-            }.buttonStyle(WandIconButtonStyle()).help("显示 / 隐藏侧栏 · ⌃⌘S")
-                .accessibilityLabel("显示或隐藏侧栏")
-            Text(selectedWorkspaceTask?.workspace.name ?? (sidebarSection == .sessions ? "会话" : "工作空间"))
-                .font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
-            Spacer()
+            if !sidebarVisible {
+                Button { handle(.toggleSidebar) } label: {
+                    Image(systemName: "sidebar.left").frame(width: 28, height: 28)
+                }.buttonStyle(WandIconButtonStyle()).help("显示侧栏 · ⌃⌘S")
+                    .accessibilityLabel("显示侧栏")
+            }
+            if selectedWorkspaceTask == nil, let session = selectedSession {
+                BrandLogo(provider: selectedSessionProvider, color: Theme.textSecondary)
+                    .frame(width: 16, height: 16)
+                Text(session.displayTitle).font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1).help(session.displayTitle)
+            } else {
+                Text(selectedWorkspaceTask?.workspace.name ?? (sidebarSection == .sessions ? "会话" : "工作空间"))
+                    .font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
+            }
+            WindowDragRegion().frame(minWidth: 12, maxWidth: .infinity)
             if selectedSessionId != nil {
                 Button { webTool = .files } label: { Image(systemName: "doc.badge.gearshape").frame(width: 28, height: 28) }
                     .buttonStyle(WandIconButtonStyle()).help("编辑与管理文件").accessibilityLabel("编辑与管理文件")
@@ -812,6 +815,7 @@ struct MainShellView: View {
         }
         .padding(.leading, sidebarVisible ? 16 : 78).padding(.trailing, 14).frame(height: 44)
         .background(Theme.workspaceBackground)
+        .windowDrag()
     }
 
     private func openPendingDestination() {
@@ -845,10 +849,7 @@ struct MainShellView: View {
         case .webTools: webTool = .general
         case .onboarding: showOnboarding = true
         case .shortcuts: showShortcuts = true
-        case .reconnect:
-            checkConnection()
-            NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
-            Task { await workspaceStore.loadTaskGroups(force: true) }
+        case .reconnect: recoverConnection()
         case .focusComposer, .findConversation: break
         }
     }
@@ -874,10 +875,12 @@ struct MainShellView: View {
 
     @ViewBuilder
     private var mainColumn: some View {
-        if case .disconnected(let message) = connectionState, selectedSessionId == nil, selectedWorkspaceTask == nil {
+        if case .disconnected(let message, _) = connectionState, selectedSessionId == nil, selectedWorkspaceTask == nil {
             ConnectionFailureView(
                 message: message,
-                onRetry: checkConnection,
+                requiresAuthentication: connectionState.requiresAuthentication,
+                onRetry: recoverConnection,
+                onSwitchServer: { NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil) },
                 onTroubleshoot: { showTroubleshooting = true }
             )
         } else if let selection = selectedWorkspaceTask {
@@ -896,7 +899,7 @@ struct MainShellView: View {
                 provider: selectedSessionProvider,
                 session: selectedSession,
                 gitStatusStore: gitStatusStore,
-                showsHeader: true
+                showsHeader: false
             )
         } else {
             DesktopWelcomeView(onCommand: handle)
@@ -925,7 +928,7 @@ struct MainShellView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(WandIconButtonStyle())
-            .help("折叠文件面板")
+            .help("折叠文件面板").accessibilityLabel("折叠文件面板")
         }
     }
 
@@ -968,7 +971,9 @@ struct MainShellView: View {
 
 private struct ConnectionFailureView: View {
     let message: String
+    let requiresAuthentication: Bool
     let onRetry: () -> Void
+    let onSwitchServer: () -> Void
     let onTroubleshoot: () -> Void
 
     var body: some View {
@@ -977,7 +982,7 @@ private struct ConnectionFailureView: View {
             Image(systemName: "wifi.exclamationmark")
                 .font(.system(size: 34, weight: .medium))
                 .foregroundColor(Theme.danger)
-            Text("无法连接服务器")
+            Text(requiresAuthentication ? "请重新登录" : "无法连接服务器")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
             Text(message)
@@ -987,8 +992,10 @@ private struct ConnectionFailureView: View {
                 .frame(maxWidth: 460)
                 .textSelection(.enabled)
             HStack(spacing: 10) {
-                Button("重试", action: onRetry)
-                    .buttonStyle(.borderedProminent).tint(Theme.brand)
+                Button(requiresAuthentication ? "重新登录" : "重试连接", action: onRetry)
+                    .buttonStyle(WandPrimaryButtonStyle())
+                Button("切换服务器", action: onSwitchServer)
+                    .buttonStyle(WandSecondaryButtonStyle())
                 Button(action: onTroubleshoot) {
                     Label("故障排查", systemImage: "stethoscope")
                 }

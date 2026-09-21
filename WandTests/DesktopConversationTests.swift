@@ -5,6 +5,22 @@ import XCTest
 
 final class DesktopConversationTests: XCTestCase {
     @MainActor
+    func testComposerReportsFocusBeforeTypingAndPreservesNativeEditing() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let editor = ComposerNSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
+        window.contentView = editor
+        var focus: [Bool] = []
+        editor.onFocusChange = { focus.append($0) }
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertEqual(focus, [true])
+        editor.insertText("中文草稿", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(editor.string, "中文草稿")
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        XCTAssertEqual(focus, [true, false])
+    }
+
+    @MainActor
     func testSwitchingSessionsAndServersKeepsIndependentDrafts() {
         let cache = ConversationDraftCache()
         let firstServer = URL(string: "https://first.example")!

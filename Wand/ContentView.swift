@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var store: ServerStore
     @State private var showSwitchSheet = false
+    @State private var reconnectingServerURL: URL?
     @AppStorage("wand.appearanceMode") private var appearanceMode = "system"
     @State private var showGuide = false
     @State private var showShortcuts = false
@@ -31,10 +32,11 @@ struct ContentView: View {
             if command == .shortcuts { showShortcuts = true }
         }
         .sheet(isPresented: $showSwitchSheet) {
-            ConnectView(isPresentedAsSheet: true) { showSwitchSheet = false }
+            ConnectView(isPresentedAsSheet: true, reconnectingServerURL: reconnectingServerURL) { showSwitchSheet = false }
                 .environmentObject(store)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .wandRequestSwitchServer)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .wandRequestSwitchServer)) { note in
+            reconnectingServerURL = note.object as? URL
             showSwitchSheet = true
         }
     }

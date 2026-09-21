@@ -92,7 +92,6 @@ struct GitQuickCommitView: View {
                 .padding(20)
             }
             .background { WandAmbientBackground() }
-            .dismissKeyboardOnTap()
         }
         .frame(minWidth: 720, minHeight: 540)
         .focusedSceneValue(\.wandDesktopCommandsEnabled, false)

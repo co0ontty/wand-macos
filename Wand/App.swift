@@ -7,22 +7,18 @@ struct WandApp: App {
     @StateObject private var store = ServerStore.shared
 
     var body: some Scene {
-        // 用 minWidth + idealWidth + maxWidth=.infinity 让窗口可自由拖大/缩小。
-        // 只写 .frame(minWidth:minHeight:) 时 macOS 13+ 的 .windowResizability(.contentSize)
-        // 会把窗口的最大尺寸钉死在 min 上，看起来就是"窗口大小无法修改"。
-        // 通过显式声明 maxWidth/maxHeight 为 .infinity，内容的尺寸约束就允许任意放大。
         WindowGroup("Wand") {
             ContentView()
                 .environmentObject(store)
-                // 隐藏原生标题栏：内容铺满整个窗口，红绿灯浮在侧栏首行左侧。
                 .extendContentUnderTitleBar()
                 .frame(
-                    // 横屏布局:ideal 1440 × 880,最小 900 × 600;
-                    // maxWidth / maxHeight 显式设 .infinity 让窗口可自由拖大/缩。
-                    minWidth: 900, idealWidth: 1440, maxWidth: .infinity,
-                    minHeight: 600, idealHeight: 880, maxHeight: .infinity
+                    minWidth: DesktopWindowGeometry.minimumSize.width,
+                    idealWidth: DesktopWindowGeometry.preferredSize.width, maxWidth: .infinity,
+                    minHeight: DesktopWindowGeometry.minimumSize.height,
+                    idealHeight: DesktopWindowGeometry.preferredSize.height, maxHeight: .infinity
                 )
         }
+        .windowStyle(.hiddenTitleBar)
         // Menu bar, command palette and the shortcut guide share one catalog.
         .commands {
             CommandGroup(replacing: .newItem) {

@@ -6,6 +6,7 @@ struct ConnectView: View {
     @EnvironmentObject var store: ServerStore
 
     var isPresentedAsSheet: Bool = false
+    var reconnectingServerURL: URL? = nil
     var onDismiss: (() -> Void)? = nil
 
     @State private var input: String = ""
@@ -46,7 +47,7 @@ struct ConnectView: View {
         }
         .frame(
             minWidth: isPresentedAsSheet ? 520 : nil,
-            minHeight: isPresentedAsSheet ? 580 : nil
+            minHeight: isPresentedAsSheet ? 540 : nil
         )
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { inputFocused = true }
@@ -67,11 +68,12 @@ struct ConnectView: View {
 
     private var sheetHeader: some View {
         HStack {
-            Text("切换服务器")
+            Text(reconnectingServerURL == nil ? "切换服务器" : "重新登录")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
             Spacer()
             Button("取消") { onDismiss?() }
+                .keyboardShortcut(.cancelAction)
                 .buttonStyle(.plain)
                 .foregroundColor(Theme.textSecondary)
         }
@@ -196,6 +198,11 @@ struct ConnectView: View {
 
     private var inputField: some View {
         VStack(alignment: .leading, spacing: 7) {
+            if reconnectingServerURL != nil {
+                Text("登录已失效，请从服务器设置获取新的连接码并粘贴到下方。原来的会话和内容会保留。")
+                    .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("连接码 / 服务器地址")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)

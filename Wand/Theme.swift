@@ -362,12 +362,6 @@ private struct WandSelectionSurfaceModifier: ViewModifier {
 // MARK: - 兼容旧 API
 
 extension View {
-    func dismissKeyboardOnTap() -> some View {
-        onTapGesture {
-            NSApp.keyWindow?.makeFirstResponder(nil)
-        }
-    }
-
     /// Wand 文本输入表面：系统字体与原生编辑行为保持不变，只统一安静的静态态、
     /// 清晰的聚焦态和无过冲反馈。高对比度下改用实底与更粗描边。
     func wandInputSurface(
@@ -398,10 +392,9 @@ extension View {
         background(MainWindowTitleBarConfigurator())
     }
 
-    /// 挂载后整块 view 都变成可拖动区,拖动时通过 NSWindow.setFrameOrigin 移动窗口。
-    /// 配合 hideNativeTitleBar() 一起用:原生标题栏关掉后,这个修饰符给用户提供替代拖拽入口。
+    /// 标题区域的空白使用原生窗口拖拽，按钮与输入仍保留自己的命中和焦点。
     func windowDrag() -> some View {
-        modifier(WindowDragModifier())
+        background(WindowDragRegion())
     }
 }
 
@@ -440,48 +433,25 @@ private struct WandInputSurfaceModifier: ViewModifier {
     }
 }
 
-/// SwiftUI 版 window drag:用 DragGesture 拿到 cumulative translation,
-/// 再找到当前 NSWindow 改 frame.origin;比 NSView mouseDown 拦截更可靠——
-/// 不会被 HStack 子视图抢事件,只要挂的层级有 contentShape(Rectangle()) 就生效。
-private struct WindowDragModifier: ViewModifier {
-    @State private var dragOrigin: CGPoint?
-    func body(content: Content) -> some View {
-        content.gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    // sheet 是个独立 NSWindow(由 SwiftUI 创建),不在 NSApp.keyWindow 上。
-                    // 走「最后一个有 sheet 的 window」的启发式;SwiftUI sheet 是最后一个
-                    // opened sheet,直接拿 NSApp.windows.last 通常就是它。
-                    guard let window = WindowDragModifier.targetWindow() else { return }
-                    if dragOrigin == nil {
-                        dragOrigin = window.frame.origin
-                    }
-                    let start = dragOrigin ?? window.frame.origin
-                    let newOrigin = CGPoint(
-                        x: start.x + value.translation.width,
-                        y: start.y - value.translation.height
-                    )
-                    window.setFrameOrigin(newOrigin)
-                }
-                .onEnded { _ in
-                    dragOrigin = nil
-                }
-        )
-    }
+struct WindowDragRegion: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { WindowDragNSView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
 
-    /// 找当前 SwiftUI 弹窗对应的 NSWindow:sheet 是 attachedSheet 类型,普通 window
-    /// 走 keyWindow;两个都取不到就退到 mainWindow。
-    private static func targetWindow() -> NSWindow? {
-        for w in NSApp.windows.reversed() {
-            if w.isKind(of: NSWindow.self) && !w.isMainWindow {
-                // sheet 是 attached sheet(通过 -[NSWindow beginSheet:]),SwiftUI 里
-                // 走 NSPanel style 也有可能,这里按 attachedSheet != nil 判定
-                if w.sheetParent != nil || w.styleMask.contains(.titled) {
-                    return w
-                }
+private final class WindowDragNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window, window.sheetParent == nil else { return }
+        if event.clickCount == 2 {
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": window.miniaturize(nil)
+            case "None": break
+            default: window.zoom(nil)
             }
+        } else {
+            window.performDrag(with: event)
         }
-        return NSApp.keyWindow ?? NSApp.mainWindow
     }
 }
 
@@ -512,14 +482,12 @@ private final class SheetTitleBarNSView: NSView {
         if window.styleMask.contains(.titled) {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
-            window.isMovableByWindowBackground = true
+            window.isMovableByWindowBackground = false
         }
     }
 }
 
-/// 主窗口版：在 sheet 版基础上再把内容延伸进标题栏区域（fullSizeContentView），
-/// 主窗口版：在 sheet 版基础上再把内容延伸进标题栏区域（fullSizeContentView），
-/// 内容直接铺到窗口上沿，红绿灯浮在侧栏首行上而不是压一条系统灰条。
+/// Scene 在创建窗口时配置标题栏；这里仅负责首次几何与跨启动恢复。
 private struct MainWindowTitleBarConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         MainWindowTitleBarNSView()
@@ -530,21 +498,103 @@ private struct MainWindowTitleBarConfigurator: NSViewRepresentable {
     }
 }
 
+enum DesktopWindowGeometry {
+    static let minimumSize = CGSize(width: 900, height: 600)
+    static let preferredSize = CGSize(width: 1440, height: 880)
+    static let frameKey = "wand.desktop.windowFrame.v2"
+
+    static func initialFrame(in visibleFrame: CGRect) -> CGRect {
+        let size = CGSize(
+            width: min(preferredSize.width, max(minimumSize.width, visibleFrame.width - 48)),
+            height: min(preferredSize.height, max(minimumSize.height, visibleFrame.height - 48))
+        )
+        return fittedFrame(CGRect(origin: CGPoint(
+            x: visibleFrame.midX - size.width / 2,
+            y: visibleFrame.midY - size.height / 2
+        ), size: size), in: visibleFrame)
+    }
+
+    static func fittedFrame(_ frame: CGRect, in visibleFrame: CGRect) -> CGRect {
+        let size = CGSize(width: min(frame.width, visibleFrame.width),
+                          height: min(frame.height, visibleFrame.height))
+        return CGRect(x: min(max(frame.minX, visibleFrame.minX), visibleFrame.maxX - size.width),
+                      y: min(max(frame.minY, visibleFrame.minY), visibleFrame.maxY - size.height),
+                      width: size.width, height: size.height)
+    }
+}
+
 private final class MainWindowTitleBarNSView: NSView {
+    private weak var configuredWindow: NSWindow?
+    private var observers: [NSObjectProtocol] = []
+    private var transitioningFullScreen = false
+
+    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyToWindow()
     }
 
     func applyToWindow() {
-        guard let window, window.styleMask.contains(.titled) else { return }
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        if !window.styleMask.contains(.fullSizeContentView) {
-            window.styleMask.insert(.fullSizeContentView)
+        guard let window, window.sheetParent == nil, configuredWindow !== window else { return }
+        configuredWindow = window
+        window.isMovableByWindowBackground = false
+        window.tabbingMode = .disallowed
+        // Defer until SwiftUI has applied its initial content constraints.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window, self.window === window,
+                  let screen = window.screen ?? NSScreen.main else { return }
+            let saved = UserDefaults.standard.string(forKey: DesktopWindowGeometry.frameKey)
+                .map(NSRectFromString)
+            let restored = saved.flatMap { frame -> CGRect? in
+                guard frame.width >= DesktopWindowGeometry.minimumSize.width,
+                      frame.height >= DesktopWindowGeometry.minimumSize.height,
+                      [frame.minX, frame.minY, frame.width, frame.height].allSatisfy({ $0.isFinite }) else { return nil }
+                return frame
+            }
+            let targetScreen = restored.flatMap { frame in
+                NSScreen.screens.max {
+                    let left = $0.visibleFrame.intersection(frame)
+                    let right = $1.visibleFrame.intersection(frame)
+                    return left.width * left.height < right.width * right.height
+                }
+            } ?? screen
+            let frame = restored.map { DesktopWindowGeometry.fittedFrame($0, in: targetScreen.visibleFrame) }
+                ?? DesktopWindowGeometry.initialFrame(in: screen.visibleFrame)
+            window.setFrame(frame, display: true)
+            self.observeGeometry(of: window)
+            self.saveGeometry(of: window)
         }
-        window.isMovableByWindowBackground = true
     }
+
+    private func observeGeometry(of window: NSWindow) {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers.removeAll()
+        let names: [Notification.Name] = [NSWindow.didMoveNotification, NSWindow.didResizeNotification]
+        for name in names + [NSWindow.willCloseNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self, weak window] _ in
+                guard let self, let window else { return }
+                self.saveGeometry(of: window)
+            })
+        }
+        for name in [NSWindow.willEnterFullScreenNotification, NSWindow.willExitFullScreenNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                self?.transitioningFullScreen = true
+            })
+        }
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.transitioningFullScreen = false
+            self.saveGeometry(of: window)
+        })
+    }
+
+    private func saveGeometry(of window: NSWindow) {
+        guard !transitioningFullScreen, !window.styleMask.contains(.fullScreen),
+              !window.isMiniaturized else { return }
+        UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: DesktopWindowGeometry.frameKey)
+    }
+
 }
 
 // MARK: - 按钮样式
