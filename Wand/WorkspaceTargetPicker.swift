@@ -25,6 +25,7 @@ struct WorkspaceTargetPicker: View {
                 sheetFooter
             }
             .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 580)
+            .focusedSceneValue(\.wandDesktopCommandsEnabled, false)
             .background(WandAmbientBackground())
             .hideNativeTitleBar()
             .onChange(of: store.pickerPresented) { presented in

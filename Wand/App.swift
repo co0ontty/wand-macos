@@ -23,28 +23,39 @@ struct WandApp: App {
                     minHeight: 600, idealHeight: 880, maxHeight: .infinity
                 )
         }
-        // 顶部不再使用系统统一工具栏，也不设横贯窗口的自绘顶栏；
-        // 全局操作收进 MainShellView 的侧栏首行，与暖米色主题和扁平面板统一。
+        // Menu bar, command palette and the shortcut guide share one catalog.
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                DesktopCommandMenuItem(command: .newSession)
+                DesktopCommandMenuItem(command: .newTask)
+            }
+            CommandGroup(replacing: .appSettings) {
+                DesktopCommandMenuItem(command: .settings)
+            }
             CommandGroup(after: .appInfo) {
                 Button("检查更新…") {
-                    Task { @MainActor in
-                        await UpdateFlowController.shared.checkManually()
-                    }
+                    Task { @MainActor in await UpdateFlowController.shared.checkManually() }
                 }
                 Button("切换服务器…") {
                     NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
+                }.keyboardShortcut(",", modifiers: [.command, .shift])
+            }
+            CommandMenu("前往") {
+                ForEach([DesktopCommand.search, .sessions, .workspaces, .taskBoard, .missions, .webTools]) {
+                    DesktopCommandMenuItem(command: $0)
                 }
-                .keyboardShortcut(",", modifiers: [.command, .shift])
-                Button("显示任务") {
-                    NotificationCenter.default.post(name: .wandRequestSidebarSection, object: SidebarSection.workspaces)
-                }
-                .keyboardShortcut("1", modifiers: .command)
-                Button("并行任务") {
-                    NotificationCenter.default.post(name: .wandRequestOpenMissions, object: nil)
-                }
-                .keyboardShortcut("2", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .sidebar) {
+                DesktopCommandMenuItem(command: .toggleSidebar)
+                DesktopCommandMenuItem(command: .toggleInspector)
+                Divider()
+                DesktopCommandMenuItem(command: .focusComposer)
+                DesktopCommandMenuItem(command: .findConversation)
+                DesktopCommandMenuItem(command: .reconnect)
+            }
+            CommandGroup(replacing: .help) {
+                Button("Wand 使用入门") { DesktopCommand.onboarding.send() }
+                DesktopCommandMenuItem(command: .shortcuts)
             }
         }
     }

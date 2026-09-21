@@ -154,7 +154,7 @@ struct MissionsView: View {
                 }
             }
         }
-        .frame(minWidth: 960, minHeight: 660)
+        .frame(minWidth: 880, minHeight: 540)
         .background(WandAmbientBackground())
         .sheet(isPresented: $showCreate) {
             MissionCreateView(
@@ -237,7 +237,7 @@ struct MissionsView: View {
                 missionSidebar
                     .frame(minWidth: 250, idealWidth: 285, maxWidth: 340)
                 missionDetail
-                    .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 540, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -762,7 +762,7 @@ private struct MissionCreateView: View {
             }
             .padding(16)
         }
-        .frame(width: 760, height: 660)
+        .frame(width: 760, height: 540)
         .background(WandAmbientBackground())
         .task {
             if cwd.isEmpty {

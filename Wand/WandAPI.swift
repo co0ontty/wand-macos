@@ -7,6 +7,34 @@ private extension Data {
     }
 }
 
+/// An empty successful response removes obsolete imported history. A failed
+/// provider request retains its last snapshot and never discards live sessions.
+struct LegacyHistoryRefresh {
+    let provider: String
+    let sessions: [HistorySession]?
+
+    static func merge(previous: [HistorySession], results: [LegacyHistoryRefresh]) -> [HistorySession] {
+        var merged = previous
+        for result in results {
+            guard let sessions = result.sessions else { continue }
+            merged.removeAll { ($0.provider ?? "claude") == result.provider }
+            merged.append(contentsOf: sessions.map { session in
+                HistorySession(
+                    claudeSessionId: session.claudeSessionId,
+                    cwd: session.cwd,
+                    firstUserMessage: session.firstUserMessage,
+                    timestamp: session.timestamp,
+                    mtimeMs: session.mtimeMs,
+                    hasConversation: session.hasConversation,
+                    managedByWand: session.managedByWand,
+                    provider: result.provider
+                )
+            })
+        }
+        return merged
+    }
+}
+
 /// wand 服务端 REST 客户端。复用 SelfSignedSession（自签证书放行 + 共享
 /// cookieStorage），所以 WandAuth.loginWithToken 拿到的 session cookie 在这里
 /// 的每个请求上自动携带；遇到 401 时用存储的 appToken 重新登录一次再重试。
@@ -327,11 +355,29 @@ final class WandAPI {
         try await request([HistorySession].self, method: "GET", path: "/api/codex-history")
     }
 
+    /// Kept only for connections to older Wand servers. Current servers return
+    /// [] for every provider-history endpoint; managed sessions come from /sessions.
+    func refreshLegacyHistory(previous: [HistorySession]) async -> [HistorySession] {
+        async let claude = try? listClaudeHistory()
+        async let codex = try? listCodexHistory()
+        let results = await [
+            LegacyHistoryRefresh(provider: "claude", sessions: claude),
+            LegacyHistoryRefresh(provider: "codex", sessions: codex),
+        ]
+        return LegacyHistoryRefresh.merge(previous: previous, results: results)
+    }
+
+    static func legacyHistoryProvider(_ provider: String?) throws -> String {
+        let value = provider ?? "claude"
+        guard ["claude", "codex", "opencode", "qoder"].contains(value) else {
+            throw APIError.network("此来源不支持外部历史操作，请从 Wand 会话列表打开。")
+        }
+        return value
+    }
+
     @discardableResult
     func resumeHistory(_ history: HistorySession) async throws -> SessionSnapshot {
-        let provider = ["codex", "opencode", "qoder"].contains(history.provider ?? "")
-            ? history.provider!
-            : "claude"
+        let provider = try Self.legacyHistoryProvider(history.provider)
         return try await request(
             SessionSnapshot.self,
             method: "POST",
@@ -341,9 +387,7 @@ final class WandAPI {
     }
 
     func deleteHistory(_ history: HistorySession) async throws {
-        let provider = ["codex", "opencode", "qoder"].contains(history.provider ?? "")
-            ? history.provider!
-            : "claude"
+        let provider = try Self.legacyHistoryProvider(history.provider)
         _ = try await requestData(
             method: "DELETE",
             path: "/api/\(provider)-history/\(percentEncode(history.claudeSessionId))"
@@ -352,6 +396,7 @@ final class WandAPI {
 
     func deleteHistoryBatch(provider: String, ids: [String]) async throws {
         guard !ids.isEmpty else { return }
+        let provider = try Self.legacyHistoryProvider(provider)
         _ = try await requestData(
             method: "POST",
             path: "/api/\(provider)-history/batch-delete",

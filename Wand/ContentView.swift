@@ -5,6 +5,9 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var store: ServerStore
     @State private var showSwitchSheet = false
+    @AppStorage("wand.appearanceMode") private var appearanceMode = "system"
+    @State private var showGuide = false
+    @State private var showShortcuts = false
 
     var body: some View {
         ZStack {
@@ -18,6 +21,14 @@ struct ContentView: View {
                 ConnectView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .preferredColorScheme(appearanceMode == "dark" ? .dark : appearanceMode == "light" ? .light : nil)
+        .sheet(isPresented: $showGuide) { DesktopOnboardingView(onFinish: { showGuide = false }, isConnected: false) }
+        .sheet(isPresented: $showShortcuts) { DesktopShortcutsView() }
+        .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
+            guard store.serverURL == nil, let command = note.object as? DesktopCommand else { return }
+            if command == .onboarding { showGuide = true }
+            if command == .shortcuts { showShortcuts = true }
         }
         .sheet(isPresented: $showSwitchSheet) {
             ConnectView(isPresentedAsSheet: true) { showSwitchSheet = false }

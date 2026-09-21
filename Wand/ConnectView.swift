@@ -12,6 +12,8 @@ struct ConnectView: View {
     @State private var error: String? = nil
     @State private var isConnecting = false
     @State private var showTroubleshooting = false
+    @State private var showSetupHelp = false
+    @State private var copiedCommand = false
     @FocusState private var inputFocused: Bool
 
     /// 「本地网络」权限引导：nil = 不展示；false = 提示性引导（无法确定是否被拒）；
@@ -23,21 +25,24 @@ struct ConnectView: View {
     }
 
     var body: some View {
-        ZStack {
-            WandAmbientBackground()
-
-            VStack(spacing: 0) {
-                if isPresentedAsSheet {
-                    sheetHeader
+        GeometryReader { geometry in
+            ZStack {
+                WandAmbientBackground()
+                VStack(spacing: 0) {
+                    if isPresentedAsSheet {
+                        sheetHeader
+                    }
+                    ScrollView {
+                        card(wide: geometry.size.width >= 860)
+                            .frame(maxWidth: isPresentedAsSheet ? 520 : 900)
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 24)
+                            .frame(minHeight: max(0, geometry.size.height - (isPresentedAsSheet ? 50 : 0)))
+                            .frame(maxWidth: .infinity)
+                    }
                 }
-                Spacer(minLength: 0)
-                card
-                    .frame(maxWidth: isPresentedAsSheet ? 520 : 900)
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 24)
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(
             minWidth: isPresentedAsSheet ? 520 : nil,
@@ -81,17 +86,55 @@ struct ConnectView: View {
     }
 
     @ViewBuilder
-    private var card: some View {
-        if isPresentedAsSheet {
+    private func card(wide: Bool) -> some View {
+        if isPresentedAsSheet || !wide {
             compactCard
+                .frame(maxWidth: 500)
         } else {
             desktopCard
         }
     }
 
     private var desktopCard: some View {
-        connectionCard
-            .frame(maxWidth: 500)
+        HStack(alignment: .center, spacing: 58) {
+            VStack(alignment: .leading, spacing: 26) {
+                WandBrandMark(size: 52)
+                VStack(alignment: .leading, spacing: 13) {
+                    Text("你的 AI 工作，\n在 Mac 上继续。")
+                        .font(.system(size: 30, weight: .semibold))
+                        .tracking(-0.6)
+                        .foregroundColor(Theme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("连接 Wand 服务器，把会话、项目和任务放在一个专注的桌面里。")
+                        .font(.system(size: 13))
+                        .lineSpacing(5)
+                        .foregroundColor(Theme.textSecondary)
+                }
+                VStack(alignment: .leading, spacing: 15) {
+                    welcomeFeature("bubble.left.and.bubble.right", "接着聊", "继续已有会话，使用你配置的 AI 工具")
+                    welcomeFeature("folder", "接着做", "打开项目、终端与工作空间")
+                    welcomeFeature("keyboard", "更顺手", "全局导航、原生输入和桌面快捷键")
+                }
+            }
+            .frame(width: 280, alignment: .leading)
+            connectionCard
+                .frame(maxWidth: 460)
+        }
+    }
+
+    private func welcomeFeature(_ symbol: String, _ title: String, _ description: String) -> some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: symbol)
+                .font(.system(size: 15))
+                .foregroundColor(Theme.textSecondary)
+                .frame(width: 21)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(Theme.textPrimary)
+                Text(description).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private var compactCard: some View {
@@ -140,6 +183,14 @@ struct ConnectView: View {
             }
 
             footerHint
+            if !isPresentedAsSheet {
+                DisclosureGroup("第一次使用？", isExpanded: $showSetupHelp) {
+                    setupHelp.padding(.top, 10)
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Theme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -160,6 +211,10 @@ struct ConnectView: View {
                     .focused($inputFocused)
                     .onSubmit { connect() }
                     .disabled(isConnecting)
+                    .onChange(of: input) { _ in
+                        error = nil
+                        localNetworkDenied = nil
+                    }
                 if !input.isEmpty {
                     Button { input = ""; error = nil } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -167,12 +222,54 @@ struct ConnectView: View {
                             .foregroundColor(Theme.textSecondary)
                     }
                     .buttonStyle(.plain)
+                    .help("清除地址")
+                    .accessibilityLabel("清除连接码或地址")
+                    .disabled(isConnecting)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
             .wandInputSurface(focused: inputFocused, invalid: error != nil, cornerRadius: 10)
         }
+    }
+
+    private var setupHelp: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("1. 在运行 AI 工具的电脑上启动 Wand。")
+                .font(.system(size: 11))
+            HStack {
+                Text("wand web").font(.system(size: 12, design: .monospaced))
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString("wand web", forType: .string)
+                    copiedCommand = true
+                } label: {
+                    Label(copiedCommand ? "已复制" : "复制", systemImage: copiedCommand ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .help("复制启动命令")
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.surface))
+            Text("2. 打开 Web 设置中的「连接 App」，复制连接码。\n3. 粘贴到上方输入框，然后连接。")
+                .font(.system(size: 11))
+                .lineSpacing(5)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("服务器就在这台 Mac 上") {
+                input = "127.0.0.1:7777"
+                inputFocused = true
+            }
+            .buttonStyle(.link)
+            .font(.system(size: 11))
+            .disabled(isConnecting)
+            Text("使用自定义端口时，请填写服务器实际地址。启用密码的服务器请使用连接码。")
+                .font(.system(size: 10))
+                .foregroundColor(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundColor(Theme.textSecondary)
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -272,23 +369,31 @@ struct ConnectView: View {
     private func recentRow(_ raw: String) -> some View {
         let info = recentDisplay(raw)
         return HStack(spacing: 8) {
-            Image(systemName: info.isCode ? "qrcode" : "network")
-                .font(.system(size: 12))
-                .foregroundColor(Theme.textSecondary)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(info.text)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(Theme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if info.isCode {
-                    Label("已绑定连接码", systemImage: "key.fill")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Theme.textTertiary)
+            Button { useRecent(raw) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: info.isCode ? "qrcode" : "network")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(info.text)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if info.isCode {
+                            Label("已绑定连接码", systemImage: "key.fill")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Theme.textTertiary)
+                        }
+                    }
+                    Spacer(minLength: 4)
                 }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 4)
+            .buttonStyle(.plain)
+            .disabled(isConnecting)
+            .help("连接到 \(info.text)")
             Button {
                 store.removeRecent(raw)
             } label: {
@@ -298,6 +403,9 @@ struct ConnectView: View {
                     .padding(6)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("移除最近连接 \(info.text)")
+            .help("从最近连接中移除")
+            .disabled(isConnecting)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -309,8 +417,6 @@ struct ConnectView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Theme.border, lineWidth: 1)
         )
-        .contentShape(Rectangle())
-        .onTapGesture { useRecent(raw) }
     }
 
     private var footerHint: some View {

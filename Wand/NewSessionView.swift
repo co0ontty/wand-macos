@@ -326,7 +326,8 @@ struct NewSessionView: View {
             sheetFooter
         }
         // 内容保持紧凑；小屏仍可通过中间滚动区访问全部字段。
-        .frame(minWidth: 720, idealWidth: 780, minHeight: 680, idealHeight: 820)
+        .frame(minWidth: 720, idealWidth: 780, minHeight: 540, idealHeight: 720)
+        .focusedSceneValue(\.wandDesktopCommandsEnabled, false)
         .background(WandAmbientBackground())
         // SwiftUI 在 macOS 上 .sheet 会自带 NSWindow 标题栏,跟下面的 sheetHeader 重复,
         // 视觉上「两层标题」很难看。挂这个修饰符把原生标题栏改成透明 + 隐藏文字。
@@ -666,6 +667,7 @@ struct NewSessionView: View {
             Spacer()
             Button("取消") { dismiss() }
                 .buttonStyle(WandSecondaryButtonStyle())
+                .keyboardShortcut(.cancelAction)
             if creating {
                 ProgressView()
                     .controlSize(.small)
@@ -682,6 +684,8 @@ struct NewSessionView: View {
                     .frame(minWidth: 92)
                 }
                 .buttonStyle(WandPrimaryButtonStyle())
+                .keyboardShortcut(.return, modifiers: .command)
+                .help("启动会话（⌘ Return）")
                 .disabled(!canCreate)
             }
         }

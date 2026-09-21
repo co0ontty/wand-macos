@@ -602,6 +602,7 @@ private struct FilePreviewSheet: View {
             }
         }
         .frame(minWidth: 720, idealWidth: 840, minHeight: 540, idealHeight: 640)
+        .focusedSceneValue(\.wandDesktopCommandsEnabled, false)
         .background(Theme.background)
         .task(id: file.path) { await loadPreview() }
     }

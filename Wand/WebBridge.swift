@@ -29,6 +29,9 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
     // MARK: - JS → Native
 
     func userContentController(_ uc: WKUserContentController, didReceive msg: WKScriptMessage) {
+        let origin = msg.frameInfo.securityOrigin
+        guard msg.frameInfo.isMainFrame,
+              isServerOrigin(scheme: origin.protocol, host: origin.host, port: origin.port) else { return }
         guard let dict = msg.body as? [String: Any], let type = dict["type"] as? String else { return }
         switch type {
         case "downloadUpdate", "checkAppUpdate":
@@ -44,6 +47,42 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
         default:
             break
         }
+    }
+
+    private func isServerOrigin(scheme: String, host: String, port: Int?) -> Bool {
+        guard let serverURL,
+              scheme.lowercased() == serverURL.scheme?.lowercased(),
+              host.lowercased() == serverURL.host?.lowercased() else { return false }
+        let defaultPort = scheme.lowercased() == "https" ? 443 : 80
+        let actualPort = (port ?? 0) == 0 ? defaultPort : port!
+        return actualPort == (serverURL.port ?? defaultPort)
+    }
+
+    /// External pages belong in the browser, where they cannot inherit the
+    /// native message handler or masquerade as the connected server's tools.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard navigationAction.targetFrame?.isMainFrame != false,
+              let url = navigationAction.request.url,
+              let scheme = url.scheme?.lowercased() else {
+            decisionHandler(.allow)
+            return
+        }
+        if ["http", "https"].contains(scheme),
+           !isServerOrigin(scheme: scheme, host: url.host ?? "", port: url.port) {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+            return
+        }
+        if scheme == "mailto" {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+            return
+        }
+        decisionHandler(["http", "https", "about", "blob", "data"].contains(scheme) ? .allow : .cancel)
     }
 
     // MARK: - Self-signed HTTPS / Auth challenge
@@ -82,6 +121,7 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
         if !hasLoadedOnce {
             model.phase = .loading
         }
+        model.cancelDesktopToolNavigation()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -119,6 +159,35 @@ final class WebBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate, W
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         NSLog("[Wand] navigation finished: %@", webView.url?.absoluteString ?? "?")
         hasLoadedOnce = true
-        model.phase = .ready
+        model.finishNavigation()
+    }
+
+    // File inputs back attachments and certificate uploads in server tools.
+    // Keep selection in the standard macOS picker, including cancellation.
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canChooseFiles = true
+        panel.begin { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        guard navigationAction.targetFrame == nil, let url = navigationAction.request.url,
+              ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        NSWorkspace.shared.open(url)
+        return nil
     }
 }

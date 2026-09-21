@@ -29,6 +29,12 @@ struct ChatView: View {
     @StateObject private var store: ChatStore
     @StateObject private var attachments: ComposerAttachmentController
     @State private var draft = ""
+    @State private var draftRestored = false
+    @AppStorage("wand.sendWithCommandEnter") private var sendWithCommandEnter = false
+    @State private var showingFind = false
+    @State private var findQuery = ""
+    @State private var selectedFindResult: Int?
+    @FocusState private var findFocused: Bool
     @State private var showQuickCommit = false
     @State private var followsLatest = true
     @State private var historyExpanded = false
@@ -55,6 +61,8 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             sessionActionBar
+            if showingFind { conversationFindBar }
+            if !store.connected && !store.loading { reconnectBanner }
             ZStack {
                 WandAmbientBackground()
                 if store.loading {
@@ -123,13 +131,44 @@ struct ChatView: View {
         )
         .onAppear {
             attachments.setToastHandler { store.toast = $0 }
+            if !draftRestored {
+                draftRestored = true
+                let saved = ConversationDraftCache.shared.draft(serverURL: api.baseURL, sessionID: sessionId)
+                draft = saved?.text ?? ""
+                attachments.attachments = saved?.attachments ?? []
+            }
             store.start()
             refreshGitStatus()
         }
         .onChange(of: showQuickCommit) { showing in
             if !showing { refreshGitStatus() }
         }
+        .onChange(of: draft) { _ in saveDraft() }
+        .onReceive(attachments.$attachments.dropFirst()) { files in
+            saveDraft(files: files)
+        }
+        .onReceive(ConversationDraftCache.shared.recoveries) { recovery in
+            guard recovery.serverURL == api.baseURL, recovery.sessionID == sessionId else { return }
+            draft = recovery.draft.text
+            attachments.attachments = recovery.draft.attachments
+            store.toast = "上一条消息发送失败，已恢复到输入框。"
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { notification in
+            guard let command = notification.object as? DesktopCommand else { return }
+            switch command {
+            case .focusComposer:
+                closeFind()
+                inputFocused = true
+            case .findConversation:
+                showingFind = true
+                inputFocused = false
+                findFocused = true
+                followsLatest = false
+            default: break
+            }
+        }
         .onDisappear {
+            saveDraft()
             store.shutdown()
             attachments.cancelPendingUploads()
         }
@@ -153,7 +192,20 @@ struct ChatView: View {
                         .disabled(store.loadingEarlier)
                     }
                     ForEach(Array(groupedMessageItems.enumerated()), id: \.offset) { _, item in
+                        let absoluteIndex = store.loadedOffset + messageItemTurnIndex(item)
                         messageItemView(item, proxy: proxy)
+                            .padding(4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(selectedFindResult == absoluteIndex && showingFind
+                                        ? Theme.brand.opacity(0.08) : .clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(selectedFindResult == absoluteIndex && showingFind
+                                        ? Theme.brand.opacity(0.65) : .clear, lineWidth: 1)
+                            )
+                            .id("turn-\(absoluteIndex)")
                     }
                     if store.isResponding {
                         respondingIndicator
@@ -165,18 +217,11 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 12)
                 .padding(.bottom, 6)
+                .background(ConversationScrollObserver(
+                    onUserScroll: { followsLatest = false },
+                    onReachedBottom: { if !showingFind { followsLatest = true } }
+                ))
             }
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8)
-                        .onChanged { value in
-                            // 仅用户明确向下拖动、准备查看更早消息时暂停跟随。
-                            // 旧逻辑任何轻微拖动都会永久关掉跟随，收键盘或触摸
-                            // 列表后，新回复就只能靠右下角按钮才能看到。
-                            if value.translation.height > 18 {
-                                followsLatest = false
-                            }
-                        }
-                )
                 .overlay(alignment: .bottomTrailing) {
                     if !followsLatest {
                         jumpToLatestButton(proxy)
@@ -196,6 +241,16 @@ struct ChatView: View {
                 .onChange(of: store.loading) { loading in
                     if !loading { pinToBottom(proxy) }
                 }
+                .onChange(of: findQuery) { _ in
+                    selectedFindResult = findResults.first
+                    scrollToFindResult(proxy)
+                }
+                .onChange(of: selectedFindResult) { _ in scrollToFindResult(proxy) }
+                .onChange(of: store.loadedOffset) { _ in
+                    if showingFind && selectedFindResult == nil {
+                        selectedFindResult = findResults.first
+                    }
+                }
         }
     }
 
@@ -211,9 +266,9 @@ struct ChatView: View {
                 baseURL: api.baseURL,
                 isLastTurn: index == store.messages.count - 1,
                 isResponding: store.isResponding,
-                currentReplyExpandedOverride: controlsCurrentReplyExpansion
+                currentReplyExpandedOverride: showingFind ? true : (controlsCurrentReplyExpansion
                     ? (expandedCurrentReplyAbsoluteIndex == absoluteIndex)
-                    : nil,
+                    : nil),
                 turnIndex: index,
                 historyBoundary: lastUserTurnIndex,
                 onUserExpand: {
@@ -252,7 +307,10 @@ struct ChatView: View {
     }
 
     private var groupedMessageItems: [MessageDisplayItem] {
-        groupExplorationTurns(store.messages)
+        if showingFind {
+            return store.messages.enumerated().map { .turn(index: $0.offset, $0.element) }
+        }
+        return groupExplorationTurns(store.messages)
     }
 
     private var lastUserTurnIndex: Int {
@@ -416,7 +474,12 @@ struct ChatView: View {
 
     private func loadingEarlierRow(_ title: String) -> some View {
         HStack(spacing: 8) {
-            ProgressView().controlSize(.small).tint(Theme.brand)
+            if store.loadingEarlier {
+                ProgressView().controlSize(.small).tint(Theme.brand)
+            } else {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundColor(Theme.textSecondary)
+            }
             Text(title)
                 .font(.system(size: 12))
                 .foregroundColor(Theme.textSecondary)
@@ -552,6 +615,12 @@ struct ChatView: View {
                     modelThinkingChip
                 }
                 Spacer(minLength: 0)
+                if inputFocused {
+                    Text(sendWithCommandEnter ? "⌘ Return 发送" : "⇧ Return 换行")
+                        .font(.system(size: 10))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                }
                 trailingButtons
             }
         }
@@ -636,7 +705,8 @@ struct ChatView: View {
         .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
         .buttonStyle(.plain)
         .disabled(!canSend)
-        .accessibilityLabel("发送")
+        .accessibilityLabel(store.isResponding ? "加入发送队列" : "发送消息")
+        .help(store.isResponding ? "在当前回复完成后发送" : (sendWithCommandEnter ? "发送消息（⌘ Return）" : "发送消息（Return）"))
     }
 
     private var modelThinkingChip: some View {
@@ -873,9 +943,13 @@ struct ChatView: View {
     /// 所以中文输入法确认候选不会落进发送回调；普通 Enter 发送，Shift+Enter 换行。
     private var growingTextField: some View {
         IMEAwareComposerTextView(
-            text: $draft,
+            text: Binding(get: { draft }, set: { text in
+                draft = text
+                saveDraft(text: text)
+            }),
             placeholder: composerPlaceholder,
             isFocused: inputFocused,
+            sendWithCommandEnter: sendWithCommandEnter,
             onFocusChange: { inputFocused = $0 },
             onCompositionChange: { composerIsComposing = $0 },
             onSubmit: handleReturnKey,
@@ -885,7 +959,7 @@ struct ChatView: View {
     }
 
     private var composerPlaceholder: String {
-        return "输入消息"
+        store.isResponding ? "继续补充，消息会加入队列…" : "向助手发送消息…"
     }
 
     private func handleReturnKey() {
@@ -893,7 +967,8 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !composerIsComposing && !attachments.isUploading && (
+        !store.loading && store.loadError == nil && !store.sending
+            && !composerIsComposing && !attachments.isUploading && (
             !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.attachments.isEmpty
         )
@@ -905,11 +980,149 @@ struct ChatView: View {
         // 提交落进 draft),trim 一下避免发出去的消息带尾换行。
         let text = buildAttachmentPrompt(attachments.attachments, body: draft)
         guard !text.isEmpty else { return }
+        let submittedDraft = draft
+        let submittedAttachments = attachments.attachments
         draft = ""
         attachments.attachments.removeAll()
+        saveDraft()
         followsLatest = true
         expandedCurrentReplyAbsoluteIndex = -1
-        store.send(text: text)
+        let serverURL = api.baseURL
+        let submittedSessionID = sessionId
+        store.send(text: text) {
+            ConversationDraftCache.shared.recover(
+                submitted: ConversationDraft(text: submittedDraft, attachments: submittedAttachments),
+                serverURL: serverURL,
+                sessionID: submittedSessionID
+            )
+        }
+        inputFocused = true
+    }
+
+    // MARK: - Conversation navigation and draft recovery
+
+    private func saveDraft(text: String? = nil, files: [UploadedFile]? = nil) {
+        guard draftRestored else { return }
+        ConversationDraftCache.shared.save(
+            ConversationDraft(text: text ?? draft, attachments: files ?? attachments.attachments),
+            serverURL: api.baseURL,
+            sessionID: sessionId
+        )
+    }
+
+    private var findResults: [Int] {
+        ConversationSearch.matches(in: store.messages, offset: store.loadedOffset, query: findQuery)
+    }
+
+    private var conversationFindBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundColor(Theme.textSecondary)
+                TextField("搜索当前对话", text: $findQuery)
+                    .textFieldStyle(.plain)
+                    .focused($findFocused)
+                    .onSubmit { moveFindResult(1) }
+                    .onExitCommand { closeFind() }
+                    .accessibilityLabel("搜索当前对话")
+                Text(findResultLabel)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(Theme.textSecondary)
+                    .fixedSize()
+                Button { moveFindResult(-1) } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .disabled(findResults.isEmpty)
+                .help("上一个结果")
+                .accessibilityLabel("上一个搜索结果")
+                Button { moveFindResult(1) } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .disabled(findResults.isEmpty)
+                .help("下一个结果（Return）")
+                .accessibilityLabel("下一个搜索结果")
+                Button(action: closeFind) { Image(systemName: "xmark") }
+                    .help("关闭搜索（Escape）")
+                    .accessibilityLabel("关闭对话搜索")
+            }
+            .buttonStyle(.borderless)
+            if let preview = findResultPreview {
+                Text(preview)
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+            if store.canLoadEarlier {
+                HStack(spacing: 8) {
+                    Text("正在搜索已加载的 \(store.messages.count) 条消息")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                    Button(store.loadingEarlier ? "正在加载…" : "搜索更早消息") {
+                        followsLatest = false
+                        store.loadEarlier()
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.link)
+                    .disabled(store.loadingEarlier)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(Theme.surface)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var findResultPreview: String? {
+        guard let selectedFindResult else { return nil }
+        let index = selectedFindResult - store.loadedOffset
+        guard store.messages.indices.contains(index) else { return nil }
+        return ConversationSearch.excerpt(from: store.messages[index], query: findQuery)
+    }
+
+    private var findResultLabel: String {
+        guard !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+        let results = findResults
+        guard !results.isEmpty else { return "没有匹配" }
+        let index = selectedFindResult.flatMap { results.firstIndex(of: $0) } ?? 0
+        return "\(index + 1) / \(results.count)"
+    }
+
+    private func moveFindResult(_ direction: Int) {
+        let results = findResults
+        guard !results.isEmpty else { return }
+        let index = selectedFindResult.flatMap { results.firstIndex(of: $0) } ?? (direction > 0 ? -1 : 0)
+        selectedFindResult = results[(index + direction + results.count) % results.count]
+    }
+
+    private func scrollToFindResult(_ proxy: ScrollViewProxy) {
+        guard showingFind, let selectedFindResult else { return }
+        followsLatest = false
+        DispatchQueue.main.async {
+            proxy.scrollTo("turn-\(selectedFindResult)", anchor: .top)
+        }
+    }
+
+    private func closeFind() {
+        showingFind = false
+        findFocused = false
+        selectedFindResult = nil
+        findQuery = ""
+    }
+
+    private var reconnectBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+            Text("连接已断开，正在重连。草稿会保留在当前窗口。")
+            Spacer(minLength: 4)
+            Button("重试") { store.retryLoad() }
+                .buttonStyle(.borderless)
+        }
+        .font(.system(size: 12))
+        .foregroundColor(Theme.textSecondary)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(Theme.surface)
     }
 
     // MARK: - Toast
@@ -929,6 +1142,181 @@ struct ChatView: View {
                     }
                 }
         }
+    }
+}
+
+/// Drafts survive navigation during this app launch; message content is never written to preferences.
+struct ConversationDraft {
+    let text: String
+    let attachments: [UploadedFile]
+
+    /// Preserve what the user typed while the request was in flight, including newer attachments.
+    static func recover(submitted: Self, current: Self) -> Self {
+        let currentPaths = Set(current.attachments.map(\.savedPath))
+        return Self(
+            text: [submitted.text, current.text].filter { !$0.isEmpty }.joined(separator: "\n\n"),
+            attachments: submitted.attachments.filter { !currentPaths.contains($0.savedPath) }
+                + current.attachments
+        )
+    }
+}
+
+@MainActor
+final class ConversationDraftCache {
+    static let shared = ConversationDraftCache()
+    private struct Key: Hashable {
+        let serverURL: URL
+        let sessionID: String
+    }
+    private var drafts: [Key: ConversationDraft] = [:]
+    struct Recovery {
+        let serverURL: URL
+        let sessionID: String
+        let draft: ConversationDraft
+    }
+    let recoveries = PassthroughSubject<Recovery, Never>()
+
+    /// A request can finish after its original view disappeared. Read the current cache,
+    /// then notify whichever view is now displaying this session.
+    @discardableResult
+    func recover(submitted: ConversationDraft, serverURL: URL, sessionID: String) -> ConversationDraft {
+        let current = draft(serverURL: serverURL, sessionID: sessionID)
+            ?? ConversationDraft(text: "", attachments: [])
+        let recovered = ConversationDraft.recover(submitted: submitted, current: current)
+        save(recovered, serverURL: serverURL, sessionID: sessionID)
+        recoveries.send(Recovery(serverURL: serverURL, sessionID: sessionID, draft: recovered))
+        return recovered
+    }
+
+    func draft(serverURL: URL, sessionID: String) -> ConversationDraft? {
+        drafts[Key(serverURL: serverURL, sessionID: sessionID)]
+    }
+
+    func save(_ draft: ConversationDraft, serverURL: URL, sessionID: String) {
+        let key = Key(serverURL: serverURL, sessionID: sessionID)
+        if draft.text.isEmpty && draft.attachments.isEmpty {
+            drafts.removeValue(forKey: key)
+        } else {
+            drafts[key] = draft
+        }
+    }
+}
+
+enum ConversationSearch {
+    static func matches(in turns: [ConversationTurn], offset: Int, query: String) -> [Int] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        return turns.enumerated().compactMap { index, turn in
+            conversationSearchText(turn).localizedStandardContains(query) ? offset + index : nil
+        }
+    }
+
+    static func excerpt(from turn: ConversationTurn, query: String) -> String? {
+        let text = conversationSearchText(turn)
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty,
+              let match = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) else { return nil }
+        let start = text.index(match.lowerBound, offsetBy: -36, limitedBy: text.startIndex) ?? text.startIndex
+        let end = text.index(match.upperBound, offsetBy: 110, limitedBy: text.endIndex) ?? text.endIndex
+        return (start > text.startIndex ? "…" : "")
+            + text[start..<end].replacingOccurrences(of: "\n", with: " ")
+            + (end < text.endIndex ? "…" : "")
+    }
+}
+
+enum ConversationSendPolicy {
+    static func shouldSubmit(
+        modifiers: NSEvent.ModifierFlags,
+        commandEnter: Bool,
+        composing: Bool
+    ) -> Bool {
+        guard !composing, !modifiers.contains(.shift), !modifiers.contains(.option) else { return false }
+        return !commandEnter || modifiers.contains(.command)
+    }
+}
+
+private func conversationSearchText(_ turn: ConversationTurn) -> String {
+    turn.content.map { block in
+        switch block {
+        case .text(let text, _): return text
+        case .thinking(let text, _): return text
+        case .toolUse(_, let name, let description, let input, _):
+            return ([name, description ?? ""] + input.values.map(\.summaryText)).joined(separator: "\n")
+        case .toolResult(_, let text, _, _, _): return text
+        case .unknown: return ""
+        }
+    }.joined(separator: "\n")
+}
+
+/// Observe the real AppKit viewport: trackpad scrolling must pause streaming follow just like dragging.
+private struct ConversationScrollObserver: NSViewRepresentable {
+    let onUserScroll: () -> Void
+    let onReachedBottom: () -> Void
+
+    func makeNSView(context: Context) -> ScrollObservationView {
+        let view = ScrollObservationView()
+        view.onUserScroll = onUserScroll
+        view.onReachedBottom = onReachedBottom
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrollObservationView, context: Context) {
+        nsView.onUserScroll = onUserScroll
+        nsView.onReachedBottom = onReachedBottom
+    }
+
+    static func dismantleNSView(_ nsView: ScrollObservationView, coordinator: ()) {
+        nsView.stopObserving()
+    }
+
+    final class ScrollObservationView: NSView {
+        var onUserScroll: () -> Void = {}
+        var onReachedBottom: () -> Void = {}
+        private var observer: NSObjectProtocol?
+        private var eventMonitor: Any?
+        private weak var observedScrollView: NSScrollView?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopObserving()
+            guard window != nil else { return }
+            DispatchQueue.main.async { [weak self] in self?.startObserving() }
+        }
+
+        private func startObserving() {
+            guard window != nil, let scroll = enclosingScrollView, observer == nil else { return }
+            observedScrollView = scroll
+            scroll.contentView.postsBoundsChangedNotifications = true
+            observer = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scroll.contentView,
+                queue: .main
+            ) { [weak self] _ in self?.reportBottom() }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let scroll = self.observedScrollView,
+                      event.window === scroll.window,
+                      scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)) else { return event }
+                self.onUserScroll()
+                DispatchQueue.main.async { [weak self] in self?.reportBottom() }
+                return event
+            }
+        }
+
+        private func reportBottom() {
+            guard let scroll = observedScrollView, let document = scroll.documentView else { return }
+            let distance = document.bounds.maxY - scroll.contentView.bounds.maxY
+            if distance <= 48 { onReachedBottom() }
+        }
+
+        func stopObserving() {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+            observer = nil
+            eventMonitor = nil
+            observedScrollView = nil
+        }
+
+        deinit { stopObserving() }
     }
 }
 
@@ -1462,6 +1850,7 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let isFocused: Bool
+    let sendWithCommandEnter: Bool
     let onFocusChange: (Bool) -> Void
     let onCompositionChange: (Bool) -> Void
     let onSubmit: () -> Void
@@ -1486,6 +1875,7 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
         textView.onMarkedTextChange = { active in
             context.coordinator.parent.onCompositionChange(active)
         }
+        textView.onCommandReturn = { context.coordinator.parent.onSubmit() }
         textView.isRichText = false
         textView.importsGraphics = false
         // Chat prompts and PTY commands must stay byte-for-byte as typed.
@@ -1517,7 +1907,9 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.setAccessibilityLabel("消息输入")
-        textView.setAccessibilityHelp("按 Return 发送，按 Shift-Return 换行")
+        textView.setAccessibilityHelp(sendWithCommandEnter
+            ? "按 Command-Return 发送，按 Return 换行"
+            : "按 Return 发送，按 Shift-Return 换行")
 
         scrollView.documentView = textView
         context.coordinator.scrollView = scrollView
@@ -1530,9 +1922,13 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
 
         textView.placeholder = placeholder
+        textView.setAccessibilityHelp(sendWithCommandEnter
+            ? "按 Command-Return 发送，按 Return 换行"
+            : "按 Return 发送，按 Shift-Return 换行")
         textView.onMarkedTextChange = { active in
             context.coordinator.parent.onCompositionChange(active)
         }
+        textView.onCommandReturn = { context.coordinator.parent.onSubmit() }
         textView.insertionPointColor = NSColor(Theme.wandAccent)
         if textView.string != text && !textView.hasMarkedText() {
             let selection = textView.selectedRanges
@@ -1566,6 +1962,7 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         if let textView = scrollView.documentView as? ComposerNSTextView {
             textView.onMarkedTextChange = nil
+            textView.onCommandReturn = nil
             textView.delegate = nil
         }
     }
@@ -1616,9 +2013,11 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
 
             let modifiers = NSApp.currentEvent?.modifierFlags
                 .intersection(.deviceIndependentFlagsMask) ?? []
-            if modifiers.contains(.shift) {
-                return false
-            }
+            guard ConversationSendPolicy.shouldSubmit(
+                modifiers: modifiers,
+                commandEnter: parent.sendWithCommandEnter,
+                composing: textView.hasMarkedText()
+            ) else { return false }
 
             parent.onSubmit()
             return true
@@ -1644,8 +2043,21 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
 
 private final class ComposerNSTextView: NSTextView {
     var onMarkedTextChange: ((Bool) -> Void)?
+    var onCommandReturn: (() -> Void)?
     var placeholder = "" {
         didSet { needsDisplay = true }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if window?.firstResponder === self,
+           (event.keyCode == 36 || event.keyCode == 76),
+           modifiers.contains(.command),
+           ConversationSendPolicy.shouldSubmit(modifiers: modifiers, commandEnter: true, composing: hasMarkedText()) {
+            onCommandReturn?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func setMarkedText(
@@ -2849,11 +3261,30 @@ private struct TurnView: View {
     }
 
     var body: some View {
-        if turn.role == "user" {
-            userBubble
-        } else {
-            assistantReply
+        VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 6) {
+            if turn.role == "user" {
+                userBubble
+            } else {
+                assistantReply
+            }
+            if !copyableText.isEmpty && !(isLastTurn && isResponding && turn.role != "user") {
+                ConversationCopyButton(text: copyableText, label: "复制消息")
+            }
         }
+        .contextMenu {
+            Button("复制消息") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(copyableText, forType: .string)
+            }
+            .disabled(copyableText.isEmpty)
+        }
+    }
+
+    private var copyableText: String {
+        turn.content.compactMap { block -> String? in
+            guard case .text(let text, _) = block else { return nil }
+            return text
+        }.joined(separator: "\n\n")
     }
 
     private var userText: String {
@@ -3179,6 +3610,35 @@ private struct BlockView: View {
 }
 
 /// 原生 Markdown 渲染：块级结构独立布局，内联标记交给 AttributedString。
+private struct ConversationCopyButton: View {
+    let text: String
+    let label: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+        } label: {
+            Label(copied ? "已复制" : label, systemImage: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11))
+                .foregroundColor(copied ? Theme.brand : Theme.textMuted)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 3)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(copied ? "已复制到剪贴板" : label)
+        .help(label)
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            if !Task.isCancelled { copied = false }
+        }
+    }
+}
+
 private struct MarkdownText: View {
     let text: String
     @Environment(\.activityFoldCompact) private var compact
@@ -3237,14 +3697,16 @@ private struct MarkdownText: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(Theme.surface))
         case .code(let content, let language):
             VStack(alignment: .leading, spacing: 2) {
-                if let language, !language.isEmpty {
-                    Text(language)
-                        .font(.system(size: 10, weight: .semibold))
+                HStack {
+                    Text(language.flatMap { $0.isEmpty ? nil : $0 } ?? "代码")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundColor(Theme.textSecondary)
-                        .padding(.leading, 10)
-                        .padding(.top, 6)
+                    Spacer()
+                    ConversationCopyButton(text: content, label: "复制代码")
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
+                .padding(.horizontal, 10)
+                .padding(.top, 7)
+                ScrollView(.horizontal, showsIndicators: true) {
                     Text(content)
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundColor(Theme.textPrimary)

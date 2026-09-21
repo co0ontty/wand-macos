@@ -1,9 +1,28 @@
 # macOS 客户端
 
-Wand 的 macOS 原生 SwiftUI 客户端。连接后进入 Codex 风格的安静三栏壳：
-左栏是「会话 / 项目」，中栏是阅读轴上的聊天或任务窗口，右栏是按需打开的
-文件 Inspector。项目 / 任务 / worktree 对齐 Orca 与 iOS/Web 工作区模型。
-PTY 的 ANSI/TUI 终端画布由精简 WKWebView 渲染，另保留完整网页版兜底入口。
+Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的会话与工作空间侧栏、专注阅读区、
+按需文件检查器，配合原生命令面板、快捷键和三步使用指南。交互参考 ChatGPT 桌面端，
+保留 Wand 的六种 AI 工具、PTY、工作树和并行任务语义。
+
+聊天、会话、工作空间、任务看板、收件箱、Git 和文件预览使用原生界面；完整文件编辑、
+GitHub Issues、连接器与服务器设置通过应用内可定位工具页提供。具体支持方式和边界见
+[功能对齐矩阵](docs/macOS-parity.md)，视觉与行为规范见 [DESIGN.md](DESIGN.md) 和
+[UX-CONTRACT.md](UX-CONTRACT.md)。
+
+## 桌面快捷键
+
+| 操作 | 快捷键 |
+| --- | --- |
+| 新建会话 / 工作任务 | ⌘N / ⇧⌘N |
+| 搜索与命令 | ⇧⌘P |
+| 会话 / 工作空间 / 看板 / 收件箱 / 工具 | ⌘1 … ⌘5 |
+| 显示侧栏 / 检查器 | ⌃⌘S / ⌥⌘I |
+| 聚焦输入 / 查找对话 | ⌘L / ⌘F |
+| 设置 / 快捷键说明 | ⌘, / ⇧⌘/ |
+
+菜单、命令面板和说明由 `DesktopCommand` 同一目录驱动。Return 默认发送，Shift-Return
+换行；设置中可改为 Command-Return 发送。中文输入法选词不提交；PTY 保留终端按键行为。
+草稿只在本次 App 运行期间按服务器和会话恢复，不承诺退出后恢复。
 
 ## 约定
 
@@ -19,7 +38,7 @@ PTY 的 ANSI/TUI 终端画布由精简 WKWebView 渲染，另保留完整网页�
 - 新建：`POST /api/structured-sessions` 或 `POST /api/commands`
 - 输入与权限：`POST /api/sessions/:id/input` 及 escalation / permission 端点
 - 实时更新：连接 `/ws`，订阅会话并合并 `init` / `output` / `status` / `ended`
-- 网页版：原生菜单中的「打开网页版」，用于尚未原生覆盖的完整设置和文件功能
+- 工具：原生「工具与服务器设置」提供完整控制台、文件编辑、GitHub 和分组设置
 
 ## 本地构建（仅 macOS）
 
@@ -31,7 +50,7 @@ PTY 的 ANSI/TUI 终端画布由精简 WKWebView 渲染，另保留完整网页�
 要求：
 
 - macOS 12+
-- 安装了 Xcode 15+（命令行工具足够）
+- 安装完整 Xcode（仅 Command Line Tools 不足以构建）；系统新材质需要 Xcode 26+
 - 不需要 Apple Developer 账号（ad-hoc 自签名）
 
 ## 部署 DMG 供下载
@@ -114,12 +133,17 @@ DMG 地址。服务端 `/api/macos-dmg-update` 暂时保留，供旧客户端和
 ```
 macos/Wand/
 ├── ContentView.swift          # 已连接进入 MainShellView，未连接进入 ConnectView
-├── MainShellView.swift        # 原生三栏主界面：会话/项目侧栏、顶栏阅读轴
+├── MainShellView.swift        # 主导航、模态路由、稳定阅读区与检查器
+├── SessionSidebarView.swift   # 会话列表、目录、旧服务器历史兼容与删除流程
+├── DesktopCommands.swift     # 菜单/命令/快捷键共用目录与搜索面板
+├── DesktopWelcomeView.swift  # 有直接操作入口的欢迎页
+├── DesktopOnboardingView.swift # 三步入门与可搜索快捷键
+├── DesktopWebToolsView.swift # 有上下文和文件草稿关闭保护的服务端工具
 ├── WorkspaceListView.swift    # 项目树、任务、worktree 审查入口
 ├── WorkspaceTaskView.swift    # 任务工作窗口与标签条
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
-├── NewSessionView.swift       # 五个 Provider、会话类型、目录与权限模式
+├── NewSessionView.swift       # 六个 Provider、会话类型、目录与权限模式
 ├── GitQuickCommitView.swift   # 原生快捷提交面板
 ├── MacUpdateManager.swift     # 唯一更新状态源、Stable/Beta、缓存与待重启事务
 ├── UpdateInstaller.swift      # 下载、校验、原位替换、失败回滚与自动重启

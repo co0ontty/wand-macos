@@ -26,6 +26,7 @@ final class ChatStore: ObservableObject {
     @Published var currentTaskTitle: String?
     @Published var connected = true
     @Published var loading = true
+    @Published private(set) var sending = false
     @Published var loadError: String?
     @Published var toast: String?
     @Published var availableModels: [ModelInfo] = []
@@ -273,10 +274,11 @@ final class ChatStore: ObservableObject {
 
     // MARK: - 用户动作
 
-    /// 发送一条消息。PTY 会话走 chat 视图语义（结尾补换行），结构化会话直接发文本。
-    func send(text: String) {
+    /// 发送一条消息。PTY 会话分包发送正文与 Return，结构化会话直接发文本。
+    func send(text: String, onFailure: @escaping () -> Void = {}) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !sending else { return }
+        sending = true
         let queueing = isStructured && isResponding && status == "running"
         let previousMessages = messages
         let previousQueue = queuedMessages
@@ -290,6 +292,7 @@ final class ChatStore: ObservableObject {
             }
         }
         Task {
+            defer { sending = false }
             do {
                 if isStructured {
                     let snap = try await api.sendInput(id: sessionId, input: trimmed, respondImmediately: true)
@@ -308,6 +311,7 @@ final class ChatStore: ObservableObject {
                         isResponding = false
                     }
                 }
+                onFailure()
             }
         }
     }

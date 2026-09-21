@@ -54,6 +54,13 @@
 		E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B1 /* MacUpdateManagerTests.swift */; };
 		E500000000000000000000A3 /* WorkspaceTaskContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */; };
 		E500000000000000000000A2 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B3 /* XCTest.framework */; };
+		D7000000000000000000A001 /* DesktopCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B001 /* DesktopCommands.swift */; };
+		D7000000000000000000A002 /* DesktopWelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B002 /* DesktopWelcomeView.swift */; };
+		D7000000000000000000A003 /* DesktopOnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B003 /* DesktopOnboardingView.swift */; };
+		D7000000000000000000A004 /* DesktopWebToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B004 /* DesktopWebToolsView.swift */; };
+		D7000000000000000000A101 /* DesktopConversationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B101 /* DesktopConversationTests.swift */; };
+		D7000000000000000000A102 /* DesktopHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B102 /* DesktopHistoryTests.swift */; };
+		D7000000000000000000A005 /* SessionSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B005 /* SessionSidebarView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -118,6 +125,13 @@
 		E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTaskContractTests.swift; sourceTree = "<group>"; };
 		E500000000000000000000B2 /* WandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E500000000000000000000B3 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		D7000000000000000000B001 /* DesktopCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopCommands.swift; sourceTree = "<group>"; };
+		D7000000000000000000B002 /* DesktopWelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWelcomeView.swift; sourceTree = "<group>"; };
+		D7000000000000000000B003 /* DesktopOnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopOnboardingView.swift; sourceTree = "<group>"; };
+		D7000000000000000000B004 /* DesktopWebToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWebToolsView.swift; sourceTree = "<group>"; };
+		D7000000000000000000B101 /* DesktopConversationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopConversationTests.swift; sourceTree = "<group>"; };
+		D7000000000000000000B102 /* DesktopHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopHistoryTests.swift; sourceTree = "<group>"; };
+		D7000000000000000000B005 /* SessionSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSidebarView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -153,6 +167,11 @@
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000B1 /* App.swift */,
+				D7000000000000000000B005 /* SessionSidebarView.swift */,
+				D7000000000000000000B004 /* DesktopWebToolsView.swift */,
+				D7000000000000000000B003 /* DesktopOnboardingView.swift */,
+				D7000000000000000000B002 /* DesktopWelcomeView.swift */,
+				D7000000000000000000B001 /* DesktopCommands.swift */,
 				A100000000000000000000B2 /* ContentView.swift */,
 				A100000000000000000000B3 /* ConnectView.swift */,
 				A100000000000000000000B4 /* WebContainerView.swift */,
@@ -216,6 +235,8 @@
 				E500000000000000000000B1 /* MacUpdateManagerTests.swift */,
 				E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */,
 				E500000000000000000000B4 /* TaskBoardTests.swift */,
+				D7000000000000000000B102 /* DesktopHistoryTests.swift */,
+				D7000000000000000000B101 /* DesktopConversationTests.swift */,
 			);
 			path = WandTests;
 			sourceTree = "<group>";
@@ -321,6 +342,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				A100000000000000000000A1 /* App.swift in Sources */,
+				D7000000000000000000A005 /* SessionSidebarView.swift in Sources */,
+				D7000000000000000000A004 /* DesktopWebToolsView.swift in Sources */,
+				D7000000000000000000A003 /* DesktopOnboardingView.swift in Sources */,
+				D7000000000000000000A002 /* DesktopWelcomeView.swift in Sources */,
+				D7000000000000000000A001 /* DesktopCommands.swift in Sources */,
 				A100000000000000000000A2 /* ContentView.swift in Sources */,
 				A100000000000000000000A3 /* ConnectView.swift in Sources */,
 				A100000000000000000000A4 /* WebContainerView.swift in Sources */,
@@ -372,6 +398,8 @@
 				E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */,
 				E500000000000000000000A3 /* WorkspaceTaskContractTests.swift in Sources */,
 				E500000000000000000000A4 /* TaskBoardTests.swift in Sources */,
+				D7000000000000000000A102 /* DesktopHistoryTests.swift in Sources */,
+				D7000000000000000000A101 /* DesktopConversationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

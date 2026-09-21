@@ -7,16 +7,36 @@ struct SettingsView: View {
     let token: String?
     /// 请求打开网页版（由 NativeRootView 在当前 sheet 关闭后呈现）。
     let onOpenWeb: () -> Void
+    let onShowOnboarding: () -> Void
+    let onOpenWebSettings: (() -> Void)?
 
     @EnvironmentObject private var store: ServerStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var serverVersion: String?
     @State private var confirmDisconnect = false
-    @State private var selectedPane: SettingsPane = .connection
+    @State private var selectedPane: SettingsPane
     @State private var showTroubleshooting = false
     @State private var permissionDenied: Bool?
     @ObservedObject private var updateManager = MacUpdateManager.shared
+    @AppStorage("wand.appearanceMode") private var appearanceMode = "system"
+    @AppStorage("wand.sendWithCommandEnter") private var sendWithCommandEnter = false
+
+    init(
+        serverURL: URL,
+        token: String?,
+        onOpenWeb: @escaping () -> Void,
+        onShowOnboarding: @escaping () -> Void = {},
+        onOpenWebSettings: (() -> Void)? = nil,
+        initialPane: String = "general"
+    ) {
+        self.serverURL = serverURL
+        self.token = token
+        self.onOpenWeb = onOpenWeb
+        self.onShowOnboarding = onShowOnboarding
+        self.onOpenWebSettings = onOpenWebSettings
+        _selectedPane = State(initialValue: SettingsPane(rawValue: initialPane) ?? .general)
+    }
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
@@ -29,7 +49,7 @@ struct SettingsView: View {
                 detailPane
             }
         }
-        .frame(minWidth: 700, idealWidth: 760, minHeight: 520, idealHeight: 560)
+        .frame(minWidth: 700, idealWidth: 800, minHeight: 540, idealHeight: 620)
         .background(WandAmbientBackground())
         .task {
             serverVersion = (try? await api.serverConfig())?.currentVersion
@@ -62,7 +82,7 @@ struct SettingsView: View {
     private var settingsHeader: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("系统设置")
+                Text("设置")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                 Text("连接、设备和工作流偏好")
@@ -118,8 +138,12 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 detailHeader
                 switch selectedPane {
+                case .general:
+                    generalContent
                 case .connection:
                     connectionContent
+                case .shortcuts:
+                    shortcutsContent
                 case .permissions:
                     permissionsContent
                 case .troubleshooting:
@@ -134,6 +158,100 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(WandAmbientBackground())
+    }
+
+    private var generalContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            settingsCard("外观", description: "应用于这台 Mac，切换后立即生效。") {
+                HStack(spacing: 12) {
+                    appearanceOption("system", title: "跟随系统", symbol: "circle.lefthalf.filled")
+                    appearanceOption("light", title: "浅色", symbol: "sun.max")
+                    appearanceOption("dark", title: "深色", symbol: "moon")
+                }
+            }
+
+            settingsCard("消息输入", description: "选择你在对话输入框中使用的发送方式。") {
+                Picker("发送消息", selection: $sendWithCommandEnter) {
+                    Text("Return 发送").tag(false)
+                    Text("⌘ Return 发送").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text(sendWithCommandEnter
+                    ? "Return 换行；按 ⌘ Return 发送。"
+                    : "Return 发送；按 ⇧ Return 换行。")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                Text("终端保留命令行原本的按键行为。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textTertiary)
+            }
+
+            settingsCard("开始使用 Wand", description: "了解会话、工作空间、项目工具和桌面快捷键。") {
+                HStack(spacing: 10) {
+                    Button {
+                        dismiss()
+                        onShowOnboarding()
+                    } label: {
+                        Label("打开使用指南", systemImage: "sparkles")
+                    }
+                    Button("查看快捷键") { selectedPane = .shortcuts }
+                }
+            }
+        }
+    }
+
+    private func appearanceOption(_ value: String, title: String, symbol: String) -> some View {
+        let isSelected = appearanceMode == value
+        return Button { appearanceMode = value } label: {
+            VStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 23, weight: .regular))
+                    .frame(height: 34)
+                HStack(spacing: 5) {
+                    Text(title).font(.system(size: 12, weight: .medium))
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                    }
+                }
+            }
+            .foregroundColor(isSelected ? Theme.brand : Theme.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(RoundedRectangle(cornerRadius: 10).fill(
+                isSelected ? Theme.brand.opacity(0.07) : Theme.surface
+            ))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(
+                isSelected ? Theme.brand : Theme.border, lineWidth: isSelected ? 1.5 : 0.75
+            ))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title)外观")
+        .accessibilityValue(isSelected ? "已选择" : "未选择")
+    }
+
+    private var shortcutsContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            settingsCard("在 Wand 中导航") {
+                DesktopShortcutList()
+            }
+            settingsCard("编辑消息") {
+                shortcutRow("发送消息", shortcut: sendWithCommandEnter ? "⌘ ↩" : "↩")
+                rowDivider
+                shortcutRow("插入换行", shortcut: sendWithCommandEnter ? "↩" : "⇧ ↩")
+                rowDivider
+                shortcutRow("关闭当前弹窗", shortcut: "esc")
+            }
+        }
+    }
+
+    private func shortcutRow(_ title: String, shortcut: String) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12)).foregroundColor(Theme.textPrimary)
+            Spacer()
+            DesktopKeycap(label: shortcut)
+        }
     }
 
     private var detailHeader: some View {
@@ -175,12 +293,12 @@ struct SettingsView: View {
                 .font(.system(size: 13))
             }
 
-            settingsCard("完整设置", description: "模型、更新通道和服务端配置在网页版集中管理。") {
+            settingsCard("服务端设置", description: "管理模型、供应商、通知、更新通道与扩展。设置保存在当前服务器。") {
                 Button {
                     dismiss()
-                    onOpenWeb()
+                    (onOpenWebSettings ?? onOpenWeb)()
                 } label: {
-                    Label("打开网页版", systemImage: "safari")
+                    Label("打开服务端设置", systemImage: "slider.horizontal.3")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.brand)
@@ -433,7 +551,9 @@ struct SettingsView: View {
 }
 
 private enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
     case connection
+    case shortcuts
     case permissions
     case troubleshooting
     case about
@@ -442,7 +562,9 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .general: return "通用"
         case .connection: return "连接与服务"
+        case .shortcuts: return "键盘快捷键"
         case .permissions: return "权限"
         case .troubleshooting: return "故障排查"
         case .about: return "关于"
@@ -451,7 +573,9 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .connection: return "管理当前服务器，并进入网页版完整设置。"
+        case .general: return "让 Wand 适合你的工作习惯。"
+        case .connection: return "管理当前连接和服务器上的功能设置。"
+        case .shortcuts: return "让双手留在键盘上，快速进入下一项工作。"
         case .permissions: return "查看 Wand 在这台 Mac 上使用的系统权限。"
         case .troubleshooting: return "诊断连接与本地网络权限问题。"
         case .about: return "版本信息与项目链接。"
@@ -460,7 +584,9 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .general: return "slider.horizontal.3"
         case .connection: return "server.rack"
+        case .shortcuts: return "keyboard"
         case .permissions: return "hand.raised"
         case .troubleshooting: return "stethoscope"
         case .about: return "info.circle"

@@ -15,6 +15,16 @@ final class WebViewModel: ObservableObject {
     }
 
     @Published var phase: Phase = .loading
+    enum DesktopToolNavigation: Equatable {
+        case idle
+        case opening
+        case opened
+        case failed(String)
+    }
+
+    @Published var desktopToolNavigation: DesktopToolNavigation = .idle
+    private var requestedDesktopTool: DesktopWebTool?
+    private var desktopNavigationTask: Task<Void, Never>?
     /// 终端缩放百分比标签，由 JS 回填（"100%" 等）。
     @Published var terminalScaleLabel = "100%"
     /// 终端尺寸（列 × 行），由 JS 回填，驱动状态栏显示。
@@ -26,7 +36,57 @@ final class WebViewModel: ObservableObject {
 
     func retry() {
         phase = .loading
+        desktopNavigationTask?.cancel()
+        if requestedDesktopTool != nil { desktopToolNavigation = .opening }
         webView?.reload()
+    }
+
+    func openDesktopTool(_ tool: DesktopWebTool) {
+        requestedDesktopTool = tool
+        desktopNavigationTask?.cancel()
+        desktopToolNavigation = .opening
+        guard phase == .ready, let webView else { return }
+        desktopNavigationTask = Task { @MainActor [weak self, weak webView] in
+            // didFinish only means that HTML arrived. Authentication restoration
+            // and React mount finish later, so readiness is checked explicitly.
+            for _ in 0..<80 {
+                guard !Task.isCancelled, let self, let webView else { return }
+                let status: String = await withCheckedContinuation { continuation in
+                    webView.evaluateJavaScript(tool.navigationScript) { value, _ in
+                        let result = value as? [String: Any]
+                        continuation.resume(returning: result?["status"] as? String ?? "waiting")
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                switch status {
+                case "opened":
+                    self.desktopToolNavigation = .opened
+                    return
+                case "unsupported":
+                    self.desktopToolNavigation = .failed("当前服务版本还不支持直接打开此工具。可在完整控制台中使用，或更新服务端后重试。")
+                    return
+                case "busy":
+                    self.desktopToolNavigation = .failed("当前页面正在处理操作。请先完成操作，再打开此工具。")
+                    return
+                default:
+                    break
+                }
+                do { try await Task.sleep(nanoseconds: 150_000_000) }
+                catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            self?.desktopToolNavigation = .failed("页面尚未就绪。请完成下方的登录，或检查连接后重试。")
+        }
+    }
+
+    func finishNavigation() {
+        phase = .ready
+        if let tool = requestedDesktopTool { openDesktopTool(tool) }
+    }
+
+    func cancelDesktopToolNavigation() {
+        desktopNavigationTask?.cancel()
+        desktopNavigationTask = nil
     }
 
     // MARK: - 终端缩放（对称 iOS WebContainerView）
