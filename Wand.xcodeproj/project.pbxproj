@@ -57,6 +57,7 @@
 		D7000000000000000000A102 /* DesktopHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B102 /* DesktopHistoryTests.swift */; };
 		D7000000000000000000A005 /* SessionSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B005 /* SessionSidebarView.swift */; };
 		D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B103 /* DesktopLifecycleTests.swift */; };
+		D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B104 /* GitStatusPresentationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -124,6 +125,7 @@
 		D7000000000000000000B102 /* DesktopHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopHistoryTests.swift; sourceTree = "<group>"; };
 		D7000000000000000000B005 /* SessionSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSidebarView.swift; sourceTree = "<group>"; };
 		D7000000000000000000B103 /* DesktopLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopLifecycleTests.swift; sourceTree = "<group>"; };
+		D7000000000000000000B104 /* GitStatusPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusPresentationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -225,6 +227,7 @@
 				D7000000000000000000B102 /* DesktopHistoryTests.swift */,
 				D7000000000000000000B101 /* DesktopConversationTests.swift */,
 				D7000000000000000000B103 /* DesktopLifecycleTests.swift */,
+				D7000000000000000000B104 /* GitStatusPresentationTests.swift */,
 			);
 			path = WandTests;
 			sourceTree = "<group>";
@@ -384,6 +387,7 @@
 				D7000000000000000000A102 /* DesktopHistoryTests.swift in Sources */,
 				D7000000000000000000A101 /* DesktopConversationTests.swift in Sources */,
 				D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */,
+				D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -97,6 +97,28 @@ struct EmptyTabState: View {
 
 // MARK: - Git 状态 tab
 
+enum GitStatusPresentation: Equatable {
+    case loading
+    case failure(String)
+    case nonRepository
+    case unavailable
+    case clean
+    case dirty
+
+    static func resolve(status: GitStatusResult?, loading: Bool, error: String?) -> Self {
+        if loading && status == nil { return .loading }
+        if let error, !error.isEmpty { return .failure(error) }
+        guard let status else { return .unavailable }
+        if let error = status.error, !error.isEmpty { return .failure(error) }
+        guard status.isGit else { return .nonRepository }
+        if !(status.files ?? []).isEmpty || (status.modifiedCount ?? 0) > 0 { return .dirty }
+        if status.files != nil || status.modifiedCount == 0 { return .clean }
+        return .unavailable
+    }
+
+    func permitsCommit(loading: Bool) -> Bool { self == .dirty && !loading }
+}
+
 struct SessionGitStatusView: View {
     let sessionId: String
     let api: WandAPI
@@ -106,6 +128,9 @@ struct SessionGitStatusView: View {
     private var status: GitStatusResult? { gitStatusStore.status(for: sessionId) }
     private var loading: Bool { gitStatusStore.isLoading(sessionId) }
     private var loadError: String? { gitStatusStore.error(for: sessionId) }
+    private var presentation: GitStatusPresentation {
+        .resolve(status: status, loading: loading, error: loadError)
+    }
 
     // MARK: - 聚合计数(从 files 数组按 status 字符统计)
 
@@ -114,7 +139,9 @@ struct SessionGitStatusView: View {
         var added = 0
         var deleted = 0
         var untracked = 0
-        var total: Int { modified + added + deleted + untracked }
+        var renamed = 0
+        var conflicted = 0
+        var other = 0
     }
 
     private func aggregate(_ status: GitStatusResult) -> Counts {
@@ -126,12 +153,18 @@ struct SessionGitStatusView: View {
             let staged = s.first ?? " "
             if s == "??" || unstaged == "?" {
                 c.untracked += 1
+            } else if s.contains("U") || s == "AA" || s == "DD" {
+                c.conflicted += 1
+            } else if s.contains("R") {
+                c.renamed += 1
             } else if unstaged == "M" || staged == "M" {
                 c.modified += 1
             } else if staged == "A" {
                 c.added += 1
             } else if staged == "D" || unstaged == "D" {
                 c.deleted += 1
+            } else {
+                c.other += 1
             }
         }
         return c
@@ -165,7 +198,7 @@ struct SessionGitStatusView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Theme.textPrimary)
             Spacer()
-            if let s = status, aggregate(s).total > 0 {
+            if presentation == .dirty {
                 Button {
                     showQuickCommit = true
                 } label: {
@@ -176,6 +209,7 @@ struct SessionGitStatusView: View {
                         .frame(height: 30)
                 }
                 .buttonStyle(DesktopNavigationButtonStyle())
+                .disabled(!presentation.permitsCommit(loading: loading))
             }
             Button {
                 Task { await gitStatusStore.refresh(sessionId: sessionId, api: api) }
@@ -195,19 +229,20 @@ struct SessionGitStatusView: View {
 
     @ViewBuilder
     private var content: some View {
-        if loading && status == nil {
+        switch presentation {
+        case .loading:
             VStack {
                 Spacer()
                 ProgressView().controlSize(.small).tint(Theme.wandAccent)
                 Spacer()
             }
-        } else if let loadError {
+        case .failure(let message):
             VStack(spacing: 10) {
                 Spacer()
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 24))
                     .foregroundColor(Theme.warning)
-                Text(loadError)
+                Text(message)
                     .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -220,37 +255,46 @@ struct SessionGitStatusView: View {
                 Spacer()
             }
             .padding(20)
-        } else if let s = status {
-            VStack(alignment: .leading, spacing: 0) {
-                if let branch = s.branch {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.system(size: 10))
-                            .foregroundColor(Theme.textMuted)
-                        Text(branch)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(Theme.textPrimary)
+        case .nonRepository:
+            EmptyTabState(systemImage: "folder", label: "此目录未启用 Git")
+        case .unavailable:
+            EmptyTabState(systemImage: "arrow.triangle.branch", label: "暂无可用的 Git 状态")
+        case .clean, .dirty:
+            if let s = status {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let branch = s.branch {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.textMuted)
+                            Text(branch)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(Theme.textPrimary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                }
-                if aggregate(s).total == 0 {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(Theme.success)
-                        Text("工作区干净")
+                    if presentation == .clean {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(Theme.success)
+                            Text("工作区干净")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                        .padding(12)
+                    } else if !(s.files ?? []).isEmpty {
+                        countsList(aggregate(s))
+                    } else {
+                        Text("有 \(s.modifiedCount ?? 0) 项未提交改动")
                             .font(.system(size: 12))
                             .foregroundColor(Theme.textSecondary)
+                            .padding(12)
                     }
-                    .padding(12)
-                } else {
-                    countsList(aggregate(s))
+                    Spacer()
                 }
-                Spacer()
             }
-        } else {
-            EmptyTabState(systemImage: "arrow.triangle.branch", label: "无 Git 状态")
         }
     }
 
@@ -261,6 +305,15 @@ struct SessionGitStatusView: View {
             countRow(symbol: "pencil.circle.fill", color: Theme.warning, label: "修改", count: c.modified)
             countRow(symbol: "minus.circle.fill", color: Theme.danger, label: "删除", count: c.deleted)
             countRow(symbol: "questionmark.circle.fill", color: Theme.textMuted, label: "未跟踪", count: c.untracked)
+            if c.renamed > 0 {
+                countRow(symbol: "arrow.right.circle.fill", color: Theme.textSecondary, label: "重命名", count: c.renamed)
+            }
+            if c.conflicted > 0 {
+                countRow(symbol: "exclamationmark.circle.fill", color: Theme.danger, label: "冲突", count: c.conflicted)
+            }
+            if c.other > 0 {
+                countRow(symbol: "ellipsis.circle.fill", color: Theme.textSecondary, label: "其他改动", count: c.other)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
