@@ -37,6 +37,8 @@ struct WandApp: App {
                     Task { @MainActor in await UpdateFlowController.shared.checkManually() }
                 }
                 Button("切换服务器…") {
+                    // A tool/editor sheet must finish its own close checks first.
+                    guard NSApp.keyWindow?.sheetParent == nil else { return }
                     NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                 }.keyboardShortcut(",", modifiers: [.command, .shift])
             }

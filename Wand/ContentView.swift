@@ -15,7 +15,7 @@ struct ContentView: View {
             WandAmbientBackground()
             if let serverURL = store.serverURL {
                 MainShellView(serverURL: serverURL, token: store.token)
-                    .id(serverURL.absoluteString)
+                    .id(store.connectionID)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ConnectView()

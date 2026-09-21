@@ -1,4 +1,5 @@
 import XCTest
+@testable import Wand
 
 /// 任务一级容器契约的对齐测试（与 iOS WorkspaceWorktreeTests 同源，防两端漂移）。
 final class WorkspaceTaskContractTests: XCTestCase {

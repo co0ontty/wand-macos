@@ -5,7 +5,7 @@ import Combine
 final class ServerStore: ObservableObject {
     static let shared = ServerStore()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let serverURLKey = "wand.serverURL"
     private let tokenKey = "wand.token"
     private let recentInputsKey = "wand.recentInputs"
@@ -14,10 +14,14 @@ final class ServerStore: ObservableObject {
 
     @Published private(set) var serverURL: URL?
     @Published private(set) var token: String?
+    /// Rebuild connection-owned stores even when reconnecting to the same URL.
+    /// The identity never includes credentials and is not persisted.
+    @Published private(set) var connectionID = UUID()
     /// 最近一次成功连接用到的"原始输入"（连接码或地址），供 ConnectView 一键重连。
     @Published private(set) var recentInputs: [String] = []
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         if let s = defaults.string(forKey: serverURLKey), let u = URL(string: s) {
             self.serverURL = u
         }
@@ -31,6 +35,7 @@ final class ServerStore: ObservableObject {
         defaults.set(serverURL.absoluteString, forKey: serverURLKey)
         if let token { defaults.set(token, forKey: tokenKey) }
         else { defaults.removeObject(forKey: tokenKey) }
+        connectionID = UUID()
     }
 
     func disconnect() {
@@ -38,6 +43,7 @@ final class ServerStore: ObservableObject {
         token = nil
         defaults.removeObject(forKey: serverURLKey)
         defaults.removeObject(forKey: tokenKey)
+        connectionID = UUID()
     }
 
     // MARK: - Recent inputs

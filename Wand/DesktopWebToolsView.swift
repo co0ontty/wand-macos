@@ -125,6 +125,42 @@ enum DesktopWebTool: String, CaseIterable, Identifiable {
     }
 }
 
+enum DesktopToolCloseDecision: Equatable {
+    case close, confirmDiscard, waitForSave, retry
+
+    static func resolve(value: Any?, error: Error?) -> DesktopToolCloseDecision {
+        guard error == nil else { return .retry }
+        switch value as? String {
+        case "ready", "unsupported": return .close
+        case "unsaved": return .confirmDiscard
+        case "busy": return .waitForSave
+        default: return .retry
+        }
+    }
+}
+
+struct DesktopToolCloseNotice: View {
+    let message: String
+    let canDiscard: Bool
+    let onDiscard: () -> Void
+
+    var body: some View {
+        HStack {
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            if canDiscard {
+                Button("仍然关闭…", action: onDiscard)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+    }
+}
+
 struct DesktopWebToolsView: View {
     let serverURL: URL
     let token: String?
@@ -136,6 +172,7 @@ struct DesktopWebToolsView: View {
     @State private var confirmDiscard = false
     @State private var checkingClose = false
     @State private var closeError: String?
+    @State private var closeCheckFailed = false
     @StateObject private var webModel = WebViewModel()
 
     init(
@@ -196,11 +233,9 @@ struct DesktopWebToolsView: View {
                     }
                     .padding(20)
                     if let closeError {
-                        Text(closeError)
-                            .font(.system(size: 12))
-                            .foregroundColor(Theme.warning)
-                            .padding(.horizontal, 20)
-                            .padding(.bottom, 10)
+                        DesktopToolCloseNotice(message: closeError, canDiscard: closeCheckFailed) {
+                            confirmDiscard = true
+                        }
                     }
                     navigationStatus
                     WebContainerView(
@@ -236,12 +271,22 @@ struct DesktopWebToolsView: View {
         guard let webView = webModel.webView else { onDismiss(); return }
         checkingClose = true
         closeError = nil
-        webView.evaluateJavaScript("window.__wandDesktopTools?.getCloseState?.() || 'ready'") { value, _ in
+        closeCheckFailed = false
+        let script = """
+        (() => {
+          const tools = window.__wandDesktopTools;
+          return typeof tools?.getCloseState === 'function' ? tools.getCloseState() : 'unsupported';
+        })();
+        """
+        webView.evaluateJavaScript(script) { value, error in
             checkingClose = false
-            switch value as? String {
-            case "unsaved": confirmDiscard = true
-            case "busy": closeError = "文件正在保存，请等待保存完成后再关闭。"
-            default: onDismiss()
+            switch DesktopToolCloseDecision.resolve(value: value, error: error) {
+            case .close: onDismiss()
+            case .confirmDiscard: confirmDiscard = true
+            case .waitForSave: closeError = "文件正在保存，请等待保存完成后再关闭。"
+            case .retry:
+                closeCheckFailed = true
+                closeError = "无法检查未保存的修改。请点击「完成」重试，或确认放弃修改后关闭。"
             }
         }
     }
