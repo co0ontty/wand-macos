@@ -499,6 +499,41 @@ struct SessionBatchDeleteResponse: Decodable {
 }
 
 enum TaskListPresentation {
+    static func filteredDirectoryGroups(_ groups: [TaskDirectoryGroup], query: String) -> [TaskDirectoryGroup] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        func matches(_ value: String?) -> Bool {
+            value?.localizedCaseInsensitiveContains(needle) == true
+        }
+        func matchesSession(_ session: WorkspaceSessionSummary) -> Bool {
+            matches(session.title) || matches(session.providerLabel) || matches(session.cwd)
+        }
+        return groups.compactMap { group in
+            guard !group.tasks.isEmpty || !group.standaloneSessions.isEmpty else { return nil }
+            if needle.isEmpty || matches(group.workspaceName) || matches(group.workspaceCwd) {
+                return group
+            }
+            let tasks = group.tasks.compactMap { task -> WorkspaceTaskSummary? in
+                if matches(task.name) || matches(task.cwd) { return task }
+                let sessions = task.sessions.filter(matchesSession)
+                guard !sessions.isEmpty else { return nil }
+                return WorkspaceTaskSummary(
+                    id: task.id, workspaceId: task.workspaceId, name: task.name,
+                    worktree: task.worktree, layout: task.layout, status: task.status,
+                    createdAt: task.createdAt, lastOpenedAt: task.lastOpenedAt, cwd: task.cwd,
+                    isolated: task.isolated, worktreeError: task.worktreeError,
+                    sessions: sessions, totalSessions: task.totalSessions
+                )
+            }
+            let standaloneSessions = group.standaloneSessions.filter(matchesSession)
+            guard !tasks.isEmpty || !standaloneSessions.isEmpty else { return nil }
+            return TaskDirectoryGroup(
+                workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
+                tasks: tasks, standaloneSessions: standaloneSessions
+            )
+        }
+    }
+
     static func shortenWorkspacePath(_ path: String) -> String {
         let normalized = path.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let rooted = path.hasPrefix("/")
@@ -528,12 +563,12 @@ enum TaskListPresentation {
         sessionCount > 0
     }
 
-    static func isDirectoryExpanded(userCollapsed: Bool, directoryCount: Int) -> Bool {
-        !showsDirectoryDisclosure(directoryCount: directoryCount) || !userCollapsed
+    static func isDirectoryExpanded(userCollapsed: Bool, directoryCount: Int, isSearching: Bool = false) -> Bool {
+        isSearching || !showsDirectoryDisclosure(directoryCount: directoryCount) || !userCollapsed
     }
 
-    static func isTaskSessionsExpanded(userCollapsed: Bool, sessionCount: Int) -> Bool {
-        !showsTaskSessionDisclosure(sessionCount: sessionCount) || !userCollapsed
+    static func isTaskSessionsExpanded(userCollapsed: Bool, sessionCount: Int, isSearching: Bool = false) -> Bool {
+        isSearching || !showsTaskSessionDisclosure(sessionCount: sessionCount) || !userCollapsed
     }
 
     struct ManageSelection: Equatable {

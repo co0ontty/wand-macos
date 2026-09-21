@@ -33,6 +33,106 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: false, sessionCount: 2))
     }
 
+    func testTaskSearchMatchesProjectNamesAndDirectoriesWithoutDroppingChildren() throws {
+        let groups = try searchGroups()
+        for query in ["  wAND ui \n", "/REPO/UI"] {
+            XCTAssertEqual(TaskListPresentation.filteredDirectoryGroups(groups, query: query), [groups[0]])
+        }
+        XCTAssertEqual(
+            TaskListPresentation.filteredDirectoryGroups(groups, query: " \n\t "),
+            Array(groups.prefix(2)),
+            "An empty search keeps all populated groups in their original order"
+        )
+        XCTAssertTrue(TaskListPresentation.filteredDirectoryGroups(groups, query: "missing-project").isEmpty)
+    }
+
+    func testTaskSearchMatchesTaskNameAndActualWorktreeDirectory() throws {
+        let groups = try searchGroups()
+        for query in ["界面", "CHECKOUT"] {
+            let result = TaskListPresentation.filteredDirectoryGroups(groups, query: query)
+            XCTAssertEqual(result.map(\.id), ["ui"])
+            XCTAssertEqual(result.first?.tasks, [groups[0].tasks[0]])
+            XCTAssertEqual(result.first?.standaloneSessions, [])
+        }
+    }
+
+    func testTaskSearchFindsOwnedAndLooseSessionsAndPreservesTaskMetadata() throws {
+        let groups = try searchGroups()
+        let result = TaskListPresentation.filteredDirectoryGroups(groups, query: "  PAYMENTS \n")
+        let task = try XCTUnwrap(result.first?.tasks.first)
+        XCTAssertEqual(result.map(\.id), ["ui"])
+        XCTAssertEqual(task.id, "checkout")
+        XCTAssertEqual(task.sessions.map(\.id), ["payment-review"])
+        XCTAssertEqual(task.listedSessionCount, 6, "Filtering never rewrites the task's total session count")
+        XCTAssertEqual(task.cwd, groups[0].tasks[0].cwd)
+        XCTAssertEqual(task.isolated, true)
+        XCTAssertEqual(task.worktreeError, groups[0].tasks[0].worktreeError)
+        XCTAssertEqual(task.asTask(), groups[0].tasks[0].asTask())
+        XCTAssertEqual(result.first?.standaloneSessions, [])
+
+        for query in ["Documentation", "qoder", "/scratch/docs"] {
+            let loose = TaskListPresentation.filteredDirectoryGroups(groups, query: query)
+            XCTAssertEqual(loose.map(\.id), ["ui"])
+            XCTAssertEqual(loose.first?.tasks, [])
+            XCTAssertEqual(loose.first?.standaloneSessions.map(\.id), ["docs"])
+        }
+        XCTAssertEqual(groups[0].tasks[0].sessions.count, 2, "Filtering leaves the source tree intact")
+    }
+
+    func testTaskSearchTemporarilyExpandsCollapsedResults() {
+        for searching in [false, true, false] {
+            XCTAssertEqual(TaskListPresentation.isDirectoryExpanded(
+                userCollapsed: true, directoryCount: 2, isSearching: searching
+            ), searching)
+            XCTAssertEqual(TaskListPresentation.isTaskSessionsExpanded(
+                userCollapsed: true, sessionCount: 2, isSearching: searching
+            ), searching)
+        }
+        XCTAssertTrue(TaskListPresentation.isDirectoryExpanded(
+            userCollapsed: false, directoryCount: 2, isSearching: false
+        ))
+        XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(
+            userCollapsed: false, sessionCount: 2, isSearching: false
+        ))
+    }
+
+    private func searchGroups() throws -> [TaskDirectoryGroup] {
+        try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"""
+        [
+          {
+            "workspaceId": "ui", "workspaceName": "Wand UI", "workspaceCwd": "/repo/ui",
+            "tasks": [
+              {
+                "id": "checkout", "workspaceId": "ui", "name": "界面清理", "status": "active",
+                "createdAt": "2026-09-21", "cwd": "/repo/ui/.wand-worktrees/checkout",
+                "isolated": true, "worktreeError": "fixture warning", "totalSessions": 6,
+                "sessions": [
+                  { "id": "layout", "provider": "claude", "title": "Layout review", "cwd": "/repo/ui" },
+                  { "id": "payment-review", "provider": "codex", "title": "Payments review", "cwd": "/repo/ui" }
+                ]
+              },
+              {
+                "id": "backend", "workspaceId": "ui", "name": "Backend", "status": "active",
+                "createdAt": "2026-09-21", "cwd": "/repo/ui", "sessions": []
+              }
+            ],
+            "standaloneSessions": [
+              { "id": "docs", "provider": "qoder", "title": "Documentation", "cwd": "/scratch/docs" }
+            ]
+          },
+          {
+            "workspaceId": "infra", "workspaceName": "Infrastructure", "workspaceCwd": "/repo/infra",
+            "tasks": [],
+            "standaloneSessions": [{ "id": "deploy", "provider": "codex", "title": "Deploy" }]
+          },
+          {
+            "workspaceId": "empty", "workspaceName": "Empty", "workspaceCwd": "/repo/empty",
+            "tasks": [], "standaloneSessions": []
+          }
+        ]
+        """#.utf8))
+    }
+
     func testCreateTaskWorktreeFlagPreservesExplicitChoice() {
         // 缺省不传 worktree；当前服务端只在显式 true 时创建隔离目录。
         let defaultTask = createWorkspaceTaskRequest(

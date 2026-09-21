@@ -86,6 +86,10 @@ struct WorkspaceListView: View {
             }
             await store.loadTaskGroups()
         }
+        .onChange(of: query) { _ in
+            selectedTaskIds.removeAll()
+            selectedSessionIds.removeAll()
+        }
         .onChange(of: selectedTaskId) { taskId in
             if let taskId { collapsedTaskIds.remove(taskId) }
         }
@@ -286,27 +290,33 @@ struct WorkspaceListView: View {
         }
     }
 
+    private var isFiltering: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// 任务一级视图：GET /api/tasks 聚合，目录组为一级容器，未分组会话不丢失。
     @ViewBuilder
     private var taskGroupsContent: some View {
-        let visible = store.taskGroups.filter { !$0.tasks.isEmpty || !$0.standaloneSessions.isEmpty }
+        let visible = TaskListPresentation.filteredDirectoryGroups(store.taskGroups, query: query)
         if visible.isEmpty && store.taskGroupsError == nil {
             VStack(spacing: 12) {
                 Spacer()
-                Image(systemName: "arrow.triangle.branch")
+                Image(systemName: isFiltering ? "magnifyingglass" : "arrow.triangle.branch")
                     .font(.system(size: 26, weight: .medium))
                     .foregroundColor(Theme.textSecondary)
-                Text("还没有任务")
+                Text(isFiltering ? "没有匹配的项目或任务" : "还没有任务")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
-                Text("新建任务时选目录，之后在任务里建会话无需再选目录。")
+                Text(isFiltering ? "试试任务名、会话名或目录。" : "新建任务时选目录，之后在任务里建会话无需再选目录。")
                     .font(.system(size: 11))
                     .foregroundColor(Theme.textSecondary)
                     .multilineTextAlignment(.center)
-                Button("新建任务") {
-                    requestNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
+                if !isFiltering {
+                    Button("新建任务") {
+                        requestNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
+                    }
+                    .buttonStyle(WandPrimaryButtonStyle())
                 }
-                .buttonStyle(WandPrimaryButtonStyle())
                 Spacer()
             }
             .padding(16)
@@ -331,9 +341,10 @@ struct WorkspaceListView: View {
     private func taskGroupBlock(_ group: TaskDirectoryGroup, directoryCount: Int) -> some View {
         let expanded = TaskListPresentation.isDirectoryExpanded(
             userCollapsed: collapsedTaskGroups.contains(group.id),
-            directoryCount: directoryCount
+            directoryCount: directoryCount,
+            isSearching: isFiltering
         )
-        let collapsible = TaskListPresentation.showsDirectoryDisclosure(directoryCount: directoryCount)
+        let collapsible = !isFiltering && TaskListPresentation.showsDirectoryDisclosure(directoryCount: directoryCount)
         return VStack(spacing: 2) {
             taskGroupHeader(group, expanded: expanded, collapsible: collapsible)
             if expanded {
@@ -356,7 +367,7 @@ struct WorkspaceListView: View {
     }
 
     private func standaloneSessionBlock(_ group: TaskDirectoryGroup) -> some View {
-        let expanded = !collapsedLooseGroups.contains(group.id)
+        let expanded = isFiltering || !collapsedLooseGroups.contains(group.id)
         return VStack(alignment: .leading, spacing: 2) {
             Button {
                 toggleCollapsedLooseGroup(group.id)
@@ -374,7 +385,8 @@ struct WorkspaceListView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(expanded ? "收起未分组会话" : "展开未分组会话")
+            .disabled(isFiltering)
+            .help(isFiltering ? "筛选时显示匹配会话" : expanded ? "收起未分组会话" : "展开未分组会话")
             if expanded {
                 ForEach(group.standaloneSessions) { session in
                     standaloneSessionRow(session, workspace: workspace(from: group))
@@ -490,7 +502,8 @@ struct WorkspaceListView: View {
         let canCollapseSessions = TaskListPresentation.showsTaskSessionDisclosure(sessionCount: summary.listedSessionCount)
         let expanded = TaskListPresentation.isTaskSessionsExpanded(
             userCollapsed: collapsedTaskIds.contains(summary.id),
-            sessionCount: summary.listedSessionCount
+            sessionCount: summary.listedSessionCount,
+            isSearching: isFiltering
         )
         let workspace = workspace(from: group)
         let task = summary.asTask()
@@ -543,7 +556,8 @@ struct WorkspaceListView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .help(expanded ? "收起终端" : "展开终端")
+                    .disabled(isFiltering)
+                    .help(isFiltering ? "筛选时显示匹配会话" : expanded ? "收起终端" : "展开终端")
                 }
 
                 Button {
