@@ -1844,7 +1844,7 @@ private struct ComposerPasteInterceptor: NSViewRepresentable {
 /// NSTextView keeps marked-text handling inside AppKit's text-input pipeline.
 /// The delegate only sees an unconsumed newline command, which lets Return send
 /// without stealing the same key from Chinese/Japanese/Korean input methods.
-private struct IMEAwareComposerTextView: NSViewRepresentable {
+struct IMEAwareComposerTextView: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let isFocused: Bool
@@ -1853,6 +1853,7 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
     let onCompositionChange: (Bool) -> Void
     let onSubmit: () -> Void
     let onHeightChange: (CGFloat) -> Void
+    var submitActionName = "发送"
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -1911,8 +1912,8 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
         )
         textView.setAccessibilityLabel("消息输入")
         textView.setAccessibilityHelp(sendWithCommandEnter
-            ? "按 Command-Return 发送，按 Return 换行"
-            : "按 Return 发送，按 Shift-Return 换行")
+            ? "按 Command-Return \(submitActionName)，按 Return 换行"
+            : "按 Return \(submitActionName)，按 Shift-Return 换行")
 
         scrollView.documentView = textView
         context.coordinator.scrollView = scrollView
@@ -1926,8 +1927,8 @@ private struct IMEAwareComposerTextView: NSViewRepresentable {
 
         textView.placeholder = placeholder
         textView.setAccessibilityHelp(sendWithCommandEnter
-            ? "按 Command-Return 发送，按 Return 换行"
-            : "按 Return 发送，按 Shift-Return 换行")
+            ? "按 Command-Return \(submitActionName)，按 Return 换行"
+            : "按 Return \(submitActionName)，按 Shift-Return 换行")
         textView.onMarkedTextChange = { active in
             context.coordinator.parent.onCompositionChange(active)
         }

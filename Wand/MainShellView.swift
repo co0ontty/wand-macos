@@ -55,6 +55,7 @@ struct MainShellView: View {
     @State private var showCreateWorkspace = false
     @State private var newTaskSheetRequest: NewTaskSheetRequest?
     @State private var presentNewSession = false
+    @State private var newConversationDraft = ""
     /// 连接状态(给顶栏的 connection dot 用)。
     @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
@@ -77,7 +78,7 @@ struct MainShellView: View {
         nonmutating set { sidebarSectionRaw = newValue.rawValue }
     }
 
-    /// 300 会话栏 + 560 可读聊天区 + 320 Inspector + 间距与边距。
+    /// 260 会话栏 + 600 可读聊天区 + 320 Inspector + 间距与边距。
     /// 低于该值时右栏覆盖在内容之上，保持主任务宽度稳定。
     private let persistentRightPanelMinimumWidth: CGFloat = 1_220
 
@@ -160,7 +161,8 @@ struct MainShellView: View {
             .environmentObject(ServerStore.shared)
         }
         .sheet(isPresented: $presentNewSession) {
-            NewSessionView(api: api) { session in
+            NewSessionView(api: api, initialMessage: newConversationDraft) { session in
+                newConversationDraft = ""
                 presentNewSession = false
                 presentSession(session)
             }
@@ -221,14 +223,6 @@ struct MainShellView: View {
                 onDismiss: { showMissions = false }
             )
         }
-        .sheet(isPresented: $showTaskBoard) {
-            TaskBoardView(
-                api: api,
-                linkedWorkspaceId: selectedWorkspaceTask?.workspace.id,
-                onOpenSession: openSessionFromMissions,
-                onDismiss: { showTaskBoard = false }
-            )
-        }
         .sheet(isPresented: $showCreateWorkspace) {
             WorkspaceCreateView(api: api, store: workspaceStore) { created in
                 showCreateWorkspace = false
@@ -250,6 +244,7 @@ struct MainShellView: View {
                         createdAt: "",
                         lastOpenedAt: nil
                     )
+                    showTaskBoard = false
                     selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
                     await workspaceStore.openTask(workspace: workspace, task: task)
                 }
@@ -268,6 +263,7 @@ struct MainShellView: View {
                     createdAt: "",
                     lastOpenedAt: nil
                 )
+                showTaskBoard = false
                 selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
                 Task {
                     await workspaceStore.openTask(workspace: workspace, task: task)
@@ -311,8 +307,7 @@ struct MainShellView: View {
     }
 
     private var nativeShell: some View {
-        // 主窗口不再有独立的全宽顶栏：品牌、连接状态和全局操作收进侧栏首行
-        // (sidebarTitleBar，红绿灯浮在其左侧)，会话标题由主栏 SessionHeaderView 承载。
+        // 标题区与正文同色；侧栏首行仅保留窗口操作，品牌、连接和工具归入底部。
         GeometryReader { geo in
                 content(width: geo.size.width)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -397,6 +392,7 @@ struct MainShellView: View {
     }
 
     private func presentSession(_ session: SessionSnapshot, keepWorkspaceContext: Bool = false) {
+        showTaskBoard = false
         if !keepWorkspaceContext {
             sidebarSection = .sessions
             selectedWorkspaceTask = nil
@@ -477,7 +473,9 @@ struct MainShellView: View {
             sidebarTitleBar
             sidebarChrome
             if sidebarSection == .sessions {
-                SidebarColumn(api: api, selectedSessionId: $selectedSessionId,
+                SidebarColumn(api: api, selectedSessionId: Binding(
+                                get: { showTaskBoard ? nil : selectedSessionId },
+                                set: { selectedSessionId = $0 }),
                               query: sidebarQuery, presentNewSession: .constant(false),
                               onOpenMissions: { showMissions = true },
                               onSessionSelected: { presentSession($0) })
@@ -485,10 +483,11 @@ struct MainShellView: View {
             WorkspaceListView(
                 store: workspaceStore,
                 api: api,
-                selectedTaskId: selectedWorkspaceTask?.task.id,
+                selectedTaskId: showTaskBoard ? nil : selectedWorkspaceTask?.task.id,
                 selectedSessionId: selectedSessionId,
                 query: sidebarQuery,
                 onOpenTask: { workspace, task in
+                    showTaskBoard = false
                     selectedWorkspaceTask = WorkspaceTaskSelection(
                         workspace: workspace,
                         task: task
@@ -518,6 +517,7 @@ struct MainShellView: View {
                     }
                 },
                 onOpenTaskSession: { workspace, task, session in
+                    showTaskBoard = false
                     selectedWorkspaceTask = WorkspaceTaskSelection(
                         workspace: workspace,
                         task: task
@@ -553,22 +553,17 @@ struct MainShellView: View {
         }
     }
 
-    // MARK: - 侧栏首行（原全宽顶栏的轻量化替代）
-
-    /// 品牌与连接状态在左（红绿灯浮于其左侧，靠 leading 留白避开），
-    /// 文件面板开关与设置菜单收在右侧；背景与侧栏连成一体，不再是横贯窗口的色带。
+    // The window controls and navigation share the sidebar surface.
     private var sidebarTitleBar: some View {
-        HStack(spacing: 2) {
-            identityMenu
-            Spacer(minLength: 0)
+        HStack(spacing: 8) {
+            WindowDragRegion().frame(maxWidth: .infinity).frame(height: 52)
             Button { handle(.toggleSidebar) } label: {
-                Image(systemName: "sidebar.left").frame(width: 26, height: 26)
-            }.buttonStyle(WandIconButtonStyle()).help("隐藏侧栏 · ⌃⌘S").accessibilityLabel("隐藏侧栏")
+                Image(systemName: "sidebar.left").frame(width: 28, height: 28)
+            }.buttonStyle(WandIconButtonStyle()).help("隐藏侧栏 · ⌃⌘S")
+                .accessibilityLabel("隐藏侧栏")
         }
-        .padding(.leading, 74)
-        .padding(.trailing, 6)
-        .frame(height: 44)
-        .frame(maxWidth: .infinity)
+        .padding(.leading, 82).padding(.trailing, 12)
+        .frame(height: 52)
         .windowDrag()
     }
 
@@ -624,29 +619,9 @@ struct MainShellView: View {
             }) {
                 Label("切换服务器…", systemImage: "server.rack")
             }
-            Button(action: { showTaskBoard = true }) {
-                Label("任务管理", systemImage: "checklist")
-            }
-            Button(action: { showMissions = true }) {
-                Label("并行任务", systemImage: "square.stack.3d.up")
-            }
-            Button(action: { presentSettings = true }) {
-                Label("设置…", systemImage: "gearshape")
-            }
-            Button(action: { webTool = .completeWeb }) {
-                Label("完整控制台", systemImage: "safari")
-            }
         } label: {
-            HStack(spacing: 6) {
-                Text("Wand")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                connectionBadge
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .semibold))
-                    .foregroundColor(Theme.textMuted)
-            }
-            .fixedSize()
+            Text("Wand").font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
         }
         .menuStyle(.borderlessButton)
         .help("\(connectionHelp) · \(displayHost)")
@@ -714,22 +689,14 @@ struct MainShellView: View {
         VStack(spacing: 3) {
             navigationRow(.newSession)
             navigationRow(.search)
-            Divider().padding(.vertical, 8)
-            navigationRow(.sessions, active: sidebarSection == .sessions)
-            navigationRow(.workspaces, active: sidebarSection == .workspaces)
-            navigationRow(.taskBoard)
-            navigationRow(.missions)
-            navigationRow(.webTools)
-            HStack {
-                Text(sidebarSection == .sessions ? "最近的会话" : "项目与工作任务")
-                    .font(.system(size: 11, weight: .medium)).foregroundColor(Theme.textSecondary)
-                Spacer()
-                Button { handle(sidebarSection == .sessions ? .newSession : .newTask) } label: {
-                    Image(systemName: "plus").frame(width: 24, height: 24)
-                }.buttonStyle(WandIconButtonStyle())
-                    .help(sidebarSection == .sessions ? "新建会话" : "新建工作任务")
-                    .accessibilityLabel(sidebarSection == .sessions ? "新建会话" : "新建工作任务")
-            }.padding(.horizontal, 8).padding(.top, 14)
+            navigationRow(.taskBoard, active: showTaskBoard)
+            HStack(spacing: 2) {
+                sidebarSectionButton(.sessions, title: "会话")
+                sidebarSectionButton(.workspaces, title: "工作空间")
+            }
+            .padding(3)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.textPrimary.opacity(0.035)))
+            .padding(.top, 20).padding(.bottom, 7)
             HStack(spacing: 6) {
                 Image(systemName: "line.3.horizontal.decrease").foregroundColor(Theme.textSecondary)
                 TextField(sidebarSection == .sessions ? "筛选会话…" : "筛选项目与任务…", text: $sidebarQuery)
@@ -739,10 +706,25 @@ struct MainShellView: View {
                         Image(systemName: "xmark.circle.fill")
                     }.buttonStyle(.plain).accessibilityLabel("清除筛选").help("清除筛选")
                 }
+                if sidebarSection == .workspaces {
+                    Button { handle(.newTask) } label: { Image(systemName: "plus") }
+                        .buttonStyle(.plain).help("新建工作任务").accessibilityLabel("新建工作任务")
+                }
             }
             .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 30)
-            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.textPrimary.opacity(0.035)))
-        }.padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
+        }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+    }
+
+    private func sidebarSectionButton(_ section: SidebarSection, title: String) -> some View {
+        Button { handle(section == .sessions ? .sessions : .workspaces) } label: {
+            Text(title).font(.system(size: 12, weight: sidebarSection == section ? .medium : .regular))
+                .foregroundColor(sidebarSection == section ? Theme.textPrimary : Theme.textSecondary)
+                .frame(maxWidth: .infinity).frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 7)
+                    .fill(sidebarSection == section ? Theme.surfaceElevated : .clear))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+            .accessibilityAddTraits(sidebarSection == section ? .isSelected : [])
     }
 
     private func navigationRow(_ command: DesktopCommand, active: Bool = false) -> some View {
@@ -755,7 +737,7 @@ struct MainShellView: View {
                     Text(command.shortcutLabel).font(.system(size: 10)).foregroundColor(Theme.textTertiary)
                 }
             }
-            .foregroundColor(Theme.textPrimary).padding(.horizontal, 9).frame(height: 34)
+            .foregroundColor(Theme.textPrimary).padding(.horizontal, 9).frame(height: 38)
             .contentShape(Rectangle())
         }.buttonStyle(DesktopNavigationButtonStyle(active: active))
             .help(command.subtitle + (command.shortcutLabel.isEmpty ? "" : " · " + command.shortcutLabel))
@@ -763,28 +745,40 @@ struct MainShellView: View {
     }
 
     private var sidebarFooter: some View {
-        VStack(spacing: 0) {
-            Divider().padding(.horizontal, 14)
-            HStack(spacing: 8) {
-                connectionIndicator
+        VStack(spacing: 8) {
+            Menu {
+                Button("并行任务与收件箱") { handle(.missions) }
+                Button("新建工作任务") { handle(.newTask) }
+                Divider()
+                Button("工具与服务器设置") { handle(.webTools) }
+                Button("完整控制台") { webTool = .completeWeb }
+                Divider()
+                Button("使用入门") { handle(.onboarding) }
+                Button("键盘快捷键") { handle(.shortcuts) }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "square.grid.2x2").frame(width: 20)
+                    Text("工具与帮助").font(.system(size: 13))
+                    Spacer()
+                    Image(systemName: "chevron.up").font(.system(size: 9))
+                }.foregroundColor(Theme.textSecondary).padding(.horizontal, 9).frame(height: 34)
+            }.menuStyle(.borderlessButton)
+                .help("并行任务、服务端工具与使用帮助")
+            Divider()
+            HStack(spacing: 10) {
+                WandBrandMark(size: 30).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(displayHost).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                    Text(connectionStateLabel).font(.system(size: 10)).foregroundColor(Theme.textSecondary)
+                    identityMenu.fixedSize()
+                    HStack(spacing: 5) {
+                        connectionBadge
+                        Text(displayHost).font(.system(size: 10)).lineLimit(1)
+                            .foregroundColor(Theme.textSecondary)
+                    }
                 }
-                Spacer()
-                Button { handle(.onboarding) } label: { Image(systemName: "questionmark.circle").frame(width: 26, height: 28) }
-                    .buttonStyle(WandIconButtonStyle()).help("使用入门").accessibilityLabel("使用入门")
+                Spacer(minLength: 0)
                 settingsMenu
-            }.padding(14)
-        }
-    }
-
-    private var connectionStateLabel: String {
-        switch connectionState {
-        case .connecting: return "正在连接"
-        case .connected: return "已连接"
-        case .disconnected: return "连接中断 · 可重新连接"
-        }
+            }.padding(.horizontal, 4).padding(.vertical, 4)
+        }.padding(12)
     }
 
     private var desktopToolbar: some View {
@@ -795,25 +789,23 @@ struct MainShellView: View {
                 }.buttonStyle(WandIconButtonStyle()).help("显示侧栏 · ⌃⌘S")
                     .accessibilityLabel("显示侧栏")
             }
-            if selectedWorkspaceTask == nil, let session = selectedSession {
+            if showTaskBoard {
+                Text("任务看板").font(.system(size: 15, weight: .medium))
+            } else if selectedWorkspaceTask == nil, let session = selectedSession {
                 BrandLogo(provider: selectedSessionProvider, color: Theme.textSecondary)
                     .frame(width: 16, height: 16)
-                Text(session.displayTitle).font(.system(size: 13, weight: .semibold))
+                Text(session.displayTitle).font(.system(size: 15, weight: .medium))
                     .lineLimit(1).help(session.displayTitle)
             } else {
-                Text(selectedWorkspaceTask?.workspace.name ?? (sidebarSection == .sessions ? "会话" : "工作空间"))
-                    .font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                Text(selectedWorkspaceTask?.workspace.name ?? "Wand")
+                    .font(.system(size: 15, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
             }
-            WindowDragRegion().frame(minWidth: 12, maxWidth: .infinity)
-            if selectedSessionId != nil {
-                Button { webTool = .files } label: { Image(systemName: "doc.badge.gearshape").frame(width: 28, height: 28) }
-                    .buttonStyle(WandIconButtonStyle()).help("编辑与管理文件").accessibilityLabel("编辑与管理文件")
+            WindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 52)
+            if !showTaskBoard, selectedSessionId != nil || selectedWorkspaceTask != nil {
+                filePanelToggleButton
             }
-            Button { handle(.search) } label: { Image(systemName: "magnifyingglass").frame(width: 28, height: 28) }
-                .buttonStyle(WandIconButtonStyle()).help("搜索与命令 · ⇧⌘P").accessibilityLabel("搜索与命令")
-            filePanelToggleButton
         }
-        .padding(.leading, sidebarVisible ? 16 : 78).padding(.trailing, 14).frame(height: 44)
+        .padding(.leading, sidebarVisible ? 24 : 86).padding(.trailing, 20).frame(height: 52)
         .background(Theme.workspaceBackground)
         .windowDrag()
     }
@@ -831,19 +823,25 @@ struct MainShellView: View {
     private var hasPresentedSheet: Bool {
         presentSettings || presentNewSession || showCommandPalette || showOnboarding
             || showShortcuts || webTool != nil || showTroubleshooting || showMissions
-            || showTaskBoard || showCreateWorkspace || newTaskSheetRequest != nil
+            || showCreateWorkspace || newTaskSheetRequest != nil
     }
 
     private func handle(_ command: DesktopCommand) {
         switch command {
-        case .newSession: presentNewSession = true
+        case .newSession:
+            showTaskBoard = false
+            selectedWorkspaceTask = nil
+            selectedSessionId = nil
+            selectedSession = nil
+            filePanelOpen = false
+            sidebarSection = .sessions
         case .newTask: newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil)
         case .search: showCommandPalette = true
         case .toggleSidebar: withAnimation(structuralAnimation) { sidebarVisible.toggle() }
         case .toggleInspector: withAnimation(structuralAnimation) { filePanelOpen.toggle() }
         case .workspaces: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .workspaces
         case .sessions: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .sessions
-        case .taskBoard: showTaskBoard = true
+        case .taskBoard: showTaskBoard = true; filePanelOpen = false
         case .missions: showMissions = true
         case .settings: presentSettings = true
         case .webTools: webTool = .general
@@ -858,6 +856,7 @@ struct MainShellView: View {
         Binding(
             get: { sidebarSection },
             set: { section in
+                showTaskBoard = false
                 sidebarSection = section
                 sidebarQuery = ""
                 if section == .sessions {
@@ -883,6 +882,8 @@ struct MainShellView: View {
                 onSwitchServer: { NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil) },
                 onTroubleshoot: { showTroubleshooting = true }
             )
+        } else if showTaskBoard {
+            TaskBoardView(api: api, onOpenSession: openSessionFromMissions, embedded: true)
         } else if let selection = selectedWorkspaceTask {
             WorkspaceTaskView(
                 workspace: selection.workspace,
@@ -902,7 +903,9 @@ struct MainShellView: View {
                 showsHeader: false
             )
         } else {
-            DesktopWelcomeView(onCommand: handle)
+            DesktopWelcomeView(draft: $newConversationDraft, onContinue: {
+                presentNewSession = true
+            }, onCommand: handle)
         }
     }
 
@@ -1159,7 +1162,7 @@ struct WebFallbackContainer: View {
 
 extension Theme {
     enum LayoutMetrics {
-        static let sidebarWidth: CGFloat = 272
+        static let sidebarWidth: CGFloat = 260
         static let filePanelWidth: CGFloat = 320
     }
 }

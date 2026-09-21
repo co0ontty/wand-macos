@@ -41,11 +41,13 @@ struct NewSessionView: View {
     init(
         api: WandAPI,
         initialCwd: String? = nil,
+        initialMessage: String = "",
         onCreated: @escaping (SessionSnapshot) -> Void
     ) {
         self.api = api
         self.initialCwd = initialCwd
         self.onCreated = onCreated
+        _firstMessage = State(initialValue: initialMessage)
         _cwd = State(initialValue: initialCwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
     }
 

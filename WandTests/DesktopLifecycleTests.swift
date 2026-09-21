@@ -60,9 +60,17 @@ final class DesktopLifecycleTests: XCTestCase {
     func testFirstLaunchUsesComfortableDesktopSize() {
         let screen = CGRect(x: 0, y: 40, width: 1920, height: 1040)
         let frame = DesktopWindowGeometry.initialFrame(in: screen)
-        XCTAssertEqual(frame.size, CGSize(width: 1440, height: 880))
+        XCTAssertEqual(frame.size, CGSize(width: 1600, height: 960))
         XCTAssertEqual(frame.midX, screen.midX)
         XCTAssertEqual(frame.midY, screen.midY)
+    }
+
+    func testUltrawideDisplayGetsLargerWorkspaceWithoutSpanningEntireScreen() {
+        let screen = CGRect(x: 1920, y: -360, width: 3440, height: 1410)
+        let frame = DesktopWindowGeometry.initialFrame(in: screen)
+        XCTAssertEqual(frame.size, CGSize(width: 1920, height: 1120))
+        XCTAssertTrue(screen.contains(frame))
+        XCTAssertEqual(frame.midX, screen.midX)
     }
 
     func testFirstLaunchFitsLaptopVisibleAreaWithoutCoveringMenuBarOrDock() {

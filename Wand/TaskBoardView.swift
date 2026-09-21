@@ -5,6 +5,7 @@ struct TaskBoardView: View {
     var linkedWorkspaceId: String? = nil
     let onOpenSession: (String) -> Void
     var onDismiss: (() -> Void)? = nil
+    var embedded = false
 
     @Environment(\.dismiss) private var dismiss
     @State private var tasks: [WandBoardTask] = []
@@ -24,7 +25,7 @@ struct TaskBoardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            header.frame(maxWidth: embedded ? 1120 : .infinity)
             Divider()
             Group {
                 if let selected {
@@ -56,12 +57,13 @@ struct TaskBoardView: View {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    listContent
+                    listContent.frame(maxWidth: embedded ? 1120 : .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
-        .frame(minWidth: 640, minHeight: 520)
-        .background(Theme.background)
+        .frame(minWidth: embedded ? 0 : 640, minHeight: embedded ? 0 : 520)
+        .background(embedded ? Theme.workspaceBackground : Theme.background)
         .sheet(isPresented: $showCreate) {
             TaskBoardCreateView(
                 workspaces: workspaces,
@@ -114,11 +116,18 @@ struct TaskBoardView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Button(selected == nil ? "关闭" : "返回") {
-                if selected != nil { selected = nil } else { close() }
+            if !embedded || selected != nil {
+                Button(selected == nil ? "关闭" : "返回") {
+                    if selected != nil { selected = nil } else { close() }
+                }
             }
-            Text(selected?.title ?? "任务管理")
-                .font(.headline)
+            if let selected {
+                Text(selected.title).font(.headline)
+            } else if !embedded {
+                Text("任务管理").font(.headline)
+            } else {
+                Text("安排工作，跟踪进度").font(.system(size: 13)).foregroundColor(Theme.textSecondary)
+            }
             Spacer()
             if selected == nil {
                 Button("刷新") { Task { await refresh(showProgress: false) } }
@@ -210,8 +219,10 @@ struct TaskBoardView: View {
                             }
                         }
                     }
+                    .listRowBackground(embedded ? Theme.workspaceBackground : Theme.background)
                 }
             }
+            .modifier(TaskBoardListSurface(embedded: embedded))
         }
     }
 
@@ -599,3 +610,18 @@ private struct TaskBoardCreateView: View {
  * 「待办」列只创建任务；「进行中」列代表已经决定要跑，所以创建后立刻派给所选 Agent。
  */
 func wandBoardCreateDispatches(status: String) -> Bool { status == "doing" }
+
+
+private struct TaskBoardListSurface: ViewModifier {
+    let embedded: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 13.0, *), embedded {
+            content.scrollContentBackground(.hidden)
+                .background(Theme.workspaceBackground)
+        } else {
+            content
+        }
+    }
+}

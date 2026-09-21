@@ -231,7 +231,7 @@ struct SidebarColumn: View {
                 .disabled(deleteInProgress)
                 .help("退出多选")
             } else {
-                Text(sidebarViewMode == .sessions ? "会话" : "目录")
+                Text(sidebarViewMode == .sessions ? "最近会话" : "按目录浏览")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(Theme.textTertiary)
                 Spacer()

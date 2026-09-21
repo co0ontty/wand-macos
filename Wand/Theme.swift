@@ -440,6 +440,8 @@ struct WindowDragRegion: NSViewRepresentable {
 
 private final class WindowDragNSView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
+    // Match native title bars: dragging an inactive window works on the first press.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
         guard let window, window.sheetParent == nil else { return }
@@ -500,13 +502,15 @@ private struct MainWindowTitleBarConfigurator: NSViewRepresentable {
 
 enum DesktopWindowGeometry {
     static let minimumSize = CGSize(width: 900, height: 600)
-    static let preferredSize = CGSize(width: 1440, height: 880)
+    static let preferredSize = CGSize(width: 1600, height: 960)
     static let frameKey = "wand.desktop.windowFrame.v2"
 
     static func initialFrame(in visibleFrame: CGRect) -> CGRect {
         let size = CGSize(
-            width: min(preferredSize.width, max(minimumSize.width, visibleFrame.width - 48)),
-            height: min(preferredSize.height, max(minimumSize.height, visibleFrame.height - 48))
+            width: min(max(preferredSize.width, min(1920, visibleFrame.width * 0.82)),
+                       max(minimumSize.width, visibleFrame.width - 48)),
+            height: min(max(preferredSize.height, min(1120, visibleFrame.height * 0.86)),
+                        max(minimumSize.height, visibleFrame.height - 48))
         )
         return fittedFrame(CGRect(origin: CGPoint(
             x: visibleFrame.midX - size.width / 2,

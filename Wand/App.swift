@@ -38,17 +38,21 @@ struct WandApp: App {
                     NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil)
                 }.keyboardShortcut(",", modifiers: [.command, .shift])
             }
-            CommandMenu("前往") {
-                ForEach([DesktopCommand.search, .sessions, .workspaces, .taskBoard, .missions, .webTools]) {
-                    DesktopCommandMenuItem(command: $0)
-                }
+            CommandGroup(after: .textEditing) {
+                Divider()
+                DesktopCommandMenuItem(command: .search)
+                DesktopCommandMenuItem(command: .findConversation)
+                DesktopCommandMenuItem(command: .focusComposer)
             }
             CommandGroup(after: .sidebar) {
                 DesktopCommandMenuItem(command: .toggleSidebar)
                 DesktopCommandMenuItem(command: .toggleInspector)
                 Divider()
-                DesktopCommandMenuItem(command: .focusComposer)
-                DesktopCommandMenuItem(command: .findConversation)
+                Menu("前往") {
+                    ForEach([DesktopCommand.sessions, .workspaces, .taskBoard, .missions, .webTools]) {
+                        DesktopCommandMenuItem(command: $0)
+                    }
+                }
                 DesktopCommandMenuItem(command: .reconnect)
             }
             CommandGroup(replacing: .help) {

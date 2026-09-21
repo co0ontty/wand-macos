@@ -4,8 +4,11 @@ import SwiftUI
 /// 未连接 → ConnectView。切换服务器通过 sheet 触发 ConnectView。
 struct ContentView: View {
     @EnvironmentObject var store: ServerStore
-    @State private var showSwitchSheet = false
-    @State private var reconnectingServerURL: URL?
+    private struct ConnectionRequest: Identifiable {
+        let id = UUID()
+        let reconnectingServerURL: URL?
+    }
+    @State private var connectionRequest: ConnectionRequest?
     @AppStorage("wand.appearanceMode") private var appearanceMode = "system"
     @State private var showGuide = false
     @State private var showShortcuts = false
@@ -31,13 +34,14 @@ struct ContentView: View {
             if command == .onboarding { showGuide = true }
             if command == .shortcuts { showShortcuts = true }
         }
-        .sheet(isPresented: $showSwitchSheet) {
-            ConnectView(isPresentedAsSheet: true, reconnectingServerURL: reconnectingServerURL) { showSwitchSheet = false }
-                .environmentObject(store)
+        .sheet(item: $connectionRequest) { request in
+            ConnectView(isPresentedAsSheet: true, reconnectingServerURL: request.reconnectingServerURL) {
+                connectionRequest = nil
+            }
+            .environmentObject(store)
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandRequestSwitchServer)) { note in
-            reconnectingServerURL = note.object as? URL
-            showSwitchSheet = true
+            connectionRequest = ConnectionRequest(reconnectingServerURL: note.object as? URL)
         }
     }
 }
