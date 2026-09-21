@@ -13,7 +13,7 @@ struct NewTaskSheetRequest: Identifiable, Equatable {
     var workspaceId: String? = nil
 }
 
-/// 侧栏项目树：项目展开后是任务和直属会话。交互对齐 Orca / Web「项目」面板。
+/// 共享滚动侧栏的工作空间分区：项目、任务及任务内会话。
 struct WorkspaceListView: View {
     @ObservedObject var store: WorkspaceStore
     let api: WandAPI
@@ -38,9 +38,9 @@ struct WorkspaceListView: View {
     @State private var deleteTarget: WorkspaceTask?
     @State private var deleteBusy = false
     @State private var deleteError: String?
-    @State private var collapsedTaskGroups = Set<String>()
+    @State private var expandedTaskGroups = Set<String>()
+    @State private var pendingSelectionReveal = false
     @State private var collapsedTaskIds = Set<String>()
-    @State private var collapsedLooseGroups = Set<String>()
     @State private var clearTarget: WorkspaceTaskSummary?
     @State private var clearBusy = false
     @State private var deleteSessionTarget: WorkspaceSessionSummary?
@@ -54,7 +54,8 @@ struct WorkspaceListView: View {
 
     var body: some View {
         ZStack {
-            VStack(spacing: 0) {
+            VStack(spacing: 2) {
+                sectionHeader
                 stateContent
             }
             if let toastMessage {
@@ -72,17 +73,25 @@ struct WorkspaceListView: View {
             }
         }
         .task {
+            async let taskGroupsLoad: Void = store.loadTaskGroups()
             if case .idle = store.indexState {
                 await store.loadWorkspaceIndex()
             }
-            await store.loadTaskGroups()
+            await taskGroupsLoad
+        }
+        .onChange(of: manageableSelection) { available in
+            selectedTaskIds.formIntersection(available.taskIds)
+            selectedSessionIds.formIntersection(available.sessionIds)
         }
         .onChange(of: query) { _ in
             selectedTaskIds.removeAll()
             selectedSessionIds.removeAll()
         }
-        .onChange(of: selectedTaskId) { taskId in
-            if let taskId { collapsedTaskIds.remove(taskId) }
+        .onAppear { revealSelection() }
+        .onChange(of: selectedTaskId) { _ in revealSelection() }
+        .onChange(of: selectedSessionId) { _ in revealSelection() }
+        .onChange(of: store.taskGroups) { _ in
+            if pendingSelectionReveal { revealSelection() }
         }
         .sheet(item: $newTaskRequest) { request in
             newTaskSheet(request)
@@ -174,82 +183,138 @@ struct WorkspaceListView: View {
         }
     }
 
-    @ViewBuilder
-    private var stateContent: some View {
-        switch store.indexState {
-        case .idle, .loading:
-            if store.workspaces.isEmpty {
-                loadingState
-            } else {
-                workspaceContent
+    private var sectionHeader: some View {
+        HStack(spacing: 4) {
+            Text("工作空间")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Theme.textTertiary)
+            Spacer(minLength: 0)
+            if !manageableSelection.isEmpty && !isSelecting {
+                Button {
+                    isSelecting = true
+                    selectedTaskIds.removeAll()
+                    selectedSessionIds.removeAll()
+                } label: {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(WandIconButtonStyle())
+                .help("多选任务和终端")
+                .accessibilityLabel("多选任务和终端")
             }
-        case .failed(let message):
-            if store.workspaces.isEmpty {
-                errorState(message)
-            } else {
-                workspaceContent
+            Button {
+                requestNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 26, height: 26)
             }
-        case .loaded:
-            workspaceContent
+            .buttonStyle(WandIconButtonStyle())
+            .help("新建任务")
+            .accessibilityLabel("新建任务")
         }
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 34)
     }
 
     @ViewBuilder
-    private var workspaceContent: some View {
-        taskGroupsContent
+    private var stateContent: some View {
+        if !store.taskGroupsLoaded && store.taskGroups.isEmpty {
+            if let error = store.taskGroupsError {
+                errorState(error)
+            } else {
+                loadingState
+            }
+        } else {
+            taskGroupsContent
+        }
     }
 
     private var isFiltering: Bool {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// 任务一级视图：GET /api/tasks 聚合，目录组为一级容器，未分组会话不丢失。
-    @ViewBuilder
-    private var taskGroupsContent: some View {
-        let visible = TaskListPresentation.filteredDirectoryGroups(store.taskGroups, query: query)
-        if visible.isEmpty && store.taskGroupsError == nil {
-            VStack(spacing: 12) {
-                Spacer()
-                Image(systemName: isFiltering ? "magnifyingglass" : "arrow.triangle.branch")
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundColor(Theme.textSecondary)
-                Text(isFiltering ? "没有匹配的项目或任务" : "还没有任务")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
-                Text(isFiltering ? "试试任务名、会话名或目录。" : "新建任务时选目录，之后在任务里建会话无需再选目录。")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textSecondary)
-                    .multilineTextAlignment(.center)
-                if !isFiltering {
-                    Button("新建任务") {
-                        requestNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
-                    }
-                    .buttonStyle(WandPrimaryButtonStyle())
-                }
-                Spacer()
+    private var visibleTaskGroups: [TaskDirectoryGroup] {
+        var groups = store.taskGroups.compactMap { group -> TaskDirectoryGroup? in
+            guard !group.isSynthetic || !group.tasks.isEmpty else { return nil }
+            return TaskDirectoryGroup(
+                workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
+                tasks: group.tasks, standaloneSessions: []
+            )
+        }
+        let groupedWorkspaceIds = Set(groups.map(\.workspaceId))
+        groups += store.workspaces.filter { !groupedWorkspaceIds.contains($0.id) }.map {
+            TaskDirectoryGroup(
+                workspaceId: $0.id, workspaceName: $0.name, workspaceCwd: $0.cwd,
+                synthetic: false, tasks: [], standaloneSessions: []
+            )
+        }
+        let filtered = TaskListPresentation.filteredDirectoryGroups(groups, query: query)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return groups.compactMap { group in
+            if group.tasks.isEmpty && !group.isSynthetic {
+                return needle.isEmpty
+                    || group.workspaceName.localizedCaseInsensitiveContains(needle)
+                    || group.workspaceCwd.localizedCaseInsensitiveContains(needle) ? group : nil
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ScrollView {
-                LazyVStack(spacing: 2, pinnedViews: [.sectionHeaders]) {
-                    manageBar(groups: visible)
-                    if let error = store.taskGroupsError {
-                        inlineError(error)
-                    }
-                    ForEach(visible) { group in
-                        taskGroupBlock(group, directoryCount: visible.count)
-                    }
+            return filtered.first { $0.id == group.id }
+        }
+    }
+
+    private var manageableSelection: TaskListPresentation.ManageSelection {
+        var selection = TaskListPresentation.ManageSelection()
+        let groups = visibleTaskGroups
+        for group in groups where TaskListPresentation.isDirectoryExpanded(
+            userCollapsed: !expandedTaskGroups.contains(group.id),
+            directoryCount: groups.count,
+            isSearching: isFiltering
+        ) {
+            for task in group.tasks {
+                selection.taskIds.insert(task.id)
+                if TaskListPresentation.isTaskSessionsExpanded(
+                    userCollapsed: collapsedTaskIds.contains(task.id),
+                    sessionCount: task.listedSessionCount,
+                    isSearching: isFiltering
+                ) {
+                    selection.sessionIds.formUnion(task.sessions.map(\.id))
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
             }
         }
+        return selection
+    }
+
+    private var taskGroupsContent: some View {
+        let visible = visibleTaskGroups
+        return VStack(spacing: 2) {
+            if isSelecting { manageBar(groups: visible) }
+            if let error = store.taskGroupsError {
+                errorState(error)
+            }
+            if visible.isEmpty {
+                Text(isFiltering ? "没有匹配的工作空间或任务" : "还没有工作空间任务")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ForEach(visible) { group in
+                    taskGroupBlock(group, directoryCount: visible.count)
+                }
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.bottom, 8)
     }
 
     private func taskGroupBlock(_ group: TaskDirectoryGroup, directoryCount: Int) -> some View {
         let expanded = TaskListPresentation.isDirectoryExpanded(
-            userCollapsed: collapsedTaskGroups.contains(group.id),
+            userCollapsed: !expandedTaskGroups.contains(group.id),
             directoryCount: directoryCount,
             isSearching: isFiltering
         )
@@ -260,7 +325,7 @@ struct WorkspaceListView: View {
                 ForEach(group.tasks) { summary in
                     taskSummaryRow(summary, group: group)
                 }
-                if group.tasks.isEmpty && group.standaloneSessions.isEmpty {
+                if group.tasks.isEmpty {
                     Text("这个目录还没有任务。")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textMuted)
@@ -268,44 +333,12 @@ struct WorkspaceListView: View {
                         .padding(.vertical, 6)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if !group.standaloneSessions.isEmpty {
-                    standaloneSessionBlock(group)
-                }
-            }
-        }
-    }
-
-    private func standaloneSessionBlock(_ group: TaskDirectoryGroup) -> some View {
-        let expanded = isFiltering || !collapsedLooseGroups.contains(group.id)
-        return VStack(alignment: .leading, spacing: 2) {
-            Button {
-                toggleCollapsedLooseGroup(group.id)
-            } label: {
-                HStack {
-                    Text("未分组会话（\(group.standaloneSessions.count)）")
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.textMuted)
-                    Spacer(minLength: 6)
-                    treeDisclosureCaret(expanded: expanded)
-                }
-                .padding(.leading, 12)
-                .padding(.trailing, 6)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isFiltering)
-            .help(isFiltering ? "筛选时显示匹配会话" : expanded ? "收起未分组会话" : "展开未分组会话")
-            if expanded {
-                ForEach(group.standaloneSessions) { session in
-                    standaloneSessionRow(session, workspace: workspace(from: group))
-                }
             }
         }
     }
 
     private func taskGroupHeader(_ group: TaskDirectoryGroup, expanded: Bool, collapsible: Bool) -> some View {
-        let sessionTotal = group.tasks.reduce(0) { $0 + $1.listedSessionCount } + group.standaloneSessions.count
+        let sessionTotal = group.tasks.reduce(0) { $0 + $1.listedSessionCount }
         return HStack(spacing: 6) {
             Button {
                 guard collapsible else { return }
@@ -383,11 +416,31 @@ struct WorkspaceListView: View {
     }
 
     private func toggleCollapsedTaskGroup(_ id: String) {
-        if collapsedTaskGroups.contains(id) {
-            collapsedTaskGroups.remove(id)
+        if expandedTaskGroups.contains(id) {
+            expandedTaskGroups.remove(id)
         } else {
-            collapsedTaskGroups.insert(id)
+            expandedTaskGroups.insert(id)
         }
+    }
+
+    private func revealSelection() {
+        guard selectedTaskId != nil || selectedSessionId != nil else {
+            pendingSelectionReveal = false
+            return
+        }
+        for group in store.taskGroups {
+            let task = group.tasks.first { task in
+                if let selectedTaskId { return task.id == selectedTaskId }
+                return task.sessions.contains { $0.id == selectedSessionId }
+            }
+            if let task {
+                expandedTaskGroups.insert(group.id)
+                collapsedTaskIds.remove(task.id)
+                pendingSelectionReveal = false
+                return
+            }
+        }
+        pendingSelectionReveal = true
     }
 
     private func toggleCollapsedTask(_ id: String) {
@@ -395,14 +448,6 @@ struct WorkspaceListView: View {
             collapsedTaskIds.remove(id)
         } else {
             collapsedTaskIds.insert(id)
-        }
-    }
-
-    private func toggleCollapsedLooseGroup(_ id: String) {
-        if collapsedLooseGroups.contains(id) {
-            collapsedLooseGroups.remove(id)
-        } else {
-            collapsedLooseGroups.insert(id)
         }
     }
 
@@ -628,93 +673,39 @@ struct WorkspaceListView: View {
         )
     }
 
-    private func standaloneSessionRow(
-        _ session: WorkspaceSessionSummary,
-        workspace: Workspace
-    ) -> some View {
-        Button {
-            if isSelecting {
-                if selectedSessionIds.contains(session.id) {
-                    selectedSessionIds.remove(session.id)
-                } else {
-                    selectedSessionIds.insert(session.id)
-                }
-                return
-            }
-            onOpenSession?(workspace, session)
-        } label: {
-            HStack(spacing: 8) {
-                if isSelecting {
-                    Image(systemName: selectedSessionIds.contains(session.id) ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(selectedSessionIds.contains(session.id) ? Theme.brand : Theme.textMuted)
-                        .frame(width: 14, height: 14)
-                }
-                BrandLogo(provider: session.provider ?? "terminal", color: Theme.textSecondary)
-                    .frame(width: 13, height: 13)
-                    .frame(width: 18, height: 18)
-                Text(TaskListPresentation.listSessionLabel(
-                    title: session.title,
-                    providerLabel: session.providerLabel,
-                    cwd: session.cwd,
-                    index: 0,
-                    parentNames: [workspace.name]
-                ))
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Circle()
-                    .fill(["running", "thinking"].contains(session.activityStatus) ? Theme.success : Theme.textMuted.opacity(0.45))
-                    .frame(width: 6, height: 6)
-            }
-            .padding(.leading, 28)
-            .padding(.trailing, 8)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button(role: .destructive) {
-                requestDeleteSession(session)
-            } label: {
-                Label("删除终端", systemImage: "trash")
-            }
-        }
-    }
-
-    private func inlineError(_ message: String) -> some View {
-        Label(message, systemImage: "exclamationmark.triangle")
-            .font(.system(size: 11))
-            .foregroundColor(Theme.danger)
-            .padding(.leading, 28)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private var loadingState: some View {
-        VStack {
-            Spacer()
-            ProgressView().tint(Theme.wandAccent)
-            Spacer()
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.wandAccent)
+            Text("正在加载工作空间…")
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textSecondary)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func errorState(_ message: String) -> some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 26))
-                .foregroundColor(Theme.textSecondary)
+        VStack(alignment: .leading, spacing: 6) {
             Text(message)
-                .font(.footnote)
+                .font(.system(size: 11))
                 .foregroundColor(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-            Button("重试") { Task { await store.loadWorkspaceIndex() } }
-                .buttonStyle(WandSecondaryButtonStyle())
-            Spacer()
+                .fixedSize(horizontal: false, vertical: true)
+            Button("重试") {
+                Task {
+                    await store.loadTaskGroups(force: true)
+                    if case .failed = store.indexState { await store.loadWorkspaceIndex() }
+                }
+            }
+            .font(.system(size: 11))
+            .buttonStyle(.plain)
+            .foregroundColor(Theme.wandAccent)
         }
-        .padding(16)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Sheets / dialogs
@@ -866,7 +857,7 @@ struct WorkspaceListView: View {
                     .foregroundColor(Theme.textPrimary)
                 Spacer(minLength: 0)
                 Button(allVisibleSelected(groups) ? "取消全选" : "全选") {
-                    let all = TaskListPresentation.collectManagedIds(groups)
+                    let all = manageableSelection
                     if allVisibleSelected(groups) {
                         selectedTaskIds.removeAll()
                         selectedSessionIds.removeAll()
@@ -877,8 +868,10 @@ struct WorkspaceListView: View {
                 }
                 .buttonStyle(.plain)
                 Button("删除", role: .destructive) {
+                    let available = manageableSelection
                     let resolved = TaskListPresentation.resolveManagedDeletion(
-                        .init(taskIds: selectedTaskIds, sessionIds: selectedSessionIds),
+                        .init(taskIds: selectedTaskIds.intersection(available.taskIds),
+                              sessionIds: selectedSessionIds.intersection(available.sessionIds)),
                         groups: groups
                     )
                     if !resolved.isEmpty { pendingManagedDelete = resolved }
@@ -891,19 +884,6 @@ struct WorkspaceListView: View {
                     selectedSessionIds.removeAll()
                 }
                 .buttonStyle(.plain)
-            } else {
-                Spacer(minLength: 0)
-                Button {
-                    isSelecting = true
-                    selectedTaskIds.removeAll()
-                    selectedSessionIds.removeAll()
-                } label: {
-                    Label("选择", systemImage: "checkmark.circle")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .help("多选任务和终端")
-                .accessibilityLabel("多选任务和终端")
             }
         }
         .padding(.horizontal, 8)
@@ -911,12 +891,22 @@ struct WorkspaceListView: View {
     }
 
     private func allVisibleSelected(_ groups: [TaskDirectoryGroup]) -> Bool {
-        let all = TaskListPresentation.collectManagedIds(groups)
+        let all = manageableSelection
         return !all.isEmpty && selectedTaskIds == all.taskIds && selectedSessionIds == all.sessionIds
     }
 
     private func confirmManagedDelete() async {
-        guard let selection = pendingManagedDelete else { return }
+        guard let pending = pendingManagedDelete else { return }
+        let available = manageableSelection
+        let selection = TaskListPresentation.resolveManagedDeletion(
+            .init(taskIds: pending.taskIds.intersection(available.taskIds),
+                  sessionIds: pending.sessionIds.intersection(available.sessionIds)),
+            groups: visibleTaskGroups
+        )
+        guard !selection.isEmpty else {
+            pendingManagedDelete = nil
+            return
+        }
         do {
             for taskId in selection.taskIds {
                 if let task = store.taskGroups.flatMap(\.tasks).first(where: { $0.id == taskId }) {

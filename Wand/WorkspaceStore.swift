@@ -85,6 +85,8 @@ final class WorkspaceStore: ObservableObject {
     /// 跨目录任务聚合（GET /api/tasks）；加载失败时置空并回退到逐项目拉取。
     @Published private(set) var taskGroups: [TaskDirectoryGroup] = []
     @Published private(set) var taskGroupsError: String?
+    @Published private(set) var taskGroupsLoaded = false
+    private var loadingTaskGroups = false
     /// 增量拉取 `GET /api/tasks` 的 revision；为空时服务端回退全量。
     private var taskGroupsRevision: String?
 
@@ -271,16 +273,22 @@ final class WorkspaceStore: ObservableObject {
 
     /// 跨目录任务聚合：任务视图数据源；失败不阻塞项目树。
     func loadTaskGroups(force: Bool = false) async {
-        if !force && !taskGroups.isEmpty { return }
+        if !force && taskGroupsLoaded { return }
+        guard !loadingTaskGroups else { return }
+        loadingTaskGroups = true
+        defer { loadingTaskGroups = false }
         do {
             let page = try await api.listTaskGroupsPage(revision: taskGroupsRevision)
+            guard !Task.isCancelled else { return }
+            taskGroupsLoaded = true
             if page.unchanged { taskGroupsError = nil; return }
             taskGroups = page.groups
             taskGroupsRevision = page.revision
             taskGroupsError = nil
         } catch {
-            // 保留旧数据，仅记错误供 UI 提示；老服务端无该接口时静默降级。
-            if taskGroups.isEmpty { taskGroupsError = error.localizedDescription }
+            guard !Task.isCancelled else { return }
+            // 保留最近成功的归属数据，错误仅影响工作空间分区。
+            taskGroupsError = error.localizedDescription
         }
     }
 

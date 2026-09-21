@@ -499,6 +499,26 @@ struct SessionBatchDeleteResponse: Decodable {
 }
 
 enum TaskListPresentation {
+    /// Use the complete task tree, before search or presentation limits are applied.
+    static func standaloneSessions(
+        sessions: [SessionSnapshot],
+        groups: [TaskDirectoryGroup],
+        groupsAvailable: Bool
+    ) -> [SessionSnapshot] {
+        guard groupsAvailable else { return sessions }
+        let tasks = groups.flatMap(\.tasks)
+        let taskIds = Set(tasks.map(\.id))
+        let ownedSessionIds = Set(tasks.flatMap { $0.sessions.map(\.id) })
+        let standaloneIds = Set(groups.flatMap { $0.standaloneSessions.map(\.id) })
+        return sessions.filter { session in
+            if ownedSessionIds.contains(session.id) { return false }
+            // The task response may be newer than the cached session's membership.
+            if standaloneIds.contains(session.id) { return true }
+            let taskId = session.workspaceTaskId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return !taskIds.contains(taskId)
+        }
+    }
+
     static func filteredDirectoryGroups(_ groups: [TaskDirectoryGroup], query: String) -> [TaskDirectoryGroup] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         func matches(_ value: String?) -> Bool {
@@ -556,7 +576,7 @@ enum TaskListPresentation {
     }
 
     static func showsDirectoryDisclosure(directoryCount: Int) -> Bool {
-        directoryCount > 1
+        directoryCount > 0
     }
 
     static func showsTaskSessionDisclosure(sessionCount: Int) -> Bool {
@@ -564,7 +584,7 @@ enum TaskListPresentation {
     }
 
     static func isDirectoryExpanded(userCollapsed: Bool, directoryCount: Int, isSearching: Bool = false) -> Bool {
-        isSearching || !showsDirectoryDisclosure(directoryCount: directoryCount) || !userCollapsed
+        directoryCount > 0 && (isSearching || !userCollapsed)
     }
 
     static func isTaskSessionsExpanded(userCollapsed: Bool, sessionCount: Int, isSearching: Bool = false) -> Bool {

@@ -1,6 +1,6 @@
 # macOS 客户端
 
-Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的会话与工作空间侧栏、专注阅读区、
+Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专注阅读区、
 按需文件与 Git 检查器，配合原生命令面板和操作快捷键。交互参考 ChatGPT 桌面端，
 核心流程围绕六种 AI 工具、聊天、PTY、工作任务和工作树展开。
 
@@ -10,18 +10,25 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的会话与工作空
 服务端与 Web 的功能及已有数据保持原状。当前视觉与行为规范见 [DESIGN.md](DESIGN.md) 和
 [UX-CONTRACT.md](UX-CONTRACT.md)；[功能对齐矩阵](docs/macOS-parity.md) 记录此前的对齐状态。
 
+侧栏使用一个滚动区域：上方按工作空间 → 任务 → 任务会话排列，下方是「单独会话」及旧服务器
+返回的可恢复历史。两个分区同时显示，共用筛选，不再切换工作空间/会话或会话/目录模式。
+工作空间分区标题的加号新建任务；目录和任务内的加号仍带入对应上下文与默认值。
+工作空间默认收起，即使只有一个也可展开或收起。选择已有任务会展开对应路径；筛选临时展开，
+清除后恢复原展开状态，定时刷新不会擅自展开用户收起的目录。
+
 ## 桌面快捷键
 
 | 操作 | 快捷键 |
 | --- | --- |
 | 新建会话 / 工作任务 | ⌘N / ⇧⌘N |
 | 搜索与命令 | ⇧⌘P |
-| 会话 / 工作空间 / 看板 | ⌘1 / ⌘2 / ⌘3 |
+| 定位单独会话 / 定位工作空间 / 打开看板 | ⌘1 / ⌘2 / ⌘3 |
 | 显示侧栏 / 检查器 | ⌃⌘S / ⌥⌘I |
 | 聚焦输入 / 查找对话 | ⌘L / ⌘F |
 | 设置 / 切换服务器 | ⌘, / ⇧⌘, |
 | 刷新连接 | ⇧⌘R |
 
+⌘1 / ⌘2 显示侧栏并定位下方 / 上方分区，保留主内容区当前打开的任务或会话。
 操作快捷键由 `DesktopCommand` 统一提供给系统菜单和命令面板。Return 默认发送，Shift-Return
 换行；设置中可改为 Command-Return 发送。中文输入法选词不提交；PTY 保留终端按键行为。
 草稿只在本次 App 运行期间按服务器和会话恢复，不承诺退出后恢复。
@@ -135,10 +142,10 @@ DMG 地址。服务端 `/api/macos-dmg-update` 暂时保留，供旧客户端和
 macos/Wand/
 ├── ContentView.swift          # 已连接进入 MainShellView，未连接进入 ConnectView
 ├── MainShellView.swift        # 主导航、模态路由、稳定阅读区与检查器
-├── SessionSidebarView.swift   # 会话列表、目录、旧服务器历史兼容与删除流程
+├── SessionSidebarView.swift   # 单独会话、旧服务器历史兼容与删除流程
 ├── DesktopCommands.swift     # 菜单/命令/快捷键共用目录与搜索面板
 ├── DesktopWelcomeView.swift   # 包装共享首页输入区与导航按钮样式
-├── WorkspaceListView.swift    # 项目树、任务、worktree 审查入口
+├── WorkspaceListView.swift    # 工作空间、任务与任务会话分区
 ├── WorkspaceTaskView.swift    # 任务工作窗口与标签条
 ├── TaskBoardView.swift        # 看板任务与详情
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
@@ -159,6 +166,8 @@ macos/Wand/
 功能验收、真机验收与最终端到端验收统一连接这台机器已安装运行的 Wand 服务。
 连接信息从 `~/.wand/acceptance-connection.json` 读取，遵循父仓库 `AGENTS.md`；
 连接码不得写入仓库、提交、日志或截图。独立环境仅用于单元测试和开发期检查，不能代替最终验收。
-此前的桌面和首页截图属于历史记录；本次附加功能清理的验收结果将单独记录。
+此前的桌面和首页截图属于历史记录，不能作为当前连续侧栏的验收证据。
+本轮指定 HTTPS 入口仍拒绝连接，真实数据下的交互验收受阻；不能换用其他地址或独立服务冒充通过。
 
-附加功能清理及最终安装包验证见 [清理验收记录](docs/desktop-cleanup-2026-09-21/verification.md)。
+附加功能清理见 [清理验收记录](docs/desktop-cleanup-2026-09-21/verification.md)；
+连续侧栏的构建与实际检查结果另记于 [连续侧栏验收记录](docs/desktop-continuous-sidebar-2026-09-21/verification.md)。

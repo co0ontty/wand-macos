@@ -22,10 +22,12 @@ final class WorkspaceTaskContractTests: XCTestCase {
         )
     }
 
-    func testTaskTreeHidesNeedlessCaretsAndKeepsTerminalsOpen() {
-        XCTAssertFalse(TaskListPresentation.showsDirectoryDisclosure(directoryCount: 1))
+    func testTaskTreeLetsEveryWorkspaceCollapseAndKeepsTerminalsOpen() {
+        XCTAssertFalse(TaskListPresentation.showsDirectoryDisclosure(directoryCount: 0))
+        XCTAssertTrue(TaskListPresentation.showsDirectoryDisclosure(directoryCount: 1))
         XCTAssertTrue(TaskListPresentation.showsDirectoryDisclosure(directoryCount: 2))
-        XCTAssertTrue(TaskListPresentation.isDirectoryExpanded(userCollapsed: true, directoryCount: 1))
+        XCTAssertFalse(TaskListPresentation.isDirectoryExpanded(userCollapsed: true, directoryCount: 1))
+        XCTAssertTrue(TaskListPresentation.isDirectoryExpanded(userCollapsed: false, directoryCount: 1))
         XCTAssertFalse(TaskListPresentation.isDirectoryExpanded(userCollapsed: true, directoryCount: 2))
         XCTAssertFalse(TaskListPresentation.showsTaskSessionDisclosure(sessionCount: 0))
         XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: true, sessionCount: 0))
@@ -81,9 +83,11 @@ final class WorkspaceTaskContractTests: XCTestCase {
 
     func testTaskSearchTemporarilyExpandsCollapsedResults() {
         for searching in [false, true, false] {
-            XCTAssertEqual(TaskListPresentation.isDirectoryExpanded(
-                userCollapsed: true, directoryCount: 2, isSearching: searching
-            ), searching)
+            for directoryCount in [1, 2] {
+                XCTAssertEqual(TaskListPresentation.isDirectoryExpanded(
+                    userCollapsed: true, directoryCount: directoryCount, isSearching: searching
+                ), searching)
+            }
             XCTAssertEqual(TaskListPresentation.isTaskSessionsExpanded(
                 userCollapsed: true, sessionCount: 2, isSearching: searching
             ), searching)
@@ -131,6 +135,96 @@ final class WorkspaceTaskContractTests: XCTestCase {
           }
         ]
         """#.utf8))
+    }
+
+    func testStandaloneSessionsKeepWorkspaceMembershipAndExcludeTaskChildren() throws {
+        let groups = try searchGroups()
+        let sessions = try [
+            sidebarSession("workspace-only", workspaceId: "ui"),
+            sidebarSession("layout"),
+            sidebarSession("payment-review", workspaceId: "ui", taskId: "checkout"),
+            sidebarSession("no-directory"),
+            sidebarSession("empty-task", workspaceId: "ui", taskId: " \n "),
+        ]
+        XCTAssertEqual(TaskListPresentation.standaloneSessions(
+            sessions: sessions, groups: groups, groupsAvailable: true
+        ).map(\.id), ["workspace-only", "no-directory", "empty-task"])
+    }
+
+    func testStandaloneSessionsRespectExplicitLooseMembershipAndKeepOrphanedBindings() throws {
+        let groups = try searchGroups()
+        let sessions = try [
+            sidebarSession("docs", workspaceId: "ui", taskId: "checkout"),
+            sidebarSession("orphan", workspaceId: "missing-workspace", taskId: "deleted-task"),
+        ]
+        XCTAssertEqual(TaskListPresentation.standaloneSessions(
+            sessions: sessions, groups: groups, groupsAvailable: true
+        ).map(\.id), ["docs", "orphan"])
+    }
+
+    func testStandaloneSessionsExcludeTruncatedTaskChildrenUsingTaskIdentity() throws {
+        let groups = try searchGroups()
+        XCTAssertGreaterThan(groups[0].tasks[0].listedSessionCount, groups[0].tasks[0].sessions.count)
+        let sessions = try [
+            sidebarSession("unlisted-child", workspaceId: "global", taskId: "checkout"),
+            sidebarSession("independent", workspaceId: "ui"),
+        ]
+        XCTAssertEqual(TaskListPresentation.standaloneSessions(
+            sessions: sessions, groups: groups, groupsAvailable: true
+        ).map(\.id), ["independent"])
+    }
+
+    func testStandaloneSessionsFallBackToAllSessionsWhenGroupsAreUnavailable() throws {
+        let sessions = try [sidebarSession("layout", taskId: "checkout"), sidebarSession("docs")]
+        XCTAssertEqual(TaskListPresentation.standaloneSessions(
+            sessions: sessions, groups: try searchGroups(), groupsAvailable: false
+        ).map(\.id), sessions.map(\.id))
+        XCTAssertEqual(TaskListPresentation.standaloneSessions(
+            sessions: sessions, groups: [], groupsAvailable: true
+        ).map(\.id), sessions.map(\.id))
+    }
+
+    func testStandaloneSessionsFollowNewTaskGroupsWithoutRefreshingCachedSessionMembership() throws {
+        let groups = try searchGroups()
+        let cached = try sidebarSession("docs", workspaceId: "ui", taskId: "checkout")
+        XCTAssertEqual(TaskListPresentation.standaloneSessions(
+            sessions: [cached], groups: groups, groupsAvailable: true
+        ).map(\.id), ["docs"])
+
+        let original = groups[0].tasks[0]
+        let movedTask = WorkspaceTaskSummary(
+            id: original.id, workspaceId: original.workspaceId, name: original.name,
+            worktree: original.worktree, layout: original.layout, status: original.status,
+            createdAt: original.createdAt, lastOpenedAt: original.lastOpenedAt, cwd: original.cwd,
+            isolated: original.isolated, worktreeError: original.worktreeError,
+            sessions: [WorkspaceSessionSummary(snapshot: cached)], totalSessions: 1
+        )
+        let movedGroup = TaskDirectoryGroup(
+            workspaceId: "cwd:/repo/ui", workspaceName: "UI", workspaceCwd: "/repo/ui",
+            synthetic: true, tasks: [movedTask], standaloneSessions: []
+        )
+        XCTAssertTrue(TaskListPresentation.standaloneSessions(
+            sessions: [cached], groups: [movedGroup], groupsAvailable: true
+        ).isEmpty)
+        XCTAssertEqual(TaskListPresentation.standaloneSessions(
+            sessions: [cached], groups: groups, groupsAvailable: true
+        ).map(\.id), ["docs"])
+
+        let conflictingGroup = TaskDirectoryGroup(
+            workspaceId: movedGroup.workspaceId, workspaceName: movedGroup.workspaceName,
+            workspaceCwd: movedGroup.workspaceCwd, synthetic: true,
+            tasks: [movedTask], standaloneSessions: [WorkspaceSessionSummary(snapshot: cached)]
+        )
+        XCTAssertTrue(TaskListPresentation.standaloneSessions(
+            sessions: [cached], groups: [conflictingGroup], groupsAvailable: true
+        ).isEmpty, "An actually displayed task child must never appear twice")
+    }
+
+    private func sidebarSession(_ id: String, workspaceId: String? = nil, taskId: String? = nil) throws -> SessionSnapshot {
+        var values: [String: Any] = ["id": id]
+        if let workspaceId { values["workspaceId"] = workspaceId }
+        if let taskId { values["workspaceTaskId"] = taskId }
+        return try JSONDecoder().decode(SessionSnapshot.self, from: JSONSerialization.data(withJSONObject: values))
     }
 
     func testCreateTaskWorktreeFlagPreservesExplicitChoice() {

@@ -123,5 +123,4 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let wandRequestSwitchServer = Notification.Name("WandRequestSwitchServer")
-    static let wandRequestSidebarSection = Notification.Name("WandRequestSidebarSection")
 }

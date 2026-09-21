@@ -1,8 +1,8 @@
 import Combine
 import SwiftUI
 
-/// Native desktop navigation: conversations, workspaces and shared tools.
-/// The reading area stays mounted while modal tools and the inspector open.
+/// Native desktop navigation with a continuous workspace and session sidebar.
+/// The reading area stays mounted while settings and the inspector open.
 enum ShellConnectionState {
     case connecting
     case connected
@@ -45,8 +45,9 @@ struct MainShellView: View {
     @State private var selectedSessionProvider: String = "claude"
     @State private var selectedSession: SessionSnapshot?
     @State private var selectedWorkspaceTask: WorkspaceTaskSelection?
-    @AppStorage("wand.sidebar.section") private var sidebarSectionRaw = SidebarSection.workspaces.rawValue
     @State private var sidebarQuery = ""
+    @State private var sidebarScrollRequest: SidebarScrollRequest?
+    private let sidebarRefreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     @State private var showCreateWorkspace = false
     @State private var creationDraft = SessionCreationDraft()
     @State private var creationDrafts: [CreationDraftKey: SessionCreationDraft] = [:]
@@ -67,9 +68,9 @@ struct MainShellView: View {
         ))
     }
 
-    private var sidebarSection: SidebarSection {
-        get { SidebarSection(rawValue: sidebarSectionRaw) ?? .sessions }
-        nonmutating set { sidebarSectionRaw = newValue.rawValue }
+    private struct SidebarScrollRequest {
+        let id = UUID()
+        let section: SidebarSection
     }
 
     /// 260 会话栏 + 600 可读聊天区 + 320 Inspector + 间距与边距。
@@ -141,9 +142,8 @@ struct MainShellView: View {
             }, onWorkspace: { workspace in
                 showCommandPalette = false
                 sidebarVisible = true
-                selectedWorkspaceTask = nil
-                sidebarSectionBinding.wrappedValue = .workspaces
                 sidebarQuery = workspace.name
+                sidebarScrollRequest = SidebarScrollRequest(section: .workspaces)
             }, onDismiss: { showCommandPalette = false })
         }
         .sheet(isPresented: $showTroubleshooting) {
@@ -159,7 +159,6 @@ struct MainShellView: View {
         .sheet(isPresented: $showCreateWorkspace) {
             WorkspaceCreateView(api: api, store: workspaceStore) { created in
                 showCreateWorkspace = false
-                sidebarSection = .workspaces
                 beginCreation(context: SessionCreationContext(
                     cwd: created.cwd,
                     workspaceId: created.id,
@@ -191,10 +190,11 @@ struct MainShellView: View {
             selectedSessionProvider = snapshot.provider ?? "claude"
             selectedSession = snapshot
         }
-        .onReceive(NotificationCenter.default.publisher(for: .wandRequestSidebarSection)) { note in
-            if let section = note.object as? SidebarSection {
-                sidebarSectionBinding.wrappedValue = section
-            }
+        .onReceive(sidebarRefreshTimer) { _ in
+            Task { await workspaceStore.loadTaskGroups(force: true) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wandRefreshLists)) { _ in
+            Task { await workspaceStore.loadTaskGroups(force: true) }
         }
     }
 
@@ -266,7 +266,6 @@ struct MainShellView: View {
     }
 
     private func openSessionFromMissions(_ sessionId: String) {
-        sidebarSection = .sessions
         selectedWorkspaceTask = nil
         showTaskBoard = false
         showCreation = false
@@ -283,13 +282,10 @@ struct MainShellView: View {
         }
     }
 
-    private func presentSession(_ session: SessionSnapshot, keepWorkspaceContext: Bool = false) {
+    private func presentSession(_ session: SessionSnapshot) {
         showTaskBoard = false
         showCreation = false
         selectedWorkspaceTask = nil
-        if !keepWorkspaceContext {
-            sidebarSection = .sessions
-        }
         selectedSessionId = session.id
         selectedSessionProvider = session.provider ?? "claude"
         selectedSession = session
@@ -315,9 +311,6 @@ struct MainShellView: View {
         selectedWorkspaceTask = taskSelection
         selectedSessionId = nil
         selectedSession = nil
-        if context.workspaceId != nil || context.taskId != nil {
-            sidebarSection = .workspaces
-        }
     }
 
     private func beginNewTask(_ request: NewTaskSheetRequest) {
@@ -326,7 +319,6 @@ struct MainShellView: View {
             return !request.cwd.isEmpty
                 && ($0.cwd as NSString).standardizingPath == (request.cwd as NSString).standardizingPath
         }
-        sidebarSection = .workspaces
         beginCreation(context: SessionCreationContext(
             cwd: request.cwd.isEmpty ? nil : request.cwd,
             workspaceId: request.workspaceId ?? workspace?.id,
@@ -377,7 +369,6 @@ struct MainShellView: View {
                 createdAt: detail.createdAt,
                 lastOpenedAt: detail.lastOpenedAt
             )
-            sidebarSection = .workspaces
             selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
             await workspaceStore.openTask(workspace: workspace, task: task,
                                           preferredSessionId: session.id)
@@ -452,87 +443,113 @@ struct MainShellView: View {
         VStack(spacing: 0) {
             sidebarTitleBar
             sidebarChrome
-            if sidebarSection == .sessions {
-                SidebarColumn(api: api, selectedSessionId: Binding(
-                                get: { showTaskBoard || showCreation ? nil : selectedSessionId },
-                                set: { selectedSessionId = $0 }),
-                              query: sidebarQuery, presentNewSession: .constant(false),
-                              onSessionSelected: { presentSession($0) },
-                              onRequestNewSession: { cwd in
-                                  if let cwd {
-                                      beginNewTask(NewTaskSheetRequest(cwd: cwd, projectHint: nil))
-                                  } else {
-                                      beginCreation()
-                                  }
-                              })
-            } else {
-            WorkspaceListView(
-                store: workspaceStore,
-                api: api,
-                selectedTaskId: showTaskBoard ? nil : selectedWorkspaceTask?.task.id,
-                selectedSessionId: selectedSessionId,
-                query: sidebarQuery,
-                onOpenTask: { workspace, task in
-                    showTaskBoard = false
-                    showCreation = false
-                    selectedSessionId = nil
-                    selectedSession = nil
-                    selectedWorkspaceTask = WorkspaceTaskSelection(
-                        workspace: workspace,
-                        task: task
-                    )
-                },
-                onTaskRenamed: { updated in
-                    if var selection = selectedWorkspaceTask, selection.task.id == updated.id {
-                        selectedWorkspaceTask = WorkspaceTaskSelection(
-                            workspace: selection.workspace,
-                            task: updated
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 12) {
+                        workspaceSidebar.id(SidebarSection.workspaces)
+                        Divider().padding(.horizontal, 12)
+                        SidebarColumn(
+                            api: api,
+                            selectedSessionId: Binding(
+                                get: {
+                                    showTaskBoard || showCreation || selectedWorkspaceTask != nil
+                                        ? nil : selectedSessionId
+                                },
+                                set: { selectedSessionId = $0 }
+                            ),
+                            query: sidebarQuery,
+                            taskGroups: workspaceStore.taskGroups,
+                            taskGroupsAvailable: workspaceStore.taskGroupsLoaded,
+                            presentNewSession: .constant(false),
+                            onSessionSelected: { presentSession($0) },
+                            onRequestNewSession: { cwd in
+                                beginCreation(context: SessionCreationContext(cwd: cwd, startsNewTask: false))
+                            }
                         )
+                        .id(SidebarSection.sessions)
                     }
-                },
-                onTaskDeleted: { taskId in
-                    if selectedWorkspaceTask?.task.id == taskId {
-                        selectedWorkspaceTask = nil
+                    .padding(.bottom, 12)
+                }
+                .onChange(of: sidebarScrollRequest?.id) { _ in
+                    if let request = sidebarScrollRequest {
+                        proxy.scrollTo(request.section, anchor: .top)
                     }
-                },
-                onOpenSession: { _, session in
-                    Task {
-                        do {
-                            let snapshot = try await api.getSession(id: session.id)
-                            presentSession(snapshot, keepWorkspaceContext: true)
-                        } catch {
-                            connectionState = .failure(error)
-                        }
+                }
+                .onAppear {
+                    if let request = sidebarScrollRequest {
+                        proxy.scrollTo(request.section, anchor: .top)
                     }
-                },
-                onOpenTaskSession: { workspace, task, session in
-                    showTaskBoard = false
-                    showCreation = false
-                    selectedSessionId = session.id
-                    selectedSession = nil
-                    selectedWorkspaceTask = WorkspaceTaskSelection(
-                        workspace: workspace,
-                        task: task
-                    )
-                    Task { await workspaceStore.openTask(workspace: workspace, task: task, preferredSessionId: session.id) }
-                },
-                onRequestNewSession: { workspace, task in
-                    beginTaskSession(workspace: workspace, task: task)
-                },
-                onRequestNewTask: beginNewTask,
-                onMergeAgentStarted: { _, started in
-                    presentSession(started, keepWorkspaceContext: true)
-                },
-                onWorkspaceDeleted: { workspaceId in
-                    if selectedWorkspaceTask?.workspace.id == workspaceId {
-                        selectedWorkspaceTask = nil
-                    }
-                },
-                onCreateWorkspace: { showCreateWorkspace = true }
-            )
+                }
             }
             sidebarFooter
         }
+    }
+
+    private var workspaceSidebar: some View {
+        WorkspaceListView(
+            store: workspaceStore,
+            api: api,
+            selectedTaskId: showTaskBoard ? nil : selectedWorkspaceTask?.task.id,
+            selectedSessionId: selectedSessionId,
+            query: sidebarQuery,
+            onOpenTask: { workspace, task in
+                showTaskBoard = false
+                showCreation = false
+                selectedSessionId = nil
+                selectedSession = nil
+                selectedWorkspaceTask = WorkspaceTaskSelection(
+                    workspace: workspace,
+                    task: task
+                )
+            },
+            onTaskRenamed: { updated in
+                if var selection = selectedWorkspaceTask, selection.task.id == updated.id {
+                    selectedWorkspaceTask = WorkspaceTaskSelection(
+                        workspace: selection.workspace,
+                        task: updated
+                    )
+                }
+            },
+            onTaskDeleted: { taskId in
+                if selectedWorkspaceTask?.task.id == taskId {
+                    selectedWorkspaceTask = nil
+                }
+            },
+            onOpenSession: { _, session in
+                Task {
+                    do {
+                        let snapshot = try await api.getSession(id: session.id)
+                        presentSession(snapshot)
+                    } catch {
+                        connectionState = .failure(error)
+                    }
+                }
+            },
+            onOpenTaskSession: { workspace, task, session in
+                showTaskBoard = false
+                showCreation = false
+                selectedSessionId = session.id
+                selectedSession = nil
+                selectedWorkspaceTask = WorkspaceTaskSelection(
+                    workspace: workspace,
+                    task: task
+                )
+                Task { await workspaceStore.openTask(workspace: workspace, task: task, preferredSessionId: session.id) }
+            },
+            onRequestNewSession: { workspace, task in
+                beginTaskSession(workspace: workspace, task: task)
+            },
+            onRequestNewTask: beginNewTask,
+            onMergeAgentStarted: { _, started in
+                presentSession(started)
+            },
+            onWorkspaceDeleted: { workspaceId in
+                if selectedWorkspaceTask?.workspace.id == workspaceId {
+                    selectedWorkspaceTask = nil
+                }
+            },
+            onCreateWorkspace: { showCreateWorkspace = true }
+        )
     }
 
     // The window controls and navigation share the sidebar surface.
@@ -672,41 +689,19 @@ struct MainShellView: View {
             navigationRow(.newSession, active: showCreation && selectedWorkspaceTask == nil)
             navigationRow(.search)
             navigationRow(.taskBoard, active: showTaskBoard)
-            HStack(spacing: 2) {
-                sidebarSectionButton(.sessions, title: "会话")
-                sidebarSectionButton(.workspaces, title: "工作空间")
-            }
-            .padding(3)
-            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.textPrimary.opacity(0.035)))
-            .padding(.top, 20).padding(.bottom, 7)
             HStack(spacing: 6) {
                 Image(systemName: "line.3.horizontal.decrease").foregroundColor(Theme.textSecondary)
-                TextField(sidebarSection == .sessions ? "筛选会话…" : "筛选项目与任务…", text: $sidebarQuery)
+                TextField("筛选工作空间与会话…", text: $sidebarQuery)
                     .textFieldStyle(.plain).focused($sidebarSearchFocused)
                 if !sidebarQuery.isEmpty {
                     Button { sidebarQuery = ""; sidebarSearchFocused = true } label: {
                         Image(systemName: "xmark.circle.fill")
                     }.buttonStyle(.plain).accessibilityLabel("清除筛选").help("清除筛选")
                 }
-                if sidebarSection == .workspaces {
-                    Button { handle(.newTask) } label: { Image(systemName: "plus") }
-                        .buttonStyle(.plain).help("新建工作任务").accessibilityLabel("新建工作任务")
-                }
             }
             .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 30)
+            .padding(.top, 14)
         }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
-    }
-
-    private func sidebarSectionButton(_ section: SidebarSection, title: String) -> some View {
-        Button { handle(section == .sessions ? .sessions : .workspaces) } label: {
-            Text(title).font(.system(size: 12, weight: sidebarSection == section ? .medium : .regular))
-                .foregroundColor(sidebarSection == section ? Theme.textPrimary : Theme.textSecondary)
-                .frame(maxWidth: .infinity).frame(height: 28)
-                .background(RoundedRectangle(cornerRadius: 7)
-                    .fill(sidebarSection == section ? Theme.surfaceElevated : .clear))
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain)
-            .accessibilityAddTraits(sidebarSection == section ? .isSelected : [])
     }
 
     private func navigationRow(_ command: DesktopCommand, active: Bool = false) -> some View {
@@ -792,40 +787,23 @@ struct MainShellView: View {
     private func handle(_ command: DesktopCommand) {
         switch command {
         case .newSession:
-            sidebarSection = .sessions
             beginCreation()
         case .newTask:
             beginNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
         case .search: showCommandPalette = true
         case .toggleSidebar: withAnimation(structuralAnimation) { sidebarVisible.toggle() }
         case .toggleInspector: withAnimation(structuralAnimation) { filePanelOpen.toggle() }
-        case .workspaces: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .workspaces
-        case .sessions: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .sessions
+        case .workspaces, .sessions:
+            sidebarVisible = true
+            sidebarQuery = ""
+            sidebarScrollRequest = SidebarScrollRequest(
+                section: command == .workspaces ? .workspaces : .sessions
+            )
         case .taskBoard: showCreation = false; showTaskBoard = true; filePanelOpen = false
         case .settings: presentSettings = true
         case .reconnect: recoverConnection()
         case .focusComposer, .findConversation: break
         }
-    }
-
-    private var sidebarSectionBinding: Binding<SidebarSection> {
-        Binding(
-            get: { sidebarSection },
-            set: { section in
-                showTaskBoard = false
-                sidebarSection = section
-                sidebarQuery = ""
-                if section == .sessions {
-                    selectedWorkspaceTask = nil
-                } else {
-                    selectedSessionId = nil
-                    selectedSession = nil
-                    if case .idle = workspaceStore.indexState {
-                        Task { await workspaceStore.loadWorkspaceIndex() }
-                    }
-                }
-            }
-        )
     }
 
     @ViewBuilder
