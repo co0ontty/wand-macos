@@ -503,7 +503,7 @@ struct MainShellView: View {
                 )
             },
             onTaskRenamed: { updated in
-                if var selection = selectedWorkspaceTask, selection.task.id == updated.id {
+                if let selection = selectedWorkspaceTask, selection.task.id == updated.id {
                     selectedWorkspaceTask = WorkspaceTaskSelection(
                         workspace: selection.workspace,
                         task: updated

@@ -573,6 +573,9 @@ final class WandAPI {
         description: String,
         status: String,
         priority: String,
+        labels: [String] = [],
+        dueDate: String? = nil,
+        milestoneId: String? = nil,
         workspaceId: String?,
         agent: WandBoardTaskAgent? = nil
     ) async throws -> WandBoardTask {
@@ -582,8 +585,12 @@ final class WandAPI {
             "description": description,
             "status": status,
             "priority": priority,
-            "labels": [String](),
+            "labels": labels,
+            "dueDate": dueDate ?? NSNull(),
         ]
+        if let milestoneId, !milestoneId.isEmpty {
+            body["milestoneId"] = milestoneId
+        }
         if let workspaceId, !workspaceId.isEmpty {
             body["workspaceId"] = workspaceId
         } else {
@@ -593,6 +600,29 @@ final class WandAPI {
             body["agent"] = agent.jsonObject()
         }
         return try await request(WandBoardTask.self, method: "POST", path: "/api/wand-tasks", body: body)
+    }
+
+    // MARK: 里程碑（迭代）
+
+    func listBoardMilestones(workspaceId: String? = nil) async throws -> [WandBoardMilestone] {
+        var path = "/api/wand-milestones"
+        if let workspaceId, !workspaceId.isEmpty {
+            path += "?workspaceId=\(percentEncode(workspaceId))"
+        }
+        let payload = try await request(WandBoardMilestoneListResponse.self, method: "GET", path: path)
+        return payload.milestones
+    }
+
+    @discardableResult
+    func createBoardMilestone(
+        name: String,
+        workspaceId: String? = nil,
+        dueDate: String? = nil
+    ) async throws -> WandBoardMilestone {
+        var body: [String: Any] = ["name": name]
+        body["workspaceId"] = workspaceId.flatMap { $0.isEmpty ? nil : $0 } ?? NSNull()
+        body["dueDate"] = dueDate ?? NSNull()
+        return try await request(WandBoardMilestone.self, method: "POST", path: "/api/wand-milestones", body: body)
     }
 
     /// 单条任务：新建后用来确认后台自动标题是否已生成。
@@ -616,12 +646,40 @@ final class WandAPI {
         )
     }
 
-    func dispatchBoardTask(id: String, agent: WandBoardTaskAgent) async throws -> WandBoardDispatchResult {
-        try await request(
+    func dispatchBoardTask(
+        id: String,
+        agent: WandBoardTaskAgent,
+        prompt: String = "",
+        workspaceId: String? = nil
+    ) async throws -> WandBoardDispatchResult {
+        var body: [String: Any] = ["agent": agent.jsonObject()]
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { body["prompt"] = trimmed }
+        if let workspaceId {
+            body["workspaceId"] = workspaceId.isEmpty ? NSNull() : workspaceId
+        }
+        return try await request(
             WandBoardDispatchResult.self,
             method: "POST",
             path: "/api/wand-tasks/\(percentEncodePathComponent(id))/dispatch",
-            body: ["agent": agent.jsonObject()]
+            body: body
+        )
+    }
+
+    /// 把已有会话挂到这张卡上（会话原先挂在别的卡时是「换归属」，运行目录不变）。
+    func linkBoardTaskSession(taskId: String, sessionId: String) async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/api/wand-tasks/\(percentEncodePathComponent(taskId))/sessions",
+            body: ["sessionId": sessionId]
+        )
+    }
+
+    /// 解开卡片与会话的绑定：会话本身不删除，只是不再属于任何任务。
+    func unlinkBoardTaskSession(taskId: String, sessionId: String) async throws {
+        _ = try await requestData(
+            method: "DELETE",
+            path: "/api/wand-tasks/\(percentEncodePathComponent(taskId))/sessions/\(percentEncodePathComponent(sessionId))"
         )
     }
 

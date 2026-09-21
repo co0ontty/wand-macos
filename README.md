@@ -151,7 +151,14 @@ macos/Wand/
 ├── DesktopWelcomeView.swift   # 包装共享首页输入区与导航按钮样式
 ├── WorkspaceListView.swift    # 工作空间、任务与任务会话分区
 ├── WorkspaceTaskView.swift    # 任务工作窗口与标签条
-├── TaskBoardView.swift        # 看板任务与详情
+├── TaskBoardView.swift        # 看板宿主：视图切换、搜索/筛选/显示、轮询与写操作
+├── TaskBoardModels.swift      # 看板状态、筛选、里程碑、日期与统计口径
+├── TaskBoardComponents.swift  # 状态图标、胶囊、卡片、会话列表与归档目录
+├── TaskBoardBoardView.swift   # 看板列、归档区与拖拽
+├── TaskBoardViews.swift       # 概览、列表、甘特图
+├── TaskBoardDetailView.swift  # 任务详情：描述、派发与会话列表
+├── TaskBoardCreateView.swift  # 新建任务面板
+├── TaskBoardPickers.swift     # 里程碑/标签/截止日期/Agent 选择器
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
 ├── NewSessionView.swift       # 首页输入、底部配置入口、默认值与创建草稿

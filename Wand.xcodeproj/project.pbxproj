@@ -36,6 +36,12 @@
 		A100000000000000000000C1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* Assets.xcassets */; };
 		D5000000000000000000AC01 /* TaskBoardModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC01 /* TaskBoardModels.swift */; };
 		D5000000000000000000AC02 /* TaskBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC02 /* TaskBoardView.swift */; };
+		D5000000000000000000AC03 /* TaskBoardComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC03 /* TaskBoardComponents.swift */; };
+		D5000000000000000000AC04 /* TaskBoardBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC04 /* TaskBoardBoardView.swift */; };
+		D5000000000000000000AC05 /* TaskBoardViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC05 /* TaskBoardViews.swift */; };
+		D5000000000000000000AC06 /* TaskBoardPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC06 /* TaskBoardPickers.swift */; };
+		D5000000000000000000AC07 /* TaskBoardDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC07 /* TaskBoardDetailView.swift */; };
+		D5000000000000000000AC08 /* TaskBoardCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC08 /* TaskBoardCreateView.swift */; };
 		E500000000000000000000A4 /* TaskBoardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B4 /* TaskBoardTests.swift */; };
 		F6000000000000000000AC01 /* SessionTimeFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC01 /* SessionTimeFormatting.swift */; };
 		F6000000000000000000AC02 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC02 /* WorkspaceModels.swift */; };
@@ -103,6 +109,12 @@
 		A100000000000000000000F1 /* Wand.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Wand.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5000000000000000000BC01 /* TaskBoardModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardModels.swift; sourceTree = "<group>"; };
 		D5000000000000000000BC02 /* TaskBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardView.swift; sourceTree = "<group>"; };
+		D5000000000000000000BC03 /* TaskBoardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardComponents.swift; sourceTree = "<group>"; };
+		D5000000000000000000BC04 /* TaskBoardBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardBoardView.swift; sourceTree = "<group>"; };
+		D5000000000000000000BC05 /* TaskBoardViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardViews.swift; sourceTree = "<group>"; };
+		D5000000000000000000BC06 /* TaskBoardPickers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardPickers.swift; sourceTree = "<group>"; };
+		D5000000000000000000BC07 /* TaskBoardDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardDetailView.swift; sourceTree = "<group>"; };
+		D5000000000000000000BC08 /* TaskBoardCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardCreateView.swift; sourceTree = "<group>"; };
 		E500000000000000000000B4 /* TaskBoardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardTests.swift; sourceTree = "<group>"; };
 		F6000000000000000000BC01 /* SessionTimeFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTimeFormatting.swift; sourceTree = "<group>"; };
 		F6000000000000000000BC02 /* WorkspaceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModels.swift; sourceTree = "<group>"; };
@@ -191,6 +203,12 @@
 				A200000000000000000000D6 /* UpdateInstaller.swift */,
 				D5000000000000000000BC01 /* TaskBoardModels.swift */,
 				D5000000000000000000BC02 /* TaskBoardView.swift */,
+				D5000000000000000000BC03 /* TaskBoardComponents.swift */,
+				D5000000000000000000BC04 /* TaskBoardBoardView.swift */,
+				D5000000000000000000BC05 /* TaskBoardViews.swift */,
+				D5000000000000000000BC06 /* TaskBoardPickers.swift */,
+				D5000000000000000000BC07 /* TaskBoardDetailView.swift */,
+				D5000000000000000000BC08 /* TaskBoardCreateView.swift */,
 				F6000000000000000000BC01 /* SessionTimeFormatting.swift */,
 				F6000000000000000000BC02 /* WorkspaceModels.swift */,
 				F6000000000000000000BC03 /* WorkspaceAPI.swift */,
@@ -363,6 +381,12 @@
 				A200000000000000000000C6 /* UpdateInstaller.swift in Sources */,
 				D5000000000000000000AC01 /* TaskBoardModels.swift in Sources */,
 				D5000000000000000000AC02 /* TaskBoardView.swift in Sources */,
+				D5000000000000000000AC03 /* TaskBoardComponents.swift in Sources */,
+				D5000000000000000000AC04 /* TaskBoardBoardView.swift in Sources */,
+				D5000000000000000000AC05 /* TaskBoardViews.swift in Sources */,
+				D5000000000000000000AC06 /* TaskBoardPickers.swift in Sources */,
+				D5000000000000000000AC07 /* TaskBoardDetailView.swift in Sources */,
+				D5000000000000000000AC08 /* TaskBoardCreateView.swift in Sources */,
 				F6000000000000000000AC01 /* SessionTimeFormatting.swift in Sources */,
 				F6000000000000000000AC02 /* WorkspaceModels.swift in Sources */,
 				F6000000000000000000AC03 /* WorkspaceAPI.swift in Sources */,

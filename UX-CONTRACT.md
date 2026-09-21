@@ -45,7 +45,7 @@
 | 连续侧栏 / 命令搜索 | `MainShellView` / `SessionSidebarView` / `WorkspaceListView` / `DesktopCommands`：轻量选中底色、可读辅助文字、统一筛选与键盘操作 |
 | 聊天 / 权限 / 附件 | `ChatView`：共享输入与操作，状态文字静态，长消息/代码保留阅读和滚动语义 |
 | 工作空间 / 任务 / 选择弹窗 | 对应 `Workspace*View` 与 `WorkspaceTargetPicker`：开放分组、细线、统一主次操作，任务树保持紧凑 |
-| 任务看板 / 编辑详情 | `TaskBoardView`：轻量列与任务内容，弹窗统一标题和底部动作，保留原CRUD状态 |
+| 任务看板 / 编辑详情 | `TaskBoardView` 与 `TaskBoard*` 组件：列头状态色、细描边胶囊、卡片拖拽换列/入归档、弹窗统一标题和底部动作，保留原 CRUD 状态 |
 | 文件 / Git / 快捷提交 | `FilePanelView` / `FileTreeView` / `GitQuickCommitView`：统一检查器工具条与焦点，代码和diff不套品牌底色 |
 | PTY 加载与失败 | `WebContainerView`：与主壳一致的状态排版；终端画布与输入协议保持原有语义 |
 | 设置 / 关于 / 更新 | `SettingsView`：24 pt 正文标题、分组细线、原生选项；更新与权限状态取真实结果 |
