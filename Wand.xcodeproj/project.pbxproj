@@ -48,7 +48,6 @@
 		F6000000000000000000AC30 /* WorkspaceNewTaskSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC30 /* WorkspaceNewTaskSheet.swift */; };
 		F6000000000000000000AC09 /* WorkspaceTaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC09 /* WorkspaceTaskView.swift */; };
 		F6000000000000000000AC0A /* WorkspaceTargetPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC0A /* WorkspaceTargetPicker.swift */; };
-		F6000000000000000000AC0B /* WorkspaceWorktreeReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6000000000000000000BC0B /* WorkspaceWorktreeReviewView.swift */; };
 		E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B1 /* MacUpdateManagerTests.swift */; };
 		E500000000000000000000A3 /* WorkspaceTaskContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */; };
 		E500000000000000000000A2 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E500000000000000000000B5 /* XCTest.framework */; };
@@ -115,7 +114,6 @@
 		F6000000000000000000BC30 /* WorkspaceNewTaskSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceNewTaskSheet.swift; sourceTree = "<group>"; };
 		F6000000000000000000BC09 /* WorkspaceTaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTaskView.swift; sourceTree = "<group>"; };
 		F6000000000000000000BC0A /* WorkspaceTargetPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTargetPicker.swift; sourceTree = "<group>"; };
-		F6000000000000000000BC0B /* WorkspaceWorktreeReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceWorktreeReviewView.swift; sourceTree = "<group>"; };
 		E500000000000000000000B1 /* MacUpdateManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUpdateManagerTests.swift; sourceTree = "<group>"; };
 		E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTaskContractTests.swift; sourceTree = "<group>"; };
 		E500000000000000000000B2 /* WandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -202,7 +200,6 @@
 				F6000000000000000000BC30 /* WorkspaceNewTaskSheet.swift */,
 				F6000000000000000000BC09 /* WorkspaceTaskView.swift */,
 				F6000000000000000000BC0A /* WorkspaceTargetPicker.swift */,
-				F6000000000000000000BC0B /* WorkspaceWorktreeReviewView.swift */,
 				A100000000000000000000D1 /* Assets.xcassets */,
 				A100000000000000000000E1 /* Info.plist */,
 				A100000000000000000000E2 /* Wand.entitlements */,
@@ -374,7 +371,6 @@
 				F6000000000000000000AC30 /* WorkspaceNewTaskSheet.swift in Sources */,
 				F6000000000000000000AC09 /* WorkspaceTaskView.swift in Sources */,
 				F6000000000000000000AC0A /* WorkspaceTargetPicker.swift in Sources */,
-				F6000000000000000000AC0B /* WorkspaceWorktreeReviewView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

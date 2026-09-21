@@ -31,7 +31,6 @@ struct WorkspaceListView: View {
     var onWorkspaceDeleted: ((String) -> Void)? = nil
     var onCreateWorkspace: (() -> Void)? = nil
 
-    @State private var expandedWorkspaceIds = Set<String>()
     @State private var renameTarget: WorkspaceTask?
     @State private var renameDraft = ""
     @State private var renameError: String?
@@ -46,14 +45,6 @@ struct WorkspaceListView: View {
     @State private var clearBusy = false
     @State private var deleteSessionTarget: WorkspaceSessionSummary?
     @State private var deleteSessionBusy = false
-    @State private var renameWorkspaceTarget: Workspace?
-    @State private var renameWorkspaceDraft = ""
-    @State private var renameWorkspaceError: String?
-    @State private var renameWorkspaceBusy = false
-    @State private var deleteWorkspaceTarget: Workspace?
-    @State private var deleteWorkspaceBusy = false
-    @State private var deleteWorkspaceError: String?
-    @State private var reviewTarget: Workspace?
     @State private var toastMessage: String?
     @State private var newTaskRequest: NewTaskSheetRequest?
     @State private var isSelecting = false
@@ -93,26 +84,6 @@ struct WorkspaceListView: View {
         .onChange(of: selectedTaskId) { taskId in
             if let taskId { collapsedTaskIds.remove(taskId) }
         }
-        .onChange(of: store.workspaces.map(\.id).joined(separator: ",")) { ids in
-            if expandedWorkspaceIds.isEmpty {
-                expandedWorkspaceIds = Set(ids.split(separator: ",").map(String.init))
-            }
-        }
-        .onChange(of: expandedWorkspaceIdsDescription) { _ in
-            for workspaceId in expandedWorkspaceIds where store.standaloneSessions[workspaceId] == nil {
-                Task { await store.loadWorkspaceSessions(workspaceId: workspaceId) }
-            }
-        }
-        .sheet(item: $reviewTarget) { workspace in
-            WorkspaceWorktreeReviewView(
-                workspace: workspace,
-                api: api,
-                store: store,
-                onMergeAgentStarted: { started in
-                    onMergeAgentStarted?(workspace, started)
-                }
-            )
-        }
         .sheet(item: $newTaskRequest) { request in
             newTaskSheet(request)
         }
@@ -126,18 +97,8 @@ struct WorkspaceListView: View {
                 onSave: { Task { await saveTaskRename(task) } }
             )
         }
-        .sheet(item: renameWorkspaceSheetItem) { workspace in
-            renameSheet(
-                title: "重命名项目",
-                draft: $renameWorkspaceDraft,
-                error: renameWorkspaceError,
-                busy: renameWorkspaceBusy,
-                onCancel: { renameWorkspaceTarget = nil },
-                onSave: { Task { await saveWorkspaceRename(workspace) } }
-            )
-        }
         .confirmationDialog(
-            deleteTarget == nil ? "删除此项目？" : "删除此任务？",
+            "删除此任务？",
             isPresented: deleteConfirmationPresented,
             titleVisibility: .visible
         ) {
@@ -145,26 +106,19 @@ struct WorkspaceListView: View {
                 Button("删除任务", role: .destructive) {
                     Task { await confirmDeleteTask(target) }
                 }
-            } else if let target = deleteWorkspaceTarget {
-                Button("删除项目", role: .destructive) {
-                    Task { await confirmDeleteWorkspace(target) }
-                }
             }
             Button("取消", role: .cancel) {}
         } message: {
             if let target = deleteTarget {
                 Text("任务「\(target.name)」及其会话和独立 worktree 将被删除，此操作无法撤销。")
-            } else if let target = deleteWorkspaceTarget {
-                Text("项目「\(target.name)」及其任务、会话与独立 worktree 将被删除，此操作无法撤销。")
             }
         }
         .alert("操作未完成", isPresented: deletionErrorPresented) {
             Button("好", role: .cancel) {
                 deleteError = nil
-                deleteWorkspaceError = nil
             }
         } message: {
-            Text(deleteError ?? deleteWorkspaceError ?? "")
+            Text(deleteError ?? "")
         }
         .confirmationDialog(
             "清空全部终端？",
@@ -220,10 +174,6 @@ struct WorkspaceListView: View {
         }
     }
 
-    private var expandedWorkspaceIdsDescription: String {
-        expandedWorkspaceIds.sorted().joined(separator: ",")
-    }
-
     @ViewBuilder
     private var stateContent: some View {
         switch store.indexState {
@@ -244,50 +194,9 @@ struct WorkspaceListView: View {
         }
     }
 
-    private var visibleWorkspaces: [Workspace] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return store.workspaces }
-        return store.workspaces.filter { workspace in
-            workspace.name.lowercased().contains(needle)
-                || workspace.cwd.lowercased().contains(needle)
-                || store.tasks(for: workspace.id).contains { $0.name.lowercased().contains(needle) }
-        }
-    }
-
     @ViewBuilder
     private var workspaceContent: some View {
         taskGroupsContent
-    }
-
-    @ViewBuilder
-    private var projectTreeContent: some View {
-        if visibleWorkspaces.isEmpty {
-            VStack(spacing: 12) {
-                Spacer()
-                Image(systemName: "folder")
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundColor(Theme.textSecondary)
-                Text(store.workspaces.isEmpty ? "还没有项目" : "没有匹配的项目")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
-                if store.workspaces.isEmpty {
-                    Button("新建项目") { onCreateWorkspace?() }
-                        .buttonStyle(WandPrimaryButtonStyle())
-                }
-                Spacer()
-            }
-            .padding(16)
-        } else {
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(visibleWorkspaces) { workspace in
-                        workspaceBlock(workspace)
-                    }
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
-            }
-        }
     }
 
     private var isFiltering: Bool {
@@ -719,116 +628,6 @@ struct WorkspaceListView: View {
         )
     }
 
-    private func workspaceBlock(_ workspace: Workspace) -> some View {
-        let expanded = expandedWorkspaceIds.contains(workspace.id)
-        let tasks = store.tasks(for: workspace.id)
-        let sessions = store.standaloneSessions[workspace.id] ?? []
-        return VStack(spacing: 2) {
-            workspaceHeader(workspace, expanded: expanded)
-            if expanded {
-                if let error = store.taskErrors[workspace.id] {
-                    inlineError(error)
-                }
-                ForEach(sessions) { session in
-                    standaloneSessionRow(session, workspace: workspace)
-                }
-                ForEach(tasks) { task in
-                    taskRow(task, workspace: workspace)
-                }
-                if sessions.isEmpty && tasks.isEmpty && store.taskErrors[workspace.id] == nil {
-                    Text("还没有任务")
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.textMuted)
-                        .padding(.leading, 36)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-
-    private func workspaceHeader(_ workspace: Workspace, expanded: Bool) -> some View {
-        HStack(spacing: 6) {
-            Button {
-                if expanded {
-                    expandedWorkspaceIds.remove(workspace.id)
-                } else {
-                    expandedWorkspaceIds.insert(workspace.id)
-                    Task { await store.loadWorkspaceSessions(workspaceId: workspace.id) }
-                }
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(Theme.textMuted)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                    Image(systemName: "folder")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Theme.wandAccent)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(workspace.name)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundColor(Theme.textPrimary)
-                            .lineLimit(1)
-                        Text((workspace.cwd as NSString).lastPathComponent)
-                            .font(.system(size: 10))
-                            .foregroundColor(Theme.textMuted)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            Button {
-                requestNewTask(NewTaskSheetRequest(
-                    cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id
-                ))
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Theme.textSecondary)
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(WandIconButtonStyle())
-            .help("新建任务")
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.clear)
-        )
-        .contextMenu {
-            Button {
-                requestNewTask(NewTaskSheetRequest(
-                    cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id
-                ))
-            } label: {
-                Label("新任务", systemImage: "plus")
-            }
-            Button {
-                reviewTarget = workspace
-            } label: {
-                Label("Worktree 审查", systemImage: "arrow.triangle.branch")
-            }
-            Button {
-                renameWorkspaceDraft = workspace.name
-                renameWorkspaceError = nil
-                renameWorkspaceTarget = workspace
-            } label: {
-                Label("重命名项目", systemImage: "pencil")
-            }
-            Button(role: .destructive) {
-                deleteWorkspaceError = nil
-                deleteWorkspaceTarget = workspace
-            } label: {
-                Label("删除项目", systemImage: "trash")
-            }
-        }
-    }
-
     private func standaloneSessionRow(
         _ session: WorkspaceSessionSummary,
         workspace: Workspace
@@ -884,47 +683,6 @@ struct WorkspaceListView: View {
         }
     }
 
-    private func taskRow(_ task: WorkspaceTask, workspace: Workspace) -> some View {
-        let selected = selectedTaskId == task.id
-        return Button {
-            onOpenTask(workspace, task)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: task.status == "done" ? "checkmark.circle.fill" : "arrow.triangle.branch")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(task.status == "done" ? Theme.success : Theme.textSecondary)
-                    .frame(width: 18, height: 18)
-                Text(task.name)
-                    .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                    .foregroundColor(Theme.textPrimary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 0)
-            }
-            .padding(.leading, 28)
-            .padding(.trailing, 8)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .wandSelectionSurface(isSelected: selected, isHovered: false, cornerRadius: 7)
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button {
-                renameDraft = task.name
-                renameError = nil
-                renameTarget = task
-            } label: {
-                Label("重命名", systemImage: "pencil")
-            }
-            Button(role: .destructive) {
-                deleteError = nil
-                deleteTarget = task
-            } label: {
-                Label("删除", systemImage: "trash")
-            }
-        }
-    }
-
     private func inlineError(_ message: String) -> some View {
         Label(message, systemImage: "exclamationmark.triangle")
             .font(.system(size: 11))
@@ -968,20 +726,12 @@ struct WorkspaceListView: View {
         )
     }
 
-    private var renameWorkspaceSheetItem: Binding<Workspace?> {
-        Binding(
-            get: { renameWorkspaceTarget },
-            set: { renameWorkspaceTarget = $0 }
-        )
-    }
-
     private var deleteConfirmationPresented: Binding<Bool> {
         Binding(
-            get: { deleteTarget != nil || deleteWorkspaceTarget != nil },
+            get: { deleteTarget != nil },
             set: { presented in
                 if !presented {
                     deleteTarget = nil
-                    deleteWorkspaceTarget = nil
                 }
             }
         )
@@ -989,11 +739,10 @@ struct WorkspaceListView: View {
 
     private var deletionErrorPresented: Binding<Bool> {
         Binding(
-            get: { deleteError != nil || deleteWorkspaceError != nil },
+            get: { deleteError != nil },
             set: { presented in
                 if !presented {
                     deleteError = nil
-                    deleteWorkspaceError = nil
                 }
             }
         )
@@ -1086,23 +835,6 @@ struct WorkspaceListView: View {
         } catch {
             renameError = error.localizedDescription
             renameBusy = false
-        }
-    }
-
-    private func saveWorkspaceRename(_ workspace: Workspace) async {
-        let trimmed = renameWorkspaceDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            renameWorkspaceError = "名称不能为空"
-            return
-        }
-        renameWorkspaceBusy = true
-        do {
-            _ = try await store.renameWorkspace(workspaceId: workspace.id, name: trimmed)
-            renameWorkspaceTarget = nil
-            renameWorkspaceBusy = false
-        } catch {
-            renameWorkspaceError = error.localizedDescription
-            renameWorkspaceBusy = false
         }
     }
 
@@ -1240,18 +972,6 @@ struct WorkspaceListView: View {
             deleteError = error.localizedDescription
         }
         clearBusy = false
-    }
-
-    private func confirmDeleteWorkspace(_ target: Workspace) async {
-        deleteWorkspaceBusy = true
-        do {
-            try await store.deleteWorkspace(workspaceId: target.id)
-            onWorkspaceDeleted?(target.id)
-            deleteWorkspaceTarget = nil
-        } catch {
-            deleteWorkspaceError = error.localizedDescription
-        }
-        deleteWorkspaceBusy = false
     }
 
     private func showToast(_ message: String) {
