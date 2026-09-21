@@ -97,6 +97,7 @@ struct SidebarColumn: View {
     @Binding var presentNewSession: Bool
     let onOpenMissions: () -> Void
     let onSessionSelected: (SessionSnapshot) -> Void
+    var onRequestNewSession: ((String?) -> Void)? = nil
 
     @State private var sessions: [SessionSnapshot] = []
     @State private var historySessions: [HistorySession] = []
@@ -125,8 +126,7 @@ struct SidebarColumn: View {
         .background(Color.clear)
         .onChange(of: presentNewSession) { requested in
             if requested {
-                newSessionInitialCwd = nil
-                showNewSession = true
+                requestNewSession()
                 presentNewSession = false
             }
         }
@@ -316,8 +316,7 @@ struct SidebarColumn: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
                 Button {
-                    newSessionInitialCwd = nil
-                    showNewSession = true
+                    requestNewSession()
                 } label: {
                     Text("新建会话")
                         .frame(maxWidth: 200)
@@ -376,10 +375,7 @@ struct SidebarColumn: View {
                             selectedSessionId: selectedSessionId,
                             onOpenSession: onSessionSelected,
                             onResumeHistory: resume,
-                            onNewSession: { path in
-                                newSessionInitialCwd = path
-                                showNewSession = true
-                            }
+                            onNewSession: { path in requestNewSession(cwd: path) }
                         )
                     }
                 }
@@ -396,14 +392,22 @@ struct SidebarColumn: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
                 Button {
-                    newSessionInitialCwd = nil
-                    showNewSession = true
+                    requestNewSession()
                 } label: {
                     Text("新建会话").frame(maxWidth: 200)
                 }
                 .buttonStyle(WandPrimaryButtonStyle())
                 Spacer()
             }
+        }
+    }
+
+    private func requestNewSession(cwd: String? = nil) {
+        if let onRequestNewSession {
+            onRequestNewSession(cwd)
+        } else {
+            newSessionInitialCwd = cwd
+            showNewSession = true
         }
     }
 

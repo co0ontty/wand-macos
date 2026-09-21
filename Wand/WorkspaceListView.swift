@@ -26,6 +26,7 @@ struct WorkspaceListView: View {
     var onOpenSession: ((Workspace, WorkspaceSessionSummary) -> Void)? = nil
     var onOpenTaskSession: ((Workspace, WorkspaceTask, WorkspaceSessionSummary) -> Void)? = nil
     var onRequestNewSession: ((Workspace, WorkspaceTask) -> Void)? = nil
+    var onRequestNewTask: ((NewTaskSheetRequest) -> Void)? = nil
     var onOpenParallel: ((Workspace, WorkspaceTask) -> Void)? = nil
     var onMergeAgentStarted: ((Workspace, SessionSnapshot) -> Void)? = nil
     var onWorkspaceDeleted: ((String) -> Void)? = nil
@@ -304,7 +305,7 @@ struct WorkspaceListView: View {
                     .foregroundColor(Theme.textSecondary)
                     .multilineTextAlignment(.center)
                 Button("新建任务") {
-                    newTaskRequest = NewTaskSheetRequest(cwd: "", projectHint: nil)
+                    requestNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
                 }
                 .buttonStyle(WandPrimaryButtonStyle())
                 Spacer()
@@ -431,7 +432,11 @@ struct WorkspaceListView: View {
             .buttonStyle(.plain)
 
             Button {
-                newTaskRequest = NewTaskSheetRequest(cwd: group.workspaceCwd, projectHint: group.workspaceName, workspaceId: group.synthetic == true ? nil : group.workspaceId)
+                requestNewTask(NewTaskSheetRequest(
+                    cwd: group.workspaceCwd,
+                    projectHint: group.workspaceName,
+                    workspaceId: group.synthetic == true ? nil : group.workspaceId
+                ))
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
@@ -552,7 +557,8 @@ struct WorkspaceListView: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(WandIconButtonStyle())
-                .help("在「\(summary.name)」中新建终端")
+                .help("在「\(summary.name)」中新建会话")
+                .accessibilityLabel("在「\(summary.name)」中新建会话")
             }
             .padding(.leading, 8)
             .padding(.trailing, 4)
@@ -569,7 +575,7 @@ struct WorkspaceListView: View {
                     collapsedTaskIds.remove(summary.id)
                     onRequestNewSession?(workspace, task)
                 } label: {
-                    Label("新建终端", systemImage: "plus")
+                    Label("新建会话", systemImage: "plus")
                 }
                 Button {
                     renameDraft = summary.name
@@ -693,7 +699,10 @@ struct WorkspaceListView: View {
 
     /// 聚合行只有 workspaceId/name/cwd；打开任务需要完整 Workspace，按组信息重建。
     private func workspace(from group: TaskDirectoryGroup) -> Workspace {
-        Workspace(
+        if let workspace = store.workspaces.first(where: { $0.id == group.workspaceId }) {
+            return workspace
+        }
+        return Workspace(
             id: group.workspaceId,
             name: group.workspaceName,
             cwd: group.workspaceCwd,
@@ -767,7 +776,9 @@ struct WorkspaceListView: View {
             .buttonStyle(.plain)
 
             Button {
-                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id)
+                requestNewTask(NewTaskSheetRequest(
+                    cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id
+                ))
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .semibold))
@@ -785,7 +796,9 @@ struct WorkspaceListView: View {
         )
         .contextMenu {
             Button {
-                newTaskRequest = NewTaskSheetRequest(cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id)
+                requestNewTask(NewTaskSheetRequest(
+                    cwd: workspace.cwd, projectHint: workspace.name, workspaceId: workspace.id
+                ))
             } label: {
                 Label("新任务", systemImage: "plus")
             }
@@ -978,6 +991,14 @@ struct WorkspaceListView: View {
                 }
             }
         )
+    }
+
+    private func requestNewTask(_ request: NewTaskSheetRequest) {
+        if let onRequestNewTask {
+            onRequestNewTask(request)
+        } else {
+            newTaskRequest = request
+        }
     }
 
     /// 新建任务 sheet：目录按 find-or-create 归入隐式项目；worktree 开关对齐 web/iOS。

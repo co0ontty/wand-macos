@@ -33,8 +33,8 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: false, sessionCount: 2))
     }
 
-    func testCreateTaskWorktreeFlagOmitsByDefaultAndSendsFalseExplicitly() {
-        // 缺省不传 worktree，交由服务端默认（git 仓库自动隔离）。
+    func testCreateTaskWorktreeFlagPreservesExplicitChoice() {
+        // 缺省不传 worktree；当前服务端只在显式 true 时创建隔离目录。
         let defaultTask = createWorkspaceTaskRequest(
             workspaceId: "ws-1",
             name: "默认任务",
@@ -49,7 +49,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
             baseRef: nil,
             worktree: true
         )
-        XCTAssertNil(enabledTask.body["worktree"])
+        XCTAssertEqual(enabledTask.body["worktree"], .bool(true))
 
         // 显式 false 必须传 worktree:false，跳过隔离。
         let sharedTask = createWorkspaceTaskRequest(
@@ -59,6 +59,148 @@ final class WorkspaceTaskContractTests: XCTestCase {
             worktree: false
         )
         XCTAssertEqual(sharedTask.body["worktree"], .bool(false))
+    }
+
+    func testBothSessionKindsUseTaskDirectoryAndKeepExplicitModelOptions() async throws {
+        let binding = WorkspaceBinding(
+            workspaceId: "workspace-1",
+            workspaceTaskId: "task-1",
+            cwd: "/repo/.wand-worktrees/task-1"
+        )
+        let api = makeAPI { request in
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["cwd"] as? String, binding.cwd)
+            XCTAssertEqual(body["workspaceId"] as? String, binding.workspaceId)
+            XCTAssertEqual(body["workspaceTaskId"] as? String, binding.workspaceTaskId)
+            XCTAssertEqual(body["provider"] as? String, "qoder")
+            XCTAssertEqual(body["model"] as? String, "chosen-model")
+            XCTAssertEqual(body["mode"] as? String, "managed")
+            XCTAssertEqual(body["thinkingEffort"] as? String, "high")
+            if request.url?.path == "/api/structured-sessions" {
+                XCTAssertEqual(body["runner"] as? String, "qoder-cli-print")
+                XCTAssertEqual(body["prompt"] as? String, "Inspect the selected task")
+                XCTAssertNil(body["command"])
+            } else {
+                XCTAssertEqual(request.url?.path, "/api/commands")
+                XCTAssertEqual(body["command"] as? String, "qodercli")
+                XCTAssertEqual(body["initialInput"] as? String, "Inspect the selected task")
+                XCTAssertNil(body["runner"])
+            }
+            return Data(#"{"id":"new-session"}"#.utf8)
+        }
+        _ = try await api.createStructuredSession(
+            provider: "qoder", cwd: "/wrong/project/root", mode: "managed",
+            model: "chosen-model", thinkingEffort: "high", prompt: "Inspect the selected task",
+            workspaceBinding: binding
+        )
+        _ = try await api.createPtySession(
+            provider: "qoder", cwd: "/wrong/project/root", mode: "managed",
+            model: "chosen-model", thinkingEffort: "high", initialInput: "Inspect the selected task",
+            workspaceBinding: binding
+        )
+    }
+
+    func testUnassignedSessionDoesNotSendTaskBindingOrOverrideServerModelDefaults() async throws {
+        let api = makeAPI { request in
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["cwd"] as? String, "/repo")
+            XCTAssertNil(body["workspaceId"])
+            XCTAssertNil(body["workspaceTaskId"])
+            XCTAssertNil(body["model"])
+            XCTAssertNil(body["mode"])
+            XCTAssertNil(body["thinkingEffort"])
+            return Data(#"{"id":"new-session"}"#.utf8)
+        }
+        _ = try await api.createStructuredSession(
+            provider: "codex", cwd: "/repo", mode: nil, model: "", prompt: nil
+        )
+        _ = try await api.createPtySession(
+            provider: "codex", cwd: "/repo", mode: nil, model: "", initialInput: nil
+        )
+    }
+
+    @MainActor
+    func testOpeningTaskKeepsSessionKindAndWorkspaceProviderWinsOverServerDefault() async throws {
+        let api = makeAPI { request in
+            if request.url?.path == "/api/config" {
+                return Data(#"{"defaultProvider":"codex","defaultSessionKind":"pty","defaultTaskWorktree":false}"#.utf8)
+            }
+            if request.url?.path == "/api/workspace-tasks/task-1/layout" {
+                return Data(#"{"layout":null}"#.utf8)
+            }
+            XCTAssertEqual(request.url?.path, "/api/workspace-tasks/task-1")
+            return Data(#"{"id":"task-1","workspaceId":"workspace-1","name":"Task","status":"active","createdAt":"","cwd":"/repo","sessions":[]}"#.utf8)
+        }
+        let store = WorkspaceStore(api: api, serverID: "test-defaults")
+        await store.loadCreationDefaults()
+        XCTAssertEqual(store.selectedKind, .pty)
+        XCTAssertEqual(store.selectedTarget, .codex)
+        XCTAssertFalse(store.defaultTaskWorktree)
+
+        let task = WorkspaceTask(
+            id: "task-1", workspaceId: "workspace-1", name: "Task", worktree: nil,
+            layout: nil, status: "active", createdAt: "", lastOpenedAt: nil
+        )
+        let workspace = Workspace(
+            id: "workspace-1", name: "Project", cwd: "/repo", defaultProvider: .qoder,
+            layout: nil, createdAt: "", lastOpenedAt: nil
+        )
+        await store.openTask(workspace: workspace, task: task)
+        XCTAssertEqual(store.selectedKind, .pty)
+        XCTAssertEqual(store.selectedTarget, .qoder)
+        await store.loadCreationDefaults()
+        XCTAssertEqual(store.selectedKind, .pty)
+        XCTAssertEqual(store.selectedTarget, .qoder)
+    }
+
+    @MainActor
+    func testTaskCreationAppliesRememberedWorktreeDefaultAndKeepsScratchDirectoryUnisolated() async throws {
+        let api = makeAPI { request in
+            if request.httpMethod == "GET" { return Data("[]".utf8) }
+            XCTAssertEqual(request.url?.path, "/api/tasks")
+            let body = try Self.requestBody(request)
+            let name = body["name"] as? String
+            XCTAssertEqual(body["worktree"] as? Bool, name == "Isolated")
+            if name == "Scratch" { XCTAssertNil(body["cwd"]) }
+            return Data(#"{"id":"task-1","workspaceId":"global","name":"Task","status":"active","cwd":"/tmp/task"}"#.utf8)
+        }
+        let store = WorkspaceStore(api: api, serverID: "test-worktree")
+        _ = try await store.createTask(name: "Isolated", directory: "/repo", worktree: nil)
+        _ = try await store.createTask(name: "Shared", directory: "/repo", worktree: false)
+        _ = try await store.createTask(name: "Scratch", directory: "", worktree: nil)
+    }
+
+    private var testSessions: [URLSession] = []
+
+    override func tearDown() {
+        testSessions.forEach { $0.invalidateAndCancel() }
+        testSessions = []
+        super.tearDown()
+    }
+
+    private func makeAPI(handler: @escaping (URLRequest) throws -> Data) -> WandAPI {
+        let host = "\(UUID().uuidString.lowercased()).wand.test"
+        WorkspaceContractURLProtocol.register(host: host, handler: handler)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WorkspaceContractURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        testSessions.append(session)
+        return WandAPI(baseURL: URL(string: "https://\(host)")!, token: nil, session: session)
+    }
+
+    private static func requestBody(_ request: URLRequest) throws -> [String: Any] {
+        var data = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                data.append(buffer, count: count)
+            }
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     func testStandaloneTaskRequestUsesGlobalTasksEndpoint() {
@@ -137,4 +279,37 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertNil(summary.totalSessions)
         XCTAssertEqual(summary.listedSessionCount, 2)
     }
+}
+
+/// Intercepts every request made by these tests; no request reaches a Wand server or AI tool.
+private final class WorkspaceContractURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var handlers: [String: (URLRequest) throws -> Data] = [:]
+
+    static func register(host: String, handler: @escaping (URLRequest) throws -> Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        handlers[host] = handler
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        let handler = Self.handlers[request.url?.host ?? ""]
+        Self.lock.unlock()
+        do {
+            guard let handler, let url = request.url else { throw URLError(.unsupportedURL) }
+            let data = try handler(request)
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }

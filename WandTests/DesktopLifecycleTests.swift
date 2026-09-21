@@ -94,6 +94,35 @@ final class DesktopLifecycleTests: XCTestCase {
         XCTAssertFalse(ShellConnectionState.failure(WandAPI.APIError.server(status: 403, message: "forbidden")).requiresAuthentication)
     }
 
+    @MainActor
+    func testCreationEntrySelectsHomeTaskOrExplicitUnassignedDestination() {
+        let home = SessionCreationDraft()
+        XCTAssertEqual(home.destination, "new")
+
+        let unassigned = SessionCreationDraft(context: SessionCreationContext(startsNewTask: false))
+        XCTAssertEqual(unassigned.destination, "none")
+
+        // A task-row addition must retain its task even if the general new-task flag is enabled.
+        let task = SessionCreationDraft(context: SessionCreationContext(
+            cwd: "/project", workspaceId: "workspace-1", taskId: "task-1", startsNewTask: true
+        ))
+        XCTAssertEqual(task.destination, "task-1")
+        XCTAssertNil(task.binding, "The project root is not an authoritative task/worktree directory")
+        XCTAssertTrue(task.loading, "Creation must wait for server defaults and the selected task")
+    }
+
+    @MainActor
+    func testCreationDraftNormalizesDirectoryWithoutRewritingMultilinePrompt() {
+        let message = "  检查这个函数：\n\n    return result;\n"
+        let context = SessionCreationContext(cwd: " \n /repo/目录 with spaces \t\n")
+        let draft = SessionCreationDraft(context: context, initialMessage: message)
+        XCTAssertEqual(draft.cwd, "/repo/目录 with spaces")
+        XCTAssertEqual(draft.unboundCwd, "/repo/目录 with spaces")
+        XCTAssertEqual(draft.firstMessage, message)
+        XCTAssertEqual(draft.context, context)
+        XCTAssertEqual(SessionCreationDraft(context: .init(cwd: " \n\t ")).cwd, "")
+    }
+
     private func withStore(_ body: (ServerStore, UserDefaults) -> Void) {
         let suite = "WandDesktopLifecycleTests-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!

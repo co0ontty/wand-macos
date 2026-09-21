@@ -1,60 +1,110 @@
+import Combine
 import SwiftUI
 
-/// 新建会话保持单列、原生控件优先；只有输入和警告需要独立表面。
+struct SessionCreationContext: Equatable {
+    var cwd: String? = nil
+    var workspaceId: String? = nil
+    var taskId: String? = nil
+    var taskName: String? = nil
+    var workspaceDefaultProvider: String? = nil
+    var startsNewTask = true
+}
+
+struct SessionTaskOption: Identifiable {
+    let id: String
+    let workspaceId: String
+    let name: String
+    let workspaceName: String
+    let cwd: String
+    var label: String { workspaceName.isEmpty ? name : "\(workspaceName) / \(name)" }
+}
+
+/// Owned by the shell so switching pages does not recreate partially edited settings.
+@MainActor
+final class SessionCreationDraft: ObservableObject, Identifiable {
+    let id = UUID()
+    let context: SessionCreationContext
+    @Published var cwd: String
+    @Published var firstMessage: String
+    @Published var provider: NewSessionView.Provider = .claude
+    @Published var sessionType: NewSessionView.SessionType = .structured
+    @Published var mode: NewSessionView.ModeOption = .managed
+    @Published var selectedModel = ""
+    @Published var thinkingEffort = "off"
+    @Published var fullAccessAcknowledged = false
+    @Published var recentPaths: [RecentPath] = []
+    @Published var availableModels: [ModelInfo] = []
+    @Published var codexModels: [ModelInfo] = []
+    @Published var openCodeModels: [ModelInfo] = []
+    @Published var grokModels: [ModelInfo] = []
+    @Published var qoderModels: [ModelInfo] = []
+    @Published var piModels: [ModelInfo] = []
+    @Published var serverDefaultModels = ProviderDefaultModels(
+        claude: nil, codex: nil, opencode: nil, grok: nil, qoder: nil, pi: nil
+    )
+    @Published var destination: String
+    @Published var taskName = ""
+    @Published var worktree = true
+    @Published var tasks: [SessionTaskOption] = []
+    @Published var workspaces: [Workspace] = []
+    @Published var binding: WorkspaceBinding?
+    @Published var loading = true
+    @Published var loadingTask = false
+    @Published var creating = false
+    @Published var errorMessage: String?
+    @Published var loadError: String?
+    @Published var taskError: String?
+    var initialized = false
+    var providerWasEdited = false
+    var defaultProvider = "claude"
+    var defaultMode = "managed"
+    var defaultThinkingEffort = "off"
+    var unboundCwd: String
+    var taskGeneration = 0
+
+    init(context: SessionCreationContext = .init(), initialMessage: String = "") {
+        self.context = context
+        let initialCwd = context.cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        cwd = initialCwd
+        unboundCwd = initialCwd
+        firstMessage = initialMessage
+        destination = context.taskId ?? (context.startsNewTask ? "new" : "none")
+    }
+}
+
+/// One creation form serves the desktop home, task additions and compatibility sheets.
 struct NewSessionView: View {
     let api: WandAPI
-    let initialCwd: String?
+    let workspaceStore: WorkspaceStore?
+    let embedded: Bool
     let onCreated: (SessionSnapshot) -> Void
-
+    @StateObject private var draft: SessionCreationDraft
     @Environment(\.dismiss) private var dismiss
-
-    @State private var cwd: String
-    @State private var recentPaths: [RecentPath] = []
-    @State private var provider: Provider = .claude
-    @State private var sessionType: SessionType = .structured
-    @State private var mode: ModeOption = .managed
-    @State private var firstMessage = ""
-    @State private var availableModels: [ModelInfo] = []
-    @State private var codexModels: [ModelInfo] = []
-    @State private var openCodeModels: [ModelInfo] = []
-    @State private var grokModels: [ModelInfo] = []
-    @State private var qoderModels: [ModelInfo] = []
-    @State private var piModels: [ModelInfo] = []
-    @State private var serverDefaultModels = ProviderDefaultModels(
-        claude: nil,
-        codex: nil,
-        opencode: nil,
-        grok: nil,
-        qoder: nil,
-        pi: nil
-    )
-    @State private var selectedModel = ""
-    @State private var thinkingEffort = "off"
-    @State private var creating = false
-    @State private var fullAccessAcknowledged = false
-    @State private var errorMessage: String?
     @State private var showBrowser = false
     @State private var showModelPicker = false
     @State private var modelQuery = ""
+    @State private var showRunSettings = false
+    @State private var showProviderPicker = false
+    @State private var showDirectoryOptions = false
+    @State private var showTaskOptions = false
+    @State private var composerFocused = false
+    @State private var composerHeight: CGFloat = 72
+    @State private var composing = false
     @FocusState private var focusedInput: NewSessionInput?
 
-    init(
-        api: WandAPI,
-        initialCwd: String? = nil,
-        initialMessage: String = "",
-        onCreated: @escaping (SessionSnapshot) -> Void
-    ) {
+    init(api: WandAPI, initialCwd: String? = nil, initialMessage: String = "",
+         draft: SessionCreationDraft? = nil, workspaceStore: WorkspaceStore? = nil,
+         embedded: Bool = false, onCreated: @escaping (SessionSnapshot) -> Void) {
         self.api = api
-        self.initialCwd = initialCwd
+        self.workspaceStore = workspaceStore
+        self.embedded = embedded
         self.onCreated = onCreated
-        _firstMessage = State(initialValue: initialMessage)
-        _cwd = State(initialValue: initialCwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        _draft = StateObject(wrappedValue: draft ?? SessionCreationDraft(
+            context: SessionCreationContext(cwd: initialCwd), initialMessage: initialMessage
+        ))
     }
 
-    private enum NewSessionInput: Hashable {
-        case cwd
-        case firstMessage
-    }
+    private enum NewSessionInput: Hashable { case cwd }
 
     enum Provider: String, CaseIterable, Identifiable {
         case claude, codex, opencode, grok, qoder, pi
@@ -235,27 +285,27 @@ struct NewSessionView: View {
     }
 
     private var providerModels: [ModelInfo] {
-        switch provider {
-        case .claude: availableModels
-        case .codex: codexModels
-        case .opencode: openCodeModels
-        case .grok: grokModels
-        case .qoder: qoderModels
-        case .pi: piModels
+        switch draft.provider {
+        case .claude: draft.availableModels
+        case .codex: draft.codexModels
+        case .opencode: draft.openCodeModels
+        case .grok: draft.grokModels
+        case .qoder: draft.qoderModels
+        case .pi: draft.piModels
         }
     }
 
     private var thinkingLevels: [ThinkingEffortOption] {
         thinkingEffortOptions(
-            provider: provider.rawValue,
-            selectedModel: selectedModel,
-            defaultModel: serverDefaultModels.model(for: provider.rawValue),
+            provider: draft.provider.rawValue,
+            selectedModel: draft.selectedModel,
+            defaultModel: draft.serverDefaultModels.model(for: draft.provider.rawValue),
             models: providerModels
         )
     }
 
     private var supportedModes: Set<ModeOption> {
-        ModeOption.supported(for: provider)
+        ModeOption.supported(for: draft.provider)
     }
 
     private var modeOptions: [ModeOption] {
@@ -263,88 +313,240 @@ struct NewSessionView: View {
     }
 
     private var modeHint: String {
-        mode.hint(for: provider)
+        draft.mode.hint(for: draft.provider)
     }
 
     private var sessionKindHint: String {
-        sessionType.hint(tool: provider)
+        draft.sessionType.hint(tool: draft.provider)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            sheetHeader
-            Divider().opacity(0.35)
+        Group {
+            if embedded { form }
+            else {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("新建会话").font(.headline)
+                        Spacer()
+                        Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                    }.padding(20)
+                    form
+                }
+                .frame(minWidth: 720, idealWidth: 780, minHeight: 540, idealHeight: 720)
+                .focusedSceneValue(\.wandDesktopCommandsEnabled, false)
+                .hideNativeTitleBar()
+            }
+        }
+        .background(Theme.workspaceBackground)
+        .sheet(isPresented: $showBrowser) {
+            DirectoryBrowserView(api: api, startPath: draft.cwd) { picked in
+                draft.cwd = picked
+                showBrowser = false
+            }
+        }
+        .task { await loadInitial() }
+        .onAppear { composerFocused = true }
+        .onChange(of: draft.mode) { _ in draft.fullAccessAcknowledged = false }
+        .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
+            if note.object as? DesktopCommand == .focusComposer { composerFocused = true }
+        }
+    }
+
+    private var form: some View {
+        GeometryReader { geometry in
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    fieldLabel("助手")
-                    providerPicker
-
-                    fieldLabel("会话类型")
-                    sessionTypePicker
-                    fieldHint(sessionKindHint)
-
-                    fieldLabel("模型与思考")
-                    HStack(spacing: 10) {
-                        modelMenuButton
-                        ThinkingEffortSlider(
-                            options: thinkingLevels,
-                            selection: thinkingEffort,
-                            accent: Theme.wandAccent
-                        ) { thinkingEffort = $0 }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(controlBackground)
-                        .frame(maxWidth: .infinity)
+                VStack(spacing: 26) {
+                    Text(isExistingTask ? draft.tasks.first(where: { $0.id == draft.destination })?.name ?? "开始新的会话" : "今天，想完成什么？")
+                        .font(.system(size: 30, weight: .medium)).tracking(-0.7)
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(2).multilineTextAlignment(.center)
+                    VStack(alignment: .leading, spacing: 0) {
+                        firstMessageCard
+                        if draft.loading {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("正在读取默认配置…").font(.system(size: 12))
+                            }.foregroundColor(Theme.textSecondary).frame(height: 34).padding(.horizontal, 14)
+                        } else if let error = draft.loadError {
+                            VStack(alignment: .leading, spacing: 8) {
+                                errorBanner(error)
+                                Button("重试加载") { Task { await loadInitial() } }
+                            }.padding(14)
+                        } else {
+                            composerOptions(compact: geometry.size.width < 700)
+                                .padding(.horizontal, 12).padding(.bottom, 12)
+                                .disabled(draft.creating)
+                        }
                     }
+                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.surfaceElevated))
+                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(composerFocused ? Theme.textSecondary.opacity(0.42) : Theme.border, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.025), radius: 12, y: 4)
+                    if let error = draft.taskError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            errorBanner(error)
+                            Button("重新读取任务") { selectDestination(draft.destination) }
+                        }
+                    }
+                    if let error = draft.errorMessage { errorBanner(error) }
+                }
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 28).padding(.vertical, 32)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .center)
+            }
+        }
+    }
 
-                    fieldLabel("模式")
+    @ViewBuilder
+    private func composerOptions(compact: Bool) -> some View {
+        if compact {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) { providerButton; modelMenuButton; Spacer(minLength: 0) }
+                HStack(spacing: 4) { directoryButton; taskButton; Spacer(minLength: 4); runSettingsButton; startButton }
+            }
+        } else {
+            HStack(spacing: 4) {
+                providerButton
+                modelMenuButton
+                directoryButton
+                taskButton
+                Spacer(minLength: 4)
+                runSettingsButton
+                startButton
+            }
+        }
+    }
+
+    private func chipLabel(_ text: String, symbol: String, width: CGFloat = 130) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).font(.system(size: 12))
+            Text(text).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
+            Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
+        }
+        .foregroundColor(Theme.textSecondary)
+        .padding(.horizontal, 8).frame(height: 32)
+        .frame(maxWidth: width).contentShape(RoundedRectangle(cornerRadius: 9))
+    }
+
+    private var providerButton: some View {
+        Button { showProviderPicker = true } label: {
+            HStack(spacing: 6) {
+                BrandLogo(provider: draft.provider.rawValue, color: Theme.textPrimary).frame(width: 13, height: 13)
+                Text(draft.provider.label).font(.system(size: 12, weight: .medium))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
+            }.foregroundColor(Theme.textSecondary).padding(.horizontal, 8).frame(height: 32)
+        }
+        .buttonStyle(DesktopNavigationButtonStyle()).help("选择工具")
+        .accessibilityLabel("工具：\(draft.provider.label)")
+        .popover(isPresented: $showProviderPicker, arrowEdge: .bottom) { providerPicker.padding(8).frame(width: 210) }
+    }
+
+    private var directoryButton: some View {
+        Button { showDirectoryOptions = true } label: {
+            chipLabel(draft.loadingTask ? "读取目录…" : draft.cwd.isEmpty ? "选择目录" : (draft.cwd as NSString).lastPathComponent,
+                      symbol: "folder", width: 145)
+        }.buttonStyle(DesktopNavigationButtonStyle()).help(draft.cwd.isEmpty ? "选择工作目录" : draft.cwd)
+            .accessibilityLabel("工作目录：\(draft.cwd)")
+            .popover(isPresented: $showDirectoryOptions, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("工作目录").font(.system(size: 14, weight: .semibold))
+                    if isExistingTask {
+                        Text(draft.cwd).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        fieldHint("跟随所选任务的工作目录。切换任务可更改目录。")
+                    } else { cwdCard }
+                    HStack { Spacer(); Button("完成") { showDirectoryOptions = false }.buttonStyle(WandSecondaryButtonStyle()) }
+                }.padding(18).frame(width: 400)
+            }
+    }
+
+    private var taskLabel: String {
+        if draft.destination == "new" { return "新建任务" }
+        if draft.destination == "none" { return "不归属任务" }
+        return draft.tasks.first(where: { $0.id == draft.destination })?.name ?? "所选任务"
+    }
+
+    private var taskButton: some View {
+        Button { showTaskOptions = true } label: {
+            chipLabel(taskLabel, symbol: "square.stack", width: 135)
+        }.buttonStyle(DesktopNavigationButtonStyle()).help("归属任务：\(taskLabel)")
+            .accessibilityLabel("归属任务：\(taskLabel)")
+            .popover(isPresented: $showTaskOptions, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("归属任务").font(.system(size: 14, weight: .semibold))
+                    destinationPicker
+                    if draft.destination == "new" {
+                        TextField("任务名称（留空自动命名）", text: $draft.taskName).textFieldStyle(.roundedBorder)
+                        Toggle("独立工作树", isOn: $draft.worktree).toggleStyle(.checkbox)
+                        fieldHint("使用独立分支与目录完成这个任务。")
+                    }
+                    HStack { Spacer(); Button("完成") { showTaskOptions = false }.buttonStyle(WandSecondaryButtonStyle()) }
+                }.padding(18).frame(width: 340)
+            }
+    }
+
+    private var runSettingsButton: some View {
+        Button { showRunSettings = true } label: {
+            Image(systemName: "slider.horizontal.3").font(.system(size: 14))
+                .foregroundColor(Theme.textSecondary).frame(width: 32, height: 32)
+        }.buttonStyle(DesktopNavigationButtonStyle())
+            .accessibilityLabel("运行设置").help("\(draft.sessionType.desc) · \(draft.mode.label)")
+            .popover(isPresented: $showRunSettings, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("运行设置").font(.system(size: 14, weight: .semibold))
+                    ThinkingEffortSlider(options: thinkingLevels, selection: draft.thinkingEffort, accent: Theme.wandAccent) {
+                        draft.providerWasEdited = true
+                        draft.thinkingEffort = $0
+                    }
+                    fieldLabel("会话类型")
+                    sessionTypePicker.help(sessionKindHint)
+                    fieldLabel("权限模式")
                     modePicker
                     fieldHint(modeHint)
-                    if mode == .fullAccess {
-                        fullAccessWarning
-                    }
-
-                    fieldLabel("工作目录")
-                    cwdCard
-
-                    fieldLabel("首条消息（可选）")
-                    firstMessageCard
-
-                    if let errorMessage {
-                        errorBanner(errorMessage)
-                    }
-                }
-                .padding(.horizontal, 22)
-                .padding(.vertical, 14)
+                    if draft.mode == .fullAccess { fullAccessWarning }
+                    HStack { Spacer(); Button("完成") { showRunSettings = false }.buttonStyle(WandSecondaryButtonStyle()) }
+                }.padding(18).frame(width: 360)
             }
-            .sheet(isPresented: $showBrowser) {
-                DirectoryBrowserView(api: api, startPath: cwd) { picked in
-                    cwd = picked
-                    showBrowser = false
-                }
-            }
-            Divider().opacity(0.35)
-            sheetFooter
+    }
+
+    private var startButton: some View {
+        Button(action: prepareCreate) {
+            ZStack {
+                if draft.creating { ProgressView().controlSize(.small) }
+                else { Image(systemName: "arrow.up").font(.system(size: 15, weight: .semibold)) }
+            }.frame(width: 34, height: 34)
+                .foregroundColor(Theme.workspaceBackground)
+                .background(Circle().fill(Theme.textPrimary))
+                .opacity(readyToStart ? 1 : 0.35)
         }
-        // 内容保持紧凑；小屏仍可通过中间滚动区访问全部字段。
-        .frame(minWidth: 720, idealWidth: 780, minHeight: 540, idealHeight: 720)
-        .focusedSceneValue(\.wandDesktopCommandsEnabled, false)
-        .background(WandAmbientBackground())
-        // SwiftUI 在 macOS 上 .sheet 会自带 NSWindow 标题栏,跟下面的 sheetHeader 重复,
-        // 视觉上「两层标题」很难看。挂这个修饰符把原生标题栏改成透明 + 隐藏文字。
-        .hideNativeTitleBar()
-        .task { await loadInitial() }
-        .onChange(of: provider) { newProvider in
-            // 切换到支持模式更少的 provider 时，回落到该 provider 的安全默认模式。
-            if !supportedModes.contains(mode) {
-                mode = supportedModes.contains(.managed) ? .managed : (modeOptions.first ?? .fullAccess)
-            }
-            // 切换 provider 后绝不复用上一个 provider 的模型 ID。
-            selectedModel = ""
+        .buttonStyle(.plain).disabled(!readyToStart)
+        .keyboardShortcut(.return, modifiers: .command)
+        .accessibilityLabel(draft.creating ? "正在启动会话" : "启动会话")
+        .help("启动会话 · ⌘↵")
+    }
+
+    private func prepareCreate() {
+        guard readyToStart else { return }
+        if draft.mode == .fullAccess && !draft.fullAccessAcknowledged { showRunSettings = true }
+        else { create() }
+    }
+
+    private var defaultModelLabel: String {
+        let model = draft.serverDefaultModels.model(for: draft.provider.rawValue) ?? ""
+        let label = providerModels.first(where: { $0.id == model })?.label ?? model
+        return label.isEmpty ? "服务器默认" : "服务器默认 · \(label)"
+    }
+
+    private var destinationPicker: some View {
+        Picker("归属任务", selection: Binding(get: { draft.destination }, set: selectDestination)) {
+            Text("新建任务").tag("new")
+            Text("暂不归属任务").tag("none")
+            Divider()
+            ForEach(draft.tasks) { task in Text(task.label).tag(task.id) }
         }
-        .onChange(of: mode) { selected in
-            if selected != .fullAccess { fullAccessAcknowledged = false }
-        }
+        .labelsHidden().pickerStyle(.menu)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("归属任务")
     }
 
     // MARK: - 区块组件
@@ -364,50 +566,27 @@ struct NewSessionView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var controlBackground: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Theme.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 0.75)
-            )
-    }
-
     private var providerPicker: some View {
-        HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(Provider.allCases) { tool in
                 Button {
-                    provider = tool
+                    chooseProvider(tool, userInitiated: true)
+                    showProviderPicker = false
                 } label: {
-                    HStack(spacing: 6) {
-                        BrandLogo(provider: tool.rawValue, color: Theme.textPrimary)
-                            .frame(width: 13, height: 13)
-                        Text(tool.label)
-                            .font(.system(size: 12, weight: provider == tool ? .semibold : .medium))
-                            .lineLimit(1)
-                    }
-                    .foregroundColor(Theme.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 34)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(provider == tool ? Theme.textPrimary.opacity(0.07) : .clear)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(
-                                provider == tool ? Theme.border : Color.clear,
-                                lineWidth: 0.75
-                            )
-                    )
-                }
-                .buttonStyle(.plain)
+                    HStack(spacing: 10) {
+                        BrandLogo(provider: tool.rawValue, color: Theme.textPrimary).frame(width: 16, height: 16)
+                        Text(tool.label).font(.system(size: 13))
+                        Spacer()
+                        if draft.provider == tool { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)) }
+                    }.foregroundColor(Theme.textPrimary).padding(.horizontal, 10).frame(height: 34)
+                        .contentShape(Rectangle())
+                }.buttonStyle(DesktopNavigationButtonStyle())
             }
         }
     }
 
     private var sessionTypePicker: some View {
-        Picker("会话类型", selection: $sessionType) {
+        Picker("会话类型", selection: $draft.sessionType) {
             ForEach(SessionType.allCases) { kind in
                 Text(kind.label).tag(kind)
             }
@@ -417,7 +596,10 @@ struct NewSessionView: View {
     }
 
     private var modePicker: some View {
-        Picker("模式", selection: $mode) {
+        Picker("模式", selection: Binding(get: { draft.mode }, set: {
+            draft.providerWasEdited = true
+            draft.mode = $0
+        })) {
             ForEach(modeOptions) { option in
                 Text(option.label).tag(option)
             }
@@ -427,8 +609,12 @@ struct NewSessionView: View {
     }
 
     private var selectedModelLabel: String {
-        guard !selectedModel.isEmpty, selectedModel != "default" else { return "默认" }
-        return providerModels.first(where: { $0.id == selectedModel })?.label ?? selectedModel
+        guard !draft.selectedModel.isEmpty, draft.selectedModel != "default" else {
+            let model = draft.serverDefaultModels.model(for: draft.provider.rawValue) ?? ""
+            let label = providerModels.first(where: { $0.id == model })?.label ?? model
+            return label.isEmpty ? "服务器默认" : "默认 · \(label)"
+        }
+        return providerModels.first(where: { $0.id == draft.selectedModel })?.label ?? draft.selectedModel
     }
 
     private var filteredNewSessionModels: [ModelInfo] {
@@ -438,12 +624,13 @@ struct NewSessionView: View {
     }
 
     private var defaultNewSessionModelMatchesQuery: Bool {
-        matchesModelKeyword(modelQuery, id: "", label: "默认")
+        matchesModelKeyword(modelQuery, id: "", label: defaultModelLabel)
     }
 
     @ViewBuilder private func modelPickerRow(id: String, label: String) -> some View {
         Button {
-            selectedModel = id
+            draft.providerWasEdited = true
+            draft.selectedModel = id
             showModelPicker = false
             modelQuery = ""
         } label: {
@@ -451,7 +638,7 @@ struct NewSessionView: View {
                 Text(label)
                     .foregroundColor(Theme.textPrimary)
                 Spacer()
-                if selectedModel == id || (id.isEmpty && selectedModel.isEmpty) {
+                if draft.selectedModel == id || (id.isEmpty && draft.selectedModel.isEmpty) {
                     Image(systemName: "checkmark")
                         .foregroundColor(Theme.wandAccent)
                 }
@@ -461,30 +648,18 @@ struct NewSessionView: View {
         .buttonStyle(.plain)
     }
 
+    private var compactModelLabel: String {
+        let model = draft.selectedModel.isEmpty ? draft.serverDefaultModels.model(for: draft.provider.rawValue) ?? "" : draft.selectedModel
+        if model.isEmpty { return "默认模型" }
+        let label = providerModels.first(where: { $0.id == model })?.label ?? model
+        return label.components(separatedBy: " · ").first?.components(separatedBy: "（").first ?? label
+    }
+
     private var modelMenuButton: some View {
-        Button {
-            showModelPicker.toggle()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "cpu")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Theme.textSecondary)
-                    .frame(width: 18)
-                Text(selectedModelLabel)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Theme.textSecondary)
-            }
-            .padding(.horizontal, 10)
+        Button { showModelPicker.toggle() } label: {
+            chipLabel(compactModelLabel, symbol: "cpu", width: 150)
         }
-        .buttonStyle(.plain)
-        .frame(minWidth: 180, idealWidth: 210, maxWidth: 240)
-        .frame(height: 44)
-        .background(controlBackground)
+        .buttonStyle(DesktopNavigationButtonStyle()).help(selectedModelLabel)
         .accessibilityLabel("模型：\(selectedModelLabel)")
         .popover(isPresented: $showModelPicker, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
@@ -493,7 +668,7 @@ struct NewSessionView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         if defaultNewSessionModelMatchesQuery {
-                            modelPickerRow(id: "", label: "默认")
+                            modelPickerRow(id: "", label: defaultModelLabel)
                         }
                         ForEach(filteredNewSessionModels) { model in
                             modelPickerRow(id: model.id, label: model.label)
@@ -523,7 +698,7 @@ struct NewSessionView: View {
     /// 工作目录保持单行主路径；最近目录进入菜单，避免把弹窗拉成长列表。
     private var cwdCard: some View {
         HStack(spacing: 0) {
-            TextField("/path/to/project", text: $cwd)
+            TextField("/path/to/project", text: $draft.cwd)
                 .font(.system(size: 14, design: .monospaced))
                 .textFieldStyle(.plain)
                 .foregroundColor(Theme.textPrimary)
@@ -531,13 +706,13 @@ struct NewSessionView: View {
                 .focused($focusedInput, equals: .cwd)
                 .padding(.leading, 12)
                 .padding(.vertical, 11)
-            if !recentPaths.isEmpty {
+            if !draft.recentPaths.isEmpty {
                 Menu {
-                    ForEach(recentPaths.prefix(8)) { recent in
+                    ForEach(draft.recentPaths.prefix(8)) { recent in
                         Button {
-                            cwd = recent.path
+                            draft.cwd = recent.path
                         } label: {
-                            if cwd == recent.path {
+                            if draft.cwd == recent.path {
                                 Label(recent.displayName, systemImage: "checkmark")
                             } else {
                                 Text(recent.displayName)
@@ -554,6 +729,7 @@ struct NewSessionView: View {
                 .help("最近目录")
             }
             Button {
+                showDirectoryOptions = false
                 showBrowser = true
             } label: {
                 Image(systemName: "folder")
@@ -568,33 +744,18 @@ struct NewSessionView: View {
         .wandInputSurface(focused: focusedInput == .cwd)
     }
 
-    @ViewBuilder
     private var firstMessageCard: some View {
-        // 多行首条消息用 TextField(.vertical)（macOS 13+），用 axis 替代 TextEditor，
-        // 占位符自动处理、不需要 scrollContentBackground 调样式，避免 12.x 部署目标的
-        // API 限制。12.x 走单行 TextField 占位样式。
-        if #available(macOS 13.0, *) {
-            TextField("想让它做什么…", text: $firstMessage, axis: .vertical)
-                .font(.system(size: 14))
-                .lineLimit(2...6)
-                .textFieldStyle(.plain)
-                .foregroundColor(Theme.textPrimary)
-                .tint(Theme.wandAccent)
-                .focused($focusedInput, equals: .firstMessage)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .wandInputSurface(focused: focusedInput == .firstMessage)
-        } else {
-            TextField("想让它做什么…", text: $firstMessage)
-                .font(.system(size: 14))
-                .textFieldStyle(.plain)
-                .foregroundColor(Theme.textPrimary)
-                .tint(Theme.wandAccent)
-                .focused($focusedInput, equals: .firstMessage)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .wandInputSurface(focused: focusedInput == .firstMessage)
-        }
+        IMEAwareComposerTextView(
+            text: $draft.firstMessage, placeholder: "描述你想完成的事…",
+            isFocused: composerFocused, sendWithCommandEnter: true,
+            onFocusChange: { composerFocused = $0 },
+            onCompositionChange: { composing = $0 },
+            onSubmit: prepareCreate, onHeightChange: { composerHeight = $0 },
+            submitActionName: "启动会话"
+        )
+        .frame(height: max(104, min(220, composerHeight)))
+        .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
+        .disabled(draft.creating)
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -616,7 +777,7 @@ struct NewSessionView: View {
     }
 
     private var fullAccessWarning: some View {
-        Toggle(isOn: $fullAccessAcknowledged) {
+        Toggle(isOn: $draft.fullAccessAcknowledged) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("我确认此目录和环境可以自动执行高权限操作")
                     .font(.system(size: 12, weight: .semibold))
@@ -632,170 +793,184 @@ struct NewSessionView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.warning.opacity(0.4), lineWidth: 1))
     }
 
-    // MARK: - 头部 / 底部
+    private var isExistingTask: Bool { draft.destination != "new" && draft.destination != "none" }
 
-    private var sheetHeader: some View {
-        // 顶部 header 整块可拖动：hideNativeTitleBar() 把原生标题栏隐藏后,
-        // 默认 NSWindow 不可拖；用 .gesture(DragGesture) + NSWindow.setFrameOrigin
-        // 把 header 转成拖拽区。直接在 .background() 放 NSView 会被 HStack 拦事件，
-        // 走 SwiftUI gesture 更稳。
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("新建对话")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Text("选择助手、目录和运行方式")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textSecondary)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .background(Theme.workspaceBackground)
-        .windowDrag()
+    private var readyToStart: Bool {
+        !draft.loading && draft.loadError == nil && !draft.loadingTask && !draft.creating && !composing
+            && (draft.destination == "new" || !draft.cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            && (!isExistingTask || draft.binding?.workspaceTaskId == draft.destination)
     }
 
-    private var sheetFooter: some View {
-        HStack(spacing: 10) {
-            Text("\(provider.label) · \(sessionType.label) · \(mode.label) · \((cwd as NSString).lastPathComponent)")
-                .font(.system(size: 11))
-                .foregroundColor(Theme.textSecondary)
-                .lineLimit(1)
-                .help(cwd)
-            Spacer()
-            Button("取消") { dismiss() }
-                .buttonStyle(WandSecondaryButtonStyle())
-                .keyboardShortcut(.cancelAction)
-            if creating {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 92)
-            } else {
-                Button {
-                    create()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11, weight: .bold))
-                        Text("启动会话")
-                    }
-                    .frame(minWidth: 92)
+    private var canCreate: Bool { readyToStart && (draft.mode != .fullAccess || draft.fullAccessAcknowledged) }
+
+    private func chooseProvider(_ provider: Provider, userInitiated: Bool) {
+        if userInitiated { draft.providerWasEdited = true }
+        guard draft.provider != provider || !draft.initialized else { return }
+        draft.provider = provider
+        draft.selectedModel = ""
+        let supported = ModeOption.supported(for: provider)
+        let preferred = ModeOption(apiValue: draft.defaultMode) ?? .managed
+        draft.mode = supported.contains(preferred) ? preferred : supported.contains(.managed) ? .managed : .fullAccess
+        draft.thinkingEffort = draft.defaultThinkingEffort
+        draft.fullAccessAcknowledged = false
+    }
+
+    private func selectDestination(_ destination: String) {
+        if !isExistingTask { draft.unboundCwd = draft.cwd }
+        draft.destination = destination
+        draft.taskGeneration += 1
+        draft.binding = nil
+        draft.taskError = nil
+        if destination == "new" || destination == "none" {
+            draft.cwd = draft.unboundCwd
+            draft.loadingTask = false
+            return
+        }
+        let generation = draft.taskGeneration
+        draft.loadingTask = true
+        Task {
+            do {
+                let detail = try await api.getWorkspaceTask(taskId: destination)
+                guard draft.taskGeneration == generation, draft.destination == destination else { return }
+                draft.binding = WorkspaceBinding(workspaceId: detail.workspaceId, workspaceTaskId: detail.id, cwd: detail.cwd)
+                draft.cwd = detail.cwd
+                draft.loadingTask = false
+                if !draft.providerWasEdited {
+                    let preferred = draft.workspaces.first(where: { $0.id == detail.workspaceId })?.defaultProvider?.rawValue
+                        ?? (detail.workspaceId == draft.context.workspaceId ? draft.context.workspaceDefaultProvider : nil)
+                        ?? draft.defaultProvider
+                    chooseProvider(Provider(rawValue: preferred) ?? .claude, userInitiated: false)
                 }
-                .buttonStyle(WandPrimaryButtonStyle())
-                .keyboardShortcut(.return, modifiers: .command)
-                .help("启动会话（⌘ Return）")
-                .disabled(!canCreate)
+                if let warning = detail.worktreeError { draft.errorMessage = warning }
+            } catch {
+                guard draft.taskGeneration == generation, draft.destination == destination else { return }
+                draft.loadingTask = false
+                draft.taskError = "无法读取任务目录：" + error.localizedDescription
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 12)
-        .background(Theme.workspaceBackground)
-    }
-
-    // MARK: - 状态
-
-    private var canCreate: Bool {
-        !cwd.trimmingCharacters(in: .whitespaces).isEmpty
-            && !creating
-            && (mode != .fullAccess || fullAccessAcknowledged)
     }
 
     private func loadInitial() async {
-        let config = try? await api.serverConfig()
-        switch config?.defaultProvider {
-        case "codex": provider = .codex
-        case "opencode": provider = .opencode
-        case "grok": provider = .grok
-        case "qoder": provider = .qoder
-        case "pi": provider = .pi
-        default: provider = .claude
-        }
-        sessionType = config?.defaultSessionKind == "pty" ? .pty : .structured
-        if let defaultMode = config?.defaultMode, let parsed = ModeOption(apiValue: defaultMode) {
-            if supportedModes.contains(parsed) {
-                mode = parsed
-            }
-        }
-        selectedModel = ""
-        thinkingEffort = config?.defaultThinkingEffort ?? "off"
-        serverDefaultModels = config?.defaultModels ?? ProviderDefaultModels(
-            claude: config?.defaultModel,
-            codex: config?.defaultCodexModel,
-            opencode: config?.defaultOpenCodeModel,
-            grok: config?.defaultGrokModel,
-            qoder: config?.defaultQoderModel,
-            pi: config?.defaultPiModel
-        )
-        if let response = try? await api.models() {
-            availableModels = response.models
-            codexModels = response.codexModels
-            openCodeModels = response.opencodeModels ?? []
-            grokModels = response.grokModels ?? []
-            qoderModels = response.qoderModels ?? []
-            piModels = response.piModels ?? []
-            serverDefaultModels = response.defaultModels ?? ProviderDefaultModels(
-                claude: response.defaultModel,
-                codex: response.defaultCodexModel,
-                opencode: response.defaultOpenCodeModel,
-                grok: response.defaultGrokModel,
-                qoder: response.defaultQoderModel,
-                pi: response.defaultPiModel
+        guard !draft.initialized else { return }
+        draft.loading = true
+        draft.loadError = nil
+        do {
+            async let configRequest = api.serverConfig()
+            async let groupsRequest = api.listTaskGroups()
+            async let workspacesRequest = api.listWorkspaces()
+            async let modelsRequest = try? api.models()
+            async let recentRequest = try? api.recentPaths()
+            let (config, groups, workspaces, models, recent) = try await (
+                configRequest, groupsRequest, workspacesRequest, modelsRequest, recentRequest
             )
-        }
-        recentPaths = (try? await api.recentPaths()) ?? []
-        if cwd.isEmpty {
-            if let first = recentPaths.first {
-                cwd = first.path
-            } else if let def = config?.defaultCwd {
-                cwd = def
+            guard !Task.isCancelled else { return }
+            draft.workspaces = workspaces
+            draft.tasks = groups.flatMap { group in
+                group.tasks.map { task in
+                    SessionTaskOption(id: task.id, workspaceId: task.workspaceId, name: task.name,
+                                      workspaceName: group.workspaceName, cwd: task.cwd)
+                }
             }
+            if let id = draft.context.taskId, !draft.tasks.contains(where: { $0.id == id }) {
+                draft.tasks.append(SessionTaskOption(id: id, workspaceId: draft.context.workspaceId ?? "",
+                    name: draft.context.taskName ?? "所选任务", workspaceName: "", cwd: draft.cwd))
+            }
+            draft.defaultProvider = config.defaultProvider ?? "claude"
+            draft.defaultMode = config.defaultMode ?? "managed"
+            draft.defaultThinkingEffort = config.defaultThinkingEffort ?? "off"
+            let preferredProvider = draft.context.workspaceDefaultProvider
+                ?? workspaces.first(where: { $0.id == draft.context.workspaceId })?.defaultProvider?.rawValue
+                ?? draft.defaultProvider
+            chooseProvider(Provider(rawValue: preferredProvider) ?? .claude, userInitiated: false)
+            draft.sessionType = config.defaultSessionKind == "pty" ? .pty : .structured
+            draft.worktree = config.defaultTaskWorktree != false
+            draft.serverDefaultModels = config.defaultModels ?? ProviderDefaultModels(
+                claude: config.defaultModel, codex: config.defaultCodexModel,
+                opencode: config.defaultOpenCodeModel, grok: config.defaultGrokModel,
+                qoder: config.defaultQoderModel, pi: config.defaultPiModel
+            )
+            if let models {
+                draft.availableModels = models.models
+                draft.codexModels = models.codexModels
+                draft.openCodeModels = models.opencodeModels ?? []
+                draft.grokModels = models.grokModels ?? []
+                draft.qoderModels = models.qoderModels ?? []
+                draft.piModels = models.piModels ?? []
+                if let defaults = models.defaultModels { draft.serverDefaultModels = defaults }
+            }
+            draft.recentPaths = recent ?? []
+            if draft.cwd.isEmpty {
+                draft.cwd = (config.defaultCwd?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? draft.recentPaths.first?.path ?? ""
+            }
+            draft.unboundCwd = draft.cwd
+            draft.initialized = true
+            draft.loading = false
+            if isExistingTask { selectDestination(draft.destination) }
+            composerFocused = true
+        } catch {
+            guard !Task.isCancelled else { return }
+            draft.loading = false
+            draft.loadError = "无法读取默认配置或任务列表：" + error.localizedDescription
         }
     }
 
     private func create() {
         guard canCreate else { return }
-        creating = true
-        errorMessage = nil
-        let path = cwd.trimmingCharacters(in: .whitespaces)
-        let prompt = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.creating = true
+        draft.errorMessage = nil
         Task {
             do {
-                try await api.updateNewSessionDefaults(
-                    mode: mode.apiValue,
-                    model: selectedModel.isEmpty ? nil : selectedModel,
-                    provider: provider.rawValue,
-                    thinkingEffort: thinkingEffort,
-                    defaultSessionKind: sessionType.rawValue
-                )
-                let snapshot: SessionSnapshot
-                switch sessionType {
-                case .structured:
-                    snapshot = try await api.createStructuredSession(
-                        provider: provider.rawValue,
-                        cwd: path,
-                        mode: mode.apiValue,
-                        model: selectedModel,
-                        thinkingEffort: thinkingEffort,
-                        prompt: prompt.isEmpty ? nil : prompt
-                    )
-                case .pty:
-                    snapshot = try await api.createPtySession(
-                        provider: provider.rawValue,
-                        cwd: path,
-                        mode: mode.apiValue,
-                        model: selectedModel,
-                        thinkingEffort: thinkingEffort,
-                        initialInput: prompt.isEmpty ? nil : prompt
-                    )
+                let path = draft.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+                let creatingNewTask = draft.destination == "new"
+                if draft.destination == "new" {
+                    let creation: WorkspaceTaskCreation
+                    let workspace = draft.workspaces.first(where: { $0.id == draft.context.workspaceId })
+                    if let workspace, (workspace.cwd as NSString).standardizingPath == (path as NSString).standardizingPath {
+                        creation = try await api.createWorkspaceTask(workspaceId: workspace.id, name: draft.taskName,
+                            baseRef: nil, worktree: draft.worktree, cwd: nil)
+                    } else {
+                        creation = try await api.createStandaloneTask(name: draft.taskName,
+                            cwd: path.isEmpty ? nil : path, worktree: path.isEmpty ? false : draft.worktree)
+                    }
+                    // Keep the created task on session failure, so Retry never creates a duplicate task.
+                    draft.tasks.append(SessionTaskOption(id: creation.id, workspaceId: creation.workspaceId,
+                        name: creation.name, workspaceName: workspace?.name ?? "", cwd: creation.cwd))
+                    draft.destination = creation.id
+                    draft.cwd = creation.cwd
+                    draft.binding = WorkspaceBinding(workspaceId: creation.workspaceId,
+                        workspaceTaskId: creation.id, cwd: creation.cwd)
+                    await workspaceStore?.loadTaskGroups(force: true)
                 }
-                creating = false
+                let snapshot: SessionSnapshot
+                switch draft.sessionType {
+                case .structured:
+                    snapshot = try await api.createStructuredSession(provider: draft.provider.rawValue,
+                        cwd: draft.cwd, mode: draft.mode.apiValue, model: draft.selectedModel,
+                        thinkingEffort: draft.thinkingEffort, prompt: prompt.isEmpty ? nil : prompt,
+                        workspaceBinding: draft.binding)
+                case .pty:
+                    snapshot = try await api.createPtySession(provider: draft.provider.rawValue,
+                        cwd: draft.cwd, mode: draft.mode.apiValue, model: draft.selectedModel,
+                        thinkingEffort: draft.thinkingEffort, initialInput: prompt.isEmpty ? nil : prompt,
+                        workspaceBinding: draft.binding)
+                }
+                // Remember preferences after creation; a preference failure must not hide a live session.
+                try? await api.updateNewSessionDefaults(mode: draft.mode.apiValue,
+                    model: draft.selectedModel.isEmpty ? nil : draft.selectedModel,
+                    provider: draft.provider.rawValue, thinkingEffort: draft.thinkingEffort,
+                    defaultSessionKind: draft.sessionType.rawValue)
+                if creatingNewTask {
+                    try? await api.updateCreationDefaults(defaultProvider: nil, defaultSessionKind: nil,
+                                                          defaultTaskWorktree: draft.worktree)
+                }
+                draft.creating = false
+                NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
                 onCreated(snapshot)
             } catch {
-                creating = false
-                errorMessage = error.localizedDescription
+                draft.creating = false
+                draft.errorMessage = error.localizedDescription
             }
         }
     }

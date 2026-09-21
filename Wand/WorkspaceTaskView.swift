@@ -8,6 +8,9 @@ struct WorkspaceTaskView: View {
     let api: WandAPI
     @ObservedObject var store: WorkspaceStore
     @ObservedObject var gitStatusStore: GitStatusStore
+    var preferredSessionId: String? = nil
+    var onRequestNewSession: (() -> Void)? = nil
+    @State private var creationDraft: SessionCreationDraft?
     @State private var pendingDeleteSession: WorkspaceSessionSummary?
     @State private var deleteSessionBusy = false
     @State private var deleteSessionError: String?
@@ -17,11 +20,15 @@ struct WorkspaceTaskView: View {
             Theme.workspaceBackground
             content
         }
-        .sheet(isPresented: pickerBinding) {
-            WorkspaceTargetPicker(store: store, taskId: task.id)
-        }
         .task(id: task.id) {
-            await store.openTask(workspace: workspace, task: task)
+            if store.currentTask?.id == task.id, store.taskState.detail != nil {
+                if let preferredSessionId {
+                    await store.selectSession(id: preferredSessionId)
+                }
+                return
+            }
+            await store.openTask(workspace: workspace, task: task,
+                                 preferredSessionId: preferredSessionId)
         }
         .alert("删除终端？", isPresented: Binding(
             get: { pendingDeleteSession != nil },
@@ -46,16 +53,20 @@ struct WorkspaceTaskView: View {
         }
     }
 
-    private var pickerBinding: Binding<Bool> {
-        Binding(
-            get: { store.pickerPresented && store.currentTask?.id == task.id },
-            set: { presented in if !presented { store.dismissTargetPicker() } }
-        )
-    }
-
     @ViewBuilder
     private var content: some View {
-        if store.currentTask?.id != task.id {
+        if let creationDraft {
+            NewSessionView(api: api, draft: creationDraft, workspaceStore: store,
+                           embedded: true) { session in
+                Task {
+                    await store.openTask(workspace: workspace, task: task,
+                                         preferredSessionId: session.id)
+                    self.creationDraft = nil
+                    await store.loadTaskGroups(force: true)
+                }
+            }
+            .id(creationDraft.id)
+        } else if store.currentTask?.id != task.id {
             loadingState("正在打开任务…")
         } else {
             switch store.taskState {
@@ -63,68 +74,33 @@ struct WorkspaceTaskView: View {
                 loadingState("正在恢复任务上下文…")
             case .failed(let message):
                 errorState(message)
-            case .empty(let detail):
-                emptyTask(detail)
+            case .empty:
+                emptyTask
             case .ready(let detail):
                 readyTask(detail)
             }
         }
     }
 
-    private func emptyTask(_ detail: WorkspaceTaskDetail) -> some View {
-        VStack(spacing: 14) {
-            Spacer(minLength: 40)
-            Text(workspace.name.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Theme.wandAccent)
-            Image(systemName: "terminal")
-                .font(.system(size: 26, weight: .medium))
-                .foregroundColor(Theme.wandAccent)
-                .frame(width: 56, height: 56)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Theme.wandAccent.opacity(0.10))
-                )
-            Text(detail.name)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundColor(Theme.textPrimary)
-            Text("选择 CLI 工具，以及结构化或 PTY，开始这个任务。")
-                .font(.system(size: 13))
-                .foregroundColor(Theme.textSecondary)
-            WorkspaceTargetPicker(store: store, taskId: task.id, embedded: true)
-                .padding(.top, 8)
+    private var emptyTask: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .task { requestNewSession() }
+    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("工作目录")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Theme.textMuted)
-                Text(detail.cwd)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(Theme.textSecondary)
-                    .textSelection(.enabled)
-            }
-            .frame(maxWidth: 520, alignment: .leading)
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Theme.surface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Theme.border, lineWidth: 1)
-            )
-            .padding(.top, 10)
-
-            if let warning = detail.worktreeError, !warning.isEmpty {
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundColor(Theme.textSecondary)
-                    .padding(.top, 8)
-            }
-            Spacer(minLength: 40)
+    private func requestNewSession() {
+        if let onRequestNewSession {
+            onRequestNewSession()
+        } else {
+            creationDraft = SessionCreationDraft(context: SessionCreationContext(
+                cwd: store.taskState.detail?.cwd ?? workspace.cwd,
+                workspaceId: workspace.id,
+                taskId: task.id,
+                taskName: task.name,
+                workspaceDefaultProvider: workspace.defaultProvider?.rawValue,
+                startsNewTask: false
+            ))
         }
-        .padding(.horizontal, 28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func readyTask(_ detail: WorkspaceTaskDetail) -> some View {
@@ -197,14 +173,15 @@ struct WorkspaceTaskView: View {
                     }
                 }
 
-                Button { store.presentTargetPicker() } label: {
+                Button(action: requestNewSession) {
                     Image(systemName: "plus")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(Theme.textSecondary)
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(WandIconButtonStyle())
-                .help("新建工作窗口")
+                .help("在此任务新建会话")
+                .accessibilityLabel("在此任务新建会话")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)

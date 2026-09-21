@@ -113,9 +113,9 @@ func createWorkspaceTaskRequest(
     if let cwd, !cwd.isEmpty {
         body["cwd"] = .string(cwd)
     }
-    // 仅在显式关掉时传 worktree:false；缺省交由服务端默认（git 仓库自动隔离）。
-    if worktree == false {
-        body["worktree"] = .bool(false)
+    // 服务端仅在显式 true 时创建隔离工作树；开启和关闭都必须透传。
+    if let worktree {
+        body["worktree"] = .bool(worktree)
     }
     return WorkspaceTaskWindowRequest(
         path: "/api/workspaces/\(workspaceId)/tasks",

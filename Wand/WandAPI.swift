@@ -41,10 +41,12 @@ struct LegacyHistoryRefresh {
 final class WandAPI {
     let baseURL: URL
     let token: String?
+    private let session: URLSession
 
-    init(baseURL: URL, token: String?) {
+    init(baseURL: URL, token: String?, session: URLSession = SelfSignedSession.shared.session) {
         self.baseURL = baseURL
         self.token = token
+        self.session = session
     }
 
     enum APIError: LocalizedError {
@@ -82,7 +84,7 @@ final class WandAPI {
 
     private func perform(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
         do {
-            let (data, response) = try await SelfSignedSession.shared.session.data(for: req)
+            let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse else {
                 throw APIError.network("无效响应")
             }
@@ -436,13 +438,18 @@ final class WandAPI {
         mode: String?,
         model: String? = nil,
         thinkingEffort: String? = nil,
-        prompt: String?
+        prompt: String?,
+        workspaceBinding: WorkspaceBinding? = nil
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = [
             "provider": provider,
             "runner": structuredRunner(for: provider),
-            "cwd": cwd,
+            "cwd": workspaceBinding?.cwd ?? cwd,
         ]
+        if let workspaceBinding {
+            body["workspaceId"] = workspaceBinding.workspaceId
+            body["workspaceTaskId"] = workspaceBinding.workspaceTaskId
+        }
         if let mode, !mode.isEmpty { body["mode"] = mode }
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
@@ -464,13 +471,18 @@ final class WandAPI {
         mode: String?,
         model: String? = nil,
         thinkingEffort: String? = nil,
-        initialInput: String?
+        initialInput: String?,
+        workspaceBinding: WorkspaceBinding? = nil
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = [
             "command": provider == "qoder" ? "qodercli" : provider,
             "provider": provider,
-            "cwd": cwd,
+            "cwd": workspaceBinding?.cwd ?? cwd,
         ]
+        if let workspaceBinding {
+            body["workspaceId"] = workspaceBinding.workspaceId
+            body["workspaceTaskId"] = workspaceBinding.workspaceTaskId
+        }
         if let mode, !mode.isEmpty { body["mode"] = mode }
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }

@@ -53,9 +53,9 @@ struct MainShellView: View {
     @AppStorage("wand.sidebar.section") private var sidebarSectionRaw = SidebarSection.workspaces.rawValue
     @State private var sidebarQuery = ""
     @State private var showCreateWorkspace = false
-    @State private var newTaskSheetRequest: NewTaskSheetRequest?
-    @State private var presentNewSession = false
-    @State private var newConversationDraft = ""
+    @State private var creationDraft = SessionCreationDraft()
+    @State private var creationDrafts: [CreationDraftKey: SessionCreationDraft] = [:]
+    @State private var showCreation = true
     /// 连接状态(给顶栏的 connection dot 用)。
     @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
@@ -83,6 +83,28 @@ struct MainShellView: View {
     private let persistentRightPanelMinimumWidth: CGFloat = 1_220
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
+
+    /// Navigation identity excludes display labels and defaults so renamed tasks
+    /// and refreshed server preferences do not discard a partially edited form.
+    private enum CreationDraftKey: Hashable {
+        case task(String)
+        case workspace(String, startsNewTask: Bool)
+        case directory(String, startsNewTask: Bool)
+        case home(startsNewTask: Bool)
+
+        init(_ context: SessionCreationContext) {
+            if let taskId = context.taskId {
+                self = .task(taskId)
+            } else if let workspaceId = context.workspaceId {
+                self = .workspace(workspaceId, startsNewTask: context.startsNewTask)
+            } else if let cwd = context.cwd, !cwd.isEmpty {
+                self = .directory((cwd as NSString).standardizingPath,
+                                  startsNewTask: context.startsNewTask)
+            } else {
+                self = .home(startsNewTask: context.startsNewTask)
+            }
+        }
+    }
 
     enum RightPanelTab: String, CaseIterable, Identifiable {
         case files
@@ -160,13 +182,6 @@ struct MainShellView: View {
             )
             .environmentObject(ServerStore.shared)
         }
-        .sheet(isPresented: $presentNewSession) {
-            NewSessionView(api: api, initialMessage: newConversationDraft) { session in
-                newConversationDraft = ""
-                presentNewSession = false
-                presentSession(session)
-            }
-        }
         .sheet(item: $webTool) { tool in
             DesktopWebToolsView(serverURL: serverURL, token: token, initialTool: tool,
                                 sessionId: selectedSessionId, onDismiss: { webTool = nil })
@@ -227,49 +242,11 @@ struct MainShellView: View {
             WorkspaceCreateView(api: api, store: workspaceStore) { created in
                 showCreateWorkspace = false
                 sidebarSection = .workspaces
-                Task {
-                    guard let (workspace, creation) = try? await workspaceStore.createTask(
-                        name: "新任务",
-                        directory: created.cwd,
-                        worktree: false,
-                        workspaceId: created.id
-                    ) else { return }
-                    let task = WorkspaceTask(
-                        id: creation.id,
-                        workspaceId: creation.workspaceId,
-                        name: creation.name,
-                        worktree: creation.worktree,
-                        layout: nil,
-                        status: creation.status,
-                        createdAt: "",
-                        lastOpenedAt: nil
-                    )
-                    showTaskBoard = false
-                    selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
-                    await workspaceStore.openTask(workspace: workspace, task: task)
-                }
-            }
-        }
-        .sheet(item: $newTaskSheetRequest) { request in
-            NewTaskSheetBody(request: request, store: workspaceStore) { workspace, creation in
-                sidebarSection = .workspaces
-                let task = WorkspaceTask(
-                    id: creation.id,
-                    workspaceId: creation.workspaceId,
-                    name: creation.name,
-                    worktree: creation.worktree,
-                    layout: nil,
-                    status: creation.status,
-                    createdAt: "",
-                    lastOpenedAt: nil
-                )
-                showTaskBoard = false
-                selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
-                Task {
-                    await workspaceStore.openTask(workspace: workspace, task: task)
-                    await workspaceStore.createSelectedWindow(expectedTaskId: creation.id)
-                    await workspaceStore.loadTaskGroups(force: true)
-                }
+                beginCreation(context: SessionCreationContext(
+                    cwd: created.cwd,
+                    workspaceId: created.id,
+                    workspaceDefaultProvider: created.defaultProvider?.rawValue
+                ))
             }
         }
         .task {
@@ -286,7 +263,8 @@ struct MainShellView: View {
             }
         }
         .onChange(of: workspaceStore.visibleSnapshot?.id) { _ in
-            guard sidebarSection == .workspaces else { return }
+            guard !showCreation, let selection = selectedWorkspaceTask,
+                  selection.task.id == workspaceStore.currentTask?.id else { return }
             guard let snapshot = workspaceStore.visibleSnapshot else {
                 selectedSessionId = nil
                 selectedSession = nil
@@ -377,6 +355,7 @@ struct MainShellView: View {
         sidebarSection = .sessions
         selectedWorkspaceTask = nil
         showTaskBoard = false
+        showCreation = false
         showMissions = false
         Task {
             do {
@@ -393,14 +372,103 @@ struct MainShellView: View {
 
     private func presentSession(_ session: SessionSnapshot, keepWorkspaceContext: Bool = false) {
         showTaskBoard = false
+        showCreation = false
+        selectedWorkspaceTask = nil
         if !keepWorkspaceContext {
             sidebarSection = .sessions
-            selectedWorkspaceTask = nil
         }
         selectedSessionId = session.id
         selectedSessionProvider = session.provider ?? "claude"
         selectedSession = session
         connectionState = .connected
+    }
+
+    private func beginCreation(
+        context: SessionCreationContext = .init(),
+        taskSelection: WorkspaceTaskSelection? = nil
+    ) {
+        creationDrafts[CreationDraftKey(creationDraft.context)] = creationDraft
+        let key = CreationDraftKey(context)
+        if let existingDraft = creationDrafts[key] {
+            creationDraft = existingDraft
+        } else {
+            let newDraft = SessionCreationDraft(context: context)
+            creationDrafts[key] = newDraft
+            creationDraft = newDraft
+        }
+        showCreation = true
+        showTaskBoard = false
+        filePanelOpen = false
+        selectedWorkspaceTask = taskSelection
+        selectedSessionId = nil
+        selectedSession = nil
+        if context.workspaceId != nil || context.taskId != nil {
+            sidebarSection = .workspaces
+        }
+    }
+
+    private func beginNewTask(_ request: NewTaskSheetRequest) {
+        let workspace = workspaceStore.workspaces.first {
+            if let workspaceId = request.workspaceId { return $0.id == workspaceId }
+            return !request.cwd.isEmpty
+                && ($0.cwd as NSString).standardizingPath == (request.cwd as NSString).standardizingPath
+        }
+        sidebarSection = .workspaces
+        beginCreation(context: SessionCreationContext(
+            cwd: request.cwd.isEmpty ? nil : request.cwd,
+            workspaceId: request.workspaceId ?? workspace?.id,
+            workspaceDefaultProvider: workspace?.defaultProvider?.rawValue
+        ))
+    }
+
+    private func beginTaskSession(workspace: Workspace, task: WorkspaceTask) {
+        beginCreation(context: SessionCreationContext(
+            cwd: workspace.cwd,
+            workspaceId: workspace.id,
+            taskId: task.id,
+            taskName: task.name,
+            workspaceDefaultProvider: workspace.defaultProvider?.rawValue,
+            startsNewTask: false
+        ), taskSelection: WorkspaceTaskSelection(workspace: workspace, task: task))
+    }
+
+    private var creationDestinationVisible: Bool {
+        !showWebFallback && (showCreation || (!showTaskBoard
+            && selectedWorkspaceTask == nil && selectedSessionId == nil))
+    }
+
+    private func openCreatedSession(_ session: SessionSnapshot, originDraftID: UUID) {
+        let shouldOpen = creationDraft.id == originDraftID && creationDestinationVisible
+        creationDrafts = creationDrafts.filter { $0.value.id != originDraftID }
+        if creationDraft.id == originDraftID {
+            creationDraft = SessionCreationDraft(context: creationDraft.context)
+        }
+        if shouldOpen { presentSession(session) }
+        NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+        Task {
+            await workspaceStore.loadWorkspaceIndex()
+            await workspaceStore.loadTaskGroups(force: true)
+            guard shouldOpen, let taskId = session.workspaceTaskId,
+                  let detail = try? await api.getWorkspaceTask(taskId: taskId),
+                  let workspace = workspaceStore.workspaces.first(where: {
+                      $0.id == (session.workspaceId ?? detail.workspaceId)
+                  }),
+                  !showCreation, !showTaskBoard, selectedSessionId == session.id else { return }
+            let task = WorkspaceTask(
+                id: detail.id,
+                workspaceId: detail.workspaceId,
+                name: detail.name,
+                worktree: detail.worktree,
+                layout: detail.layout,
+                status: detail.status,
+                createdAt: detail.createdAt,
+                lastOpenedAt: detail.lastOpenedAt
+            )
+            sidebarSection = .workspaces
+            selectedWorkspaceTask = WorkspaceTaskSelection(workspace: workspace, task: task)
+            await workspaceStore.openTask(workspace: workspace, task: task,
+                                          preferredSessionId: session.id)
+        }
     }
 
     // MARK: - 状态
@@ -474,11 +542,18 @@ struct MainShellView: View {
             sidebarChrome
             if sidebarSection == .sessions {
                 SidebarColumn(api: api, selectedSessionId: Binding(
-                                get: { showTaskBoard ? nil : selectedSessionId },
+                                get: { showTaskBoard || showCreation ? nil : selectedSessionId },
                                 set: { selectedSessionId = $0 }),
                               query: sidebarQuery, presentNewSession: .constant(false),
                               onOpenMissions: { showMissions = true },
-                              onSessionSelected: { presentSession($0) })
+                              onSessionSelected: { presentSession($0) },
+                              onRequestNewSession: { cwd in
+                                  if let cwd {
+                                      beginNewTask(NewTaskSheetRequest(cwd: cwd, projectHint: nil))
+                                  } else {
+                                      beginCreation()
+                                  }
+                              })
             } else {
             WorkspaceListView(
                 store: workspaceStore,
@@ -488,6 +563,9 @@ struct MainShellView: View {
                 query: sidebarQuery,
                 onOpenTask: { workspace, task in
                     showTaskBoard = false
+                    showCreation = false
+                    selectedSessionId = nil
+                    selectedSession = nil
                     selectedWorkspaceTask = WorkspaceTaskSelection(
                         workspace: workspace,
                         task: task
@@ -518,6 +596,9 @@ struct MainShellView: View {
                 },
                 onOpenTaskSession: { workspace, task, session in
                     showTaskBoard = false
+                    showCreation = false
+                    selectedSessionId = session.id
+                    selectedSession = nil
                     selectedWorkspaceTask = WorkspaceTaskSelection(
                         workspace: workspace,
                         task: task
@@ -525,12 +606,9 @@ struct MainShellView: View {
                     Task { await workspaceStore.openTask(workspace: workspace, task: task, preferredSessionId: session.id) }
                 },
                 onRequestNewSession: { workspace, task in
-                    selectedWorkspaceTask = WorkspaceTaskSelection(
-                        workspace: workspace,
-                        task: task
-                    )
-                    Task { await workspaceStore.openTaskAndPresentPicker(workspace: workspace, task: task) }
+                    beginTaskSession(workspace: workspace, task: task)
                 },
+                onRequestNewTask: beginNewTask,
                 onOpenParallel: { workspace, task in
                     selectedWorkspaceTask = WorkspaceTaskSelection(
                         workspace: workspace,
@@ -687,7 +765,7 @@ struct MainShellView: View {
 
     private var sidebarChrome: some View {
         VStack(spacing: 3) {
-            navigationRow(.newSession)
+            navigationRow(.newSession, active: showCreation && selectedWorkspaceTask == nil)
             navigationRow(.search)
             navigationRow(.taskBoard, active: showTaskBoard)
             HStack(spacing: 2) {
@@ -789,7 +867,11 @@ struct MainShellView: View {
                 }.buttonStyle(WandIconButtonStyle()).help("显示侧栏 · ⌃⌘S")
                     .accessibilityLabel("显示侧栏")
             }
-            if showTaskBoard {
+            if showCreation {
+                Text(creationDraft.context.taskName ?? "新建会话")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Theme.textSecondary).lineLimit(1)
+            } else if showTaskBoard {
                 Text("任务看板").font(.system(size: 15, weight: .medium))
             } else if selectedWorkspaceTask == nil, let session = selectedSession {
                 BrandLogo(provider: selectedSessionProvider, color: Theme.textSecondary)
@@ -801,7 +883,7 @@ struct MainShellView: View {
                     .font(.system(size: 15, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
             }
             WindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 52)
-            if !showTaskBoard, selectedSessionId != nil || selectedWorkspaceTask != nil {
+            if !showCreation, !showTaskBoard, selectedSessionId != nil || selectedWorkspaceTask != nil {
                 filePanelToggleButton
             }
         }
@@ -821,27 +903,24 @@ struct MainShellView: View {
     }
 
     private var hasPresentedSheet: Bool {
-        presentSettings || presentNewSession || showCommandPalette || showOnboarding
+        presentSettings || showCommandPalette || showOnboarding
             || showShortcuts || webTool != nil || showTroubleshooting || showMissions
-            || showCreateWorkspace || newTaskSheetRequest != nil
+            || showCreateWorkspace
     }
 
     private func handle(_ command: DesktopCommand) {
         switch command {
         case .newSession:
-            showTaskBoard = false
-            selectedWorkspaceTask = nil
-            selectedSessionId = nil
-            selectedSession = nil
-            filePanelOpen = false
             sidebarSection = .sessions
-        case .newTask: newTaskSheetRequest = NewTaskSheetRequest(cwd: "", projectHint: nil)
+            beginCreation()
+        case .newTask:
+            beginNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
         case .search: showCommandPalette = true
         case .toggleSidebar: withAnimation(structuralAnimation) { sidebarVisible.toggle() }
         case .toggleInspector: withAnimation(structuralAnimation) { filePanelOpen.toggle() }
         case .workspaces: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .workspaces
         case .sessions: sidebarVisible = true; sidebarSectionBinding.wrappedValue = .sessions
-        case .taskBoard: showTaskBoard = true; filePanelOpen = false
+        case .taskBoard: showCreation = false; showTaskBoard = true; filePanelOpen = false
         case .missions: showMissions = true
         case .settings: presentSettings = true
         case .webTools: webTool = .general
@@ -882,6 +961,8 @@ struct MainShellView: View {
                 onSwitchServer: { NotificationCenter.default.post(name: .wandRequestSwitchServer, object: nil) },
                 onTroubleshoot: { showTroubleshooting = true }
             )
+        } else if showCreation {
+            creationView
         } else if showTaskBoard {
             TaskBoardView(api: api, onOpenSession: openSessionFromMissions, embedded: true)
         } else if let selection = selectedWorkspaceTask {
@@ -890,7 +971,11 @@ struct MainShellView: View {
                 task: selection.task,
                 api: api,
                 store: workspaceStore,
-                gitStatusStore: gitStatusStore
+                gitStatusStore: gitStatusStore,
+                preferredSessionId: selectedSessionId,
+                onRequestNewSession: {
+                    beginTaskSession(workspace: selection.workspace, task: selection.task)
+                }
             )
             .id(selection.task.id)
         } else if let sessionId = selectedSessionId {
@@ -903,10 +988,16 @@ struct MainShellView: View {
                 showsHeader: false
             )
         } else {
-            DesktopWelcomeView(draft: $newConversationDraft, onContinue: {
-                presentNewSession = true
-            }, onCommand: handle)
+            creationView
         }
+    }
+
+    private var creationView: some View {
+        let originDraftID = creationDraft.id
+        return DesktopWelcomeView(api: api, draft: creationDraft, workspaceStore: workspaceStore) {
+            openCreatedSession($0, originDraftID: originDraftID)
+        }
+        .id(originDraftID)
     }
 
     @ViewBuilder

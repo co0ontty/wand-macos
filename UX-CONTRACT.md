@@ -14,6 +14,7 @@
 | PTY、结构化会话、输入与权限 | 父仓库 `AGENTS.md`、`docs/client-logic-analysis.md`、`src/session-transport.ts` | 操作约定与协议实现 | 2026-09-21 |
 | 原生 API 和会话数据 | `Wand/WandAPI.swift`、`Wand/WandModels.swift`、`Wand/ChatStore.swift` | 客户端契约实现 | 2026-09-21 |
 | 项目、任务与工作窗口 | `Wand/WorkspaceStore.swift`、`Wand/WorkspaceTaskView.swift` | 状态与业务实现 | 2026-09-21 |
+| 首页创建、默认值与草稿路由 | `Wand/NewSessionView.swift`、`Wand/DesktopWelcomeView.swift`、`Wand/MainShellView.swift` | 共享表单与创建状态实现 | 2026-09-21 |
 | 登录与网络权限 | `Wand/WandAuth.swift`、`Wand/ServerStore.swift`、`Wand/LocalNetworkPermission.swift` | 认证与系统集成 | 2026-09-21 |
 | 更新、完整性验证与恢复 | `Wand/MacUpdateManager.swift`、`Wand/UpdateInstaller.swift` | 更新事务实现 | 2026-09-21 |
 | 服务端工具授权与表单 | `Wand/DesktopWebToolsView.swift`、父仓库 `src/web-ui/react/settings/` | 导航目录与服务器 UI | 2026-09-21 |
@@ -31,8 +32,8 @@
 
 | Capability | Canonical owner | Source of truth | Allowed variants | Verification |
 |---|---|---|---|---|
-| Select/Listbox | SwiftUI Picker/Menu；服务端工具使用原有 Web 控件 | `SettingsView.swift`、`NewSessionView.swift` | 原生设置、模型选择、Web 工具 | 键盘选择、选中值、菜单关闭与重开 |
-| Form | SwiftUI 表单加 WandAPI；聊天使用 IMEAwareComposerTextView | API 契约及 `NewSessionView.swift`、`ChatView.swift` | 连接、新建、聊天、服务端 Web 表单 | 校验、中文输入、重复提交、失败保留 |
+| Select/Listbox | SwiftUI Picker/Menu，首页从输入框底部按钮按需展开；服务端工具使用原有 Web 控件 | `SettingsView.swift`、`NewSessionView.swift` | 原生设置、输入区配置 popover、Web 工具 | 键盘选择、选中值、关闭与重开、焦点返回 |
+| Form | SwiftUI 配置控件加 WandAPI；首页与聊天使用 IMEAwareComposerTextView | API 契约及 `NewSessionView.swift`、`ChatView.swift` | 连接、输入区及按需配置、聊天、服务端 Web 表单 | 默认预填、校验、中文输入、重复提交、失败保留 |
 | Scrollbar | AppKit NSScrollView / SwiftUI ScrollView；Web 保留服务端滚动契约 | 系统滚动偏好及各视图的滚动范围 | 消息、列表、sheet 正文、终端 | 触控板、始终显示滚动条、末尾可达 |
 | Toast | 聊天的 ChatStore.toast 与 ChatView.toastView；Web 使用服务端通知层 | `Wand/ChatStore.swift`、`Wand/ChatView.swift` | 聊天轻提示、服务端 Web 提示；其他流程使用既有行内错误或 alert | 发送、复制、失败提示不遮挡主操作 |
 | CRUD | WandAPI 与对应 store；Web 工具调用已有页面控制器 | 会话、WorkspaceStore、TaskBoardView.mutate 及服务端契约 | 原生列表详情、内嵌 Web 完整功能 | 创建后进入、编辑后保留上下文、删除确认与失败恢复 |
@@ -57,15 +58,59 @@ Command-F 查找当前已加载的对话，不能声称搜索全部服务器历�
 加载失败时命令仍可使用，并提供重试；空结果给出修改关键词的方向。
 上/下箭头选择，Return 打开，Escape 关闭；中文组合输入时不拦截候选按键。
 
+## Unified session creation
+
+首页直接呈现 `DesktopWelcomeView` 包装的 `NewSessionView`，视觉中心是标题与多行输入框。
+工具、模型、目录、归属任务以输入框底部的低强调小按钮（chips）显示当前值，点击后才配置。
+权限、思考强度、会话类型位于「更多」popover；任务名称与 worktree 仅在任务 popover 中出现。
+默认配置已经应用，用户可以直接填写消息并启动，或按需修改其中一项；首页没有「继续配置」步骤。
+
+全局新建、会话侧栏的目录加号、工作空间目录加号、任务加号及任务标签加号都路由到主窗口右侧
+同一输入区，不打开独立的新建 sheet。空任务打开后也呈现同一输入区及已预填的任务上下文。
+工具选择通过底部对应按钮展开，不能自动弹出一个必须先完成的工具选择步骤。
+目录浏览、设置等辅助操作仍可以采用原生弹窗。
+
+| 输入框底部入口 | 按需展开的内容 |
+|---|---|
+| 工具 | 可用工具选择，按钮显示当前工具 |
+| 模型 | 当前工具可用的模型，按钮显示当前模型或默认状态 |
+| 目录 | 当前完整工作路径及目录选择 |
+| 归属任务 | 新建任务、已有任务、不归属任务；新任务名称与 worktree 只在此浮层内显示 |
+| 更多 | 权限模式、思考强度、会话类型及其必要说明 |
+
+这些入口使用原生按钮和选中值语义，保持低强调，不把辅助配置铺成占据首页的表单。
+配置浮层关闭后保留草稿与所选值，并将焦点交还发起控件；输入框与启动动作保持可达。
+狭窄窗口中需要核对底部按钮、长路径和模型名，不允许辅助选项把输入区挤出可用范围。
+
+| 发起位置或选择 | 预填和行为 |
+|---|---|
+| 首页 / 全局新建 | 使用服务器默认配置，可选择新建任务、已有任务或不归属任务 |
+| 目录加号 | 预填目录；存在对应工作空间时带入其 ID 和默认工具，默认新建任务 |
+| 任务加号 / 标签加号 / 空任务 | 预选已有任务，读取任务详情后使用其实际 cwd，保留 worktree 目录 |
+| 新建任务 | 在任务 popover 中配置名称与 worktree；先创建任务，再启动绑定该任务的会话 |
+| 已有任务 | 使用所选任务的绑定与实际目录；读取失败时显示重试，不能带着错误目录启动 |
+| 不归属任务 | 创建普通会话，按选定目录保存，不创建任务 |
+
+默认目录的优先级是入口上下文 → 服务器默认目录 → 最近目录；空值才继续回退。
+已有任务的实际 cwd 由任务详情决定，优先于以上目录回退规则。工具优先使用项目默认，
+其次服务器全局默认；模型使用相应工具的默认模型。会话类型、权限模式、思考强度与新任务
+worktree 开关读取已有服务器偏好。初始化完成后不以新的默认值覆盖用户编辑过的草稿。
+成功启动后尝试保存对应默认偏好，偏好保存失败不能隐藏已经创建的会话。
+
+首条消息使用 IME-aware NSTextView，Return 换行、Command-Return 启动；输入法候选确认不触发创建。
+Command-L 聚焦首页输入。默认值载入、绑定任务详情、创建请求中的状态分别可见；
+默认配置载入失败应给出重试，不用未核实的默认选项冒充初始化成功。
+无需为了显示载入状态将全部配置展开；错误与修复入口应出现在输入区或相应配置浮层内。
+
 ## Flow ledger
 
 | Operation | Trigger | Pending | Success destination | Success feedback | Failure recovery | Focus outcome | Source ref |
 |---|---|---|---|---|---|---|---|
 | 连接服务器 | 地址或连接码后「连接」 | 禁止重复提交，显示连接中 | 原生主壳 | 已连接状态、最近记录 | 就地错误、故障排查、本地网络引导 | 失败后输入仍保留 | `ConnectView.swift` |
-| 新建会话 | 菜单、侧栏、命令或指南 | 保留创建上下文，避免重复触发 | 新会话 | 会话列表与正文更新 | 表单错误与重试 | 转入新会话 | `NewSessionView.swift` |
+| 新建会话 | 首页、菜单、侧栏加号、命令或指南 | 同一输入区保留草稿及配置并禁止重复提交 | 原创建页面仍在时进入新会话及所属任务；已导航则留在当前页 | 会话与任务列表刷新 | 输入区或相应 popover 显示错误并重试 | 不抢走用户已切换页面的焦点 | `NewSessionView.swift`、`MainShellView.swift` |
 | 发送聊天 | 按偏好发送或点击按钮 | 清空已提交草稿并保留恢复副本 | 当前会话 | 新消息、运行或排队状态 | 合并恢复失败提交与其后新输入 | 输入框继续可编辑 | `ChatView.swift`、`ChatStore.swift` |
 | 添加附件 | 文件选择、拖入或粘贴图片 | 上传状态和数量限制 | 当前输入草稿 | 可移除的附件预览 | 错误提示，可再次选择 | 留在会话 | `ChatView.swift` |
-| 创建工作任务 | 工作空间中的新建入口 | store 拥有请求状态 | 新任务与工作窗口 | 任务组更新 | 保留表单并显示错误 | 新任务上下文 | `WorkspaceTaskView.swift` |
+| 创建工作任务 | 全局新建或目录加号，在任务 popover 选择「新建任务」 | 草稿保存名称、目录和 worktree；创建请求期间禁止重复提交 | 原创建页面仍在时进入新任务及会话 | 任务组更新 | 任务已创建但会话失败时保留任务绑定，重试不再重复建任务 | 原创建页内完成或保留当前导航目的地 | `NewSessionView.swift`、`MainShellView.swift` |
 | 编辑或删除看板项 | 看板卡片及详情 | API 请求中禁止重复操作 | 对应看板列 | 刷新后的任务状态 | 错误提示、重试 | 回到看板或详情 | `TaskBoardView.swift` |
 | 打开服务端工具 | 工具目录 | 等待页面控制器可用 | 对应功能或设置页 | 原生目的地标签 | 超时、旧服务端不支持、未保存阻挡均可恢复 | 页面拥有后续输入焦点 | `DesktopWebToolsView.swift` |
 | 修改本机偏好 | 设置或指南中的选择 | 同步写入 AppStorage | 留在当前界面 | 选中状态即时变化 | 不依赖网络 | 保留当前控件 | `SettingsView.swift` |
@@ -84,6 +129,15 @@ WebSocket 状态，使它们使用本次连接凭据。该标识不包含凭据�
 发送失败时合并恢复提交内容和之后的新输入，避免覆盖用户在等待期间继续编辑的文字。
 附件已上传不代表已发送，必须保留可移除状态和明确说明。
 
+新建输入区与配置共用的草稿由 `MainShellView` 持有，并按首页、目录、工作空间、任务的稳定上下文缓存。
+同一上下文再次进入时恢复工具、模型、目录、归属、消息及其他已选设置；任务改名或默认值刷新
+不应因显示文字变化而丢弃草稿。此缓存属于当前连接的进程内状态，退出 App 后不承诺恢复。
+成功创建只清除对应草稿；失败保留已填写内容及已创建的任务绑定，避免重试生成重复任务。
+
+创建回调携带发起草稿的 ID。完成时若用户仍在该创建页，进入创建出的会话及所属任务；
+若用户已打开其他会话、看板或另一张草稿，只刷新列表，不改变其页面或焦点。
+导航后仍在执行的初始化或任务详情读取，也必须检查当前草稿与任务选择，防止旧结果覆盖新选择。
+
 阅读历史或搜索结果时暂停流式滚动跟随；「回到最新」恢复跟随。切换会话与首次载入后定位末尾。
 本机偏好与服务器偏好分开：外观、发送方式、指南版本及客户端更新通道属于本机；
 模型、通知、默认目录、安全与 CLI 更新设置属于当前服务器。
@@ -95,7 +149,8 @@ WebSocket 状态，使它们使用本次连接凭据。该标识不包含凭据�
 
 ## Overlays, permissions and recovery
 
-使用 SwiftUI sheet、alert、confirmationDialog 和原生菜单。一个操作完成或取消后应回到其发起上下文；
+首页按需配置使用输入框底部按钮锚定的 popover；其他流程使用 SwiftUI sheet、alert、
+confirmationDialog 和原生菜单。一个操作完成或取消后应回到其发起上下文；
 从设置进入指南或工具时先结束原 sheet，避免两个独立模态操作互相竞争。
 断开服务器必须确认，并解释重新连接需要凭据；删除和危险操作沿用既有业务确认流程。
 普通复制、切换偏好、打开指南等可逆动作不新增确认。
@@ -142,13 +197,25 @@ xcodebuild -project Wand.xcodeproj -scheme Wand -destination 'platform=macOS' te
 失败路径至少覆盖连接失败、服务端工具不可达或不支持、上传/发送失败和权限不足。
 每次变更记录实际执行结果；本文是要求与实现边界，不是已完成测试的报告。
 
+统一首页创建的专项验证先检查默认页面只有标题、多行输入及底部低强调配置按钮，
+各配置点击后才展开；权限 / 思考强度 / 会话类型只在更多 popover，任务名称 / worktree 只在任务 popover。
+再检查浮层关闭与重开保留选择、键盘访问、焦点恢复、狭窄窗口内输入和启动始终可达。
+流程覆盖全局 / 目录 / 任务 / 标签加号和空任务入口；
+新建任务、已有任务和不归属任务三种归属；项目工具与全局默认的优先级、各工具模型、
+默认目录与最近目录回退，以及已有任务 worktree 的实际 cwd。
+另需检查填写后往返会话与看板、多个上下文之间切换、创建失败重试、创建进行中离开页面、
+完成后不抢页、任务已创建但会话失败时不重复创建任务。以上为本轮验收要求，实际执行结果另记。
+
 历史验证曾遇到 `cgWindowNotFound`；2026-09-21 已可通过真机 UI 操作获取原生窗口。
-实际验证结果以 `docs/desktop-product-2026-09-21/verification.md` 为准，
+窗口与菜单验证见 `docs/desktop-product-2026-09-21/verification.md`；
+最新输入区验证见 `docs/desktop-inline-creation-2026-09-21/verification.md`，
 截图和粘贴验证不等于已经覆盖所有中文输入法的候选行为或完整无障碍认证。
+此前将所有创建选项铺开的截图已不代表当前首页设计；当前以输入区及底部按需配置入口为准，
+对应的新截图和交互验收必须记录实际执行结果，不能沿用旧大表单截图宣称通过。
 
 ## 2026-09-21 实机窗口修正
 
-- 窗口初始几何由 `DesktopWindowGeometry` 负责：1440 × 880 pt，上限为显示器可用区域，
+- 窗口初始几何由 `DesktopWindowGeometry` 负责：1600 × 960 pt，大屏上限 1920 × 1120 pt，同时受显示器可用区域约束，
   独立保存尺寸位置并恢复；新几何键使旧版 900 × 600 的隐式默认尺寸不继续影响首次打开。
 - 主窗口在 Scene 创建阶段使用 hiddenTitleBar；保留系统菜单、交通灯与窗口管理。
   标题行空白交给所属 NSWindow 原生拖拽，禁止整片正文背景移动窗口；attached sheet 不独立拖离主窗。
@@ -171,10 +238,11 @@ xcodebuild -project Wand.xcodeproj -scheme Wand -destination 'platform=macOS' te
   搜索、工具和连接分别归到侧栏主动作、底部工具菜单、连接菜单。
 - 系统菜单不再额外增加「前往」顶级栏目，入口合并到「显示」子菜单；
   查询与输入命令归到「编辑」。保留 macOS 原生窗口、编辑、帮助语义和所有既有快捷键。
-- Command-N 返回新会话起点并聚焦输入；Command-L 同样支持首页。
-  首页与聊天复用 IME-aware NSTextView。首页 Return 换行，Command-Return 继续配置，
-  下一步才选择工具、目录与权限；此时不会调用 AI。取消配置保留原首页草稿。
+- Command-N 返回以输入区为中心的新会话首页并恢复该上下文草稿；Command-L 聚焦首页输入。
+  首页与聊天复用 IME-aware NSTextView。首页 Return 换行，Command-Return 在配置有效时直接启动。
+  工具、模型、目录、任务归属通过输入框底部小按钮配置；更多与任务 popover 承载其他选项，
+  首页不铺开大表单，也不进入下一步配置。
 - 任务看板为主窗口内容目的地，可以直接切回会话；此时会话列表不会错误显示为当前选中。
-  任务创建仍用原有表单及 API；工具编辑器的未保存关闭保护保持原有所有权。
+  任务和目录中的添加操作共用首页输入区及原有 API；工具编辑器的未保存关闭保护保持原有所有权。
 
 重新登录使用包含服务器上下文的单个 sheet 请求，避免分开更新 URL 与布尔值时，首次弹窗捕获旧上下文。

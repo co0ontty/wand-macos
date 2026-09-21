@@ -304,15 +304,15 @@ final class WorkspaceStore: ObservableObject {
                 workspaceId: existing.id,
                 name: name,
                 baseRef: nil,
-                worktree: worktree,
-            cwd: nil
+                worktree: worktree ?? defaultTaskWorktree,
+                cwd: nil
             )
             workspace = existing
         } else {
             creation = try await api.createStandaloneTask(
                 name: name,
                 cwd: normalized.isEmpty ? nil : normalized,
-                worktree: normalized.isEmpty ? false : worktree
+                worktree: normalized.isEmpty ? false : (worktree ?? defaultTaskWorktree)
             )
             workspace = workspaces.first(where: { $0.id == creation.workspaceId })
                 ?? Workspace(
@@ -427,8 +427,6 @@ final class WorkspaceStore: ObservableObject {
         selectedTarget = WorkspaceSessionTarget(
             provider: workspace.defaultProvider ?? serverDefaultProvider
         )
-        selectedKind = .structured
-
         do {
             let detail = try await api.getWorkspaceTask(taskId: task.id)
             guard isCurrentTask(task.id, generation: generation), !Task.isCancelled else { return }
@@ -480,11 +478,10 @@ final class WorkspaceStore: ObservableObject {
         guard let api = api as? WandAPI, let config = try? await api.serverConfig() else { return }
         defaultTaskWorktree = config.defaultTaskWorktree != false
         selectedKind = config.defaultSessionKind == "pty" ? .pty : .structured
-        if let raw = config.defaultProvider,
-           let target = WorkspaceSessionTarget(rawValue: raw),
-           target != .shell {
-            selectedTarget = target
-        }
+        serverDefaultProvider = WandProvider(normalizing: config.defaultProvider)
+        selectedTarget = WorkspaceSessionTarget(
+            provider: currentWorkspace?.defaultProvider ?? serverDefaultProvider
+        )
     }
 
     func rememberCreationChoice(

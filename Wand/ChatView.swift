@@ -1880,6 +1880,7 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
                 context.coordinator.parent.onFocusChange(focused)
             }
         }
+        textView.isEditable = context.environment.isEnabled
         textView.isRichText = false
         textView.importsGraphics = false
         // Chat prompts and PTY commands must stay byte-for-byte as typed.
@@ -1925,6 +1926,7 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
 
+        textView.isEditable = context.environment.isEnabled
         textView.placeholder = placeholder
         textView.setAccessibilityHelp(sendWithCommandEnter
             ? "按 Command-Return \(submitActionName)，按 Return 换行"
@@ -1951,10 +1953,10 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
             context.coordinator.reportHeight(for: textView)
         }
 
-        if isFocused {
+        if isFocused && context.environment.isEnabled {
             if textView.window?.firstResponder !== textView {
                 DispatchQueue.main.async { [weak textView] in
-                    guard let textView, context.coordinator.parent.isFocused else { return }
+                    guard let textView, textView.isEditable, context.coordinator.parent.isFocused else { return }
                     textView.window?.makeFirstResponder(textView)
                 }
             }
