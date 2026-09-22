@@ -19,7 +19,7 @@
 | 更新、完整性验证与恢复 | `Wand/MacUpdateManager.swift`、`Wand/UpdateInstaller.swift` | 更新事务实现 | 2026-09-21 |
 | 连续侧栏、分区与筛选 | `Wand/MainShellView.swift`、`Wand/WorkspaceListView.swift`、`Wand/SessionSidebarView.swift`、`Wand/WorkspaceModels.swift` | 单一滚动容器与任务所有权过滤 | 2026-09-21 |
 | 导航、必要设置与操作快捷键 | `Wand/MainShellView.swift`、`Wand/DesktopCommands.swift`、`Wand/SettingsView.swift` | 主窗口与原生菜单 | 2026-09-21 |
-| 文件、Git 与终端检查器 | `Wand/MainShellView.swift`、`Wand/ChatView.swift`、`Wand/WebContainerView.swift` | 原生检查器与 PTY 画布 | 2026-09-21 |
+| 文件、Git 与终端检查器 | `Wand/MainShellView.swift`、`Wand/ChatView.swift`、`Wand/NativeTerminalView.swift` | 原生检查器与 PTY 画布 | 2026-09-21 |
 
 数据删除、权限和会话所有权遵循对应服务端 API。原生界面不能通过模拟页面点击或更改身份来绕过授权。
 父仓库 SQLite 迁移只加不删的约定不等于客户端可任意删除用户数据。
@@ -47,7 +47,7 @@
 | 工作空间 / 任务 / 选择弹窗 | 对应 `Workspace*View` 与 `WorkspaceTargetPicker`：开放分组、细线、统一主次操作，任务树保持紧凑 |
 | 任务看板 / 编辑详情 | `TaskBoardView` 与 `TaskBoard*` 组件：列头状态色、细描边胶囊、卡片拖拽换列/入归档、弹窗统一标题和底部动作，保留原 CRUD 状态 |
 | 文件 / Git / 快捷提交 | `FilePanelView` / `FileTreeView` / `GitQuickCommitView`：统一检查器工具条与焦点，代码和diff不套品牌底色 |
-| PTY 加载与失败 | `WebContainerView`：与主壳一致的状态排版；终端画布与输入协议保持原有语义 |
+| PTY 加载与失败 | `PtyTerminalStore` / `NativeTerminalView`：原生终端直连 `/ws`；断线保留屏幕、阻止输入并提供重连，结束后可显式恢复 |
 | 设置 / 关于 / 更新 | `SettingsView`：24 pt 正文标题、分组细线、原生选项；更新与权限状态取真实结果 |
 | 故障排查 | `TroubleshootingView`：连续诊断行、稳定主次按钮；最小620 × 540 pt，理想680 × 620 pt |
 
@@ -85,6 +85,19 @@ Command-F 查找当前已加载的对话，不能声称搜索全部服务器历�
 命令面板展示最近会话、工作空间与操作；查询结果为本次载入的数据集。
 加载失败时命令仍可使用，并提供重试；空结果给出修改关键词的方向。
 上/下箭头选择，Return 打开，Escape 关闭；中文组合输入时不拦截候选按键。
+
+## Native terminal
+
+PTY 不再加载 HTML、注入 JavaScript 或使用 WebView。`NativeTerminalView` 使用 SwiftTerm AppKit
+处理 ANSI/TUI、系统中文输入、选择、复制粘贴、滚动与查找；`PtyTerminalStore` 只通过已认证的
+REST / `/ws` 操作服务器 PTY，不在客户端启动本地 shell。
+
+Command-L 聚焦终端，Command-F 查找已载入回滚；Command± 缩放、Command-0 重置。
+Command-K 只清除本地回滚，不向服务器写入清屏控制串。重连会从服务器快照重建历史。
+输入保持原始字节语义，Return 单独发送 `\r`；粘贴保留终端 bracketed-paste 模式，不能套聊天的提交规则。
+断线与快照同步期间不排队用户输入，防止恢复连接后执行旧命令。终端程序不能用 OSC 52 读取或覆盖系统剪贴板；
+用户主动 Command-C / Command-V 不受影响。链接仅在用户点击时打开 http/https/mailto。
+协议、依赖与验证入口见 [原生终端](docs/native-terminal.md)。
 
 ## Continuous sidebar
 

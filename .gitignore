@@ -4,7 +4,12 @@ dist/
 .debug-derived-data/
 .release-derived-data/
 Wand.xcodeproj/xcuserdata/
-Wand.xcodeproj/project.xcworkspace/
+Wand.xcodeproj/project.xcworkspace/*
+!Wand.xcodeproj/project.xcworkspace/xcshareddata/
+Wand.xcodeproj/project.xcworkspace/xcshareddata/*
+!Wand.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+Wand.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!Wand.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 Wand/Assets.xcassets/AppIcon.appiconset/*.png
 .DS_Store
 *.profraw

@@ -58,6 +58,7 @@ VERSION_CODE=$(echo "$VERSION" | awk -F. '{patch=$3; sub(/[-+].*/, "", patch); p
 
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(pwd)"
+bash "$PROJECT_ROOT/scripts/ensure-metal-toolchain.sh"
 BUILD_DIR="$PROJECT_ROOT/build"
 DIST_DIR="$PROJECT_ROOT/dist"
 ICONSET_DIR="$PROJECT_ROOT/Wand/Assets.xcassets/AppIcon.appiconset"

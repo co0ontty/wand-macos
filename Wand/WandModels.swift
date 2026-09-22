@@ -549,6 +549,7 @@ struct WsIncoming: Decodable {
     let reason: String?
     let error: String?
     let resync: Bool?
+    let ptyBytes: Int?
     let data: WsData?
 }
 
@@ -586,7 +587,11 @@ struct WsData: Decodable {
     let providerCliActive: Bool?
     let providerCliExitCode: Int?
     let ptyBusy: Bool?
-    // —— output 事件增量字段 ——
+    // —— 原生终端快照与 output 增量 ——
+    let output: String?
+    let terminalState: PtyTerminalSnapshot?
+    let ptyCols: Int?
+    let ptyRows: Int?
     let chunk: String?
     let lastMessage: ConversationTurn?
     let messageCount: Int?

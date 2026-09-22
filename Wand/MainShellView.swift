@@ -1008,8 +1008,7 @@ struct MainColumn: View {
 
     var body: some View {
         if session?.isStructured == false {
-            // PTY 保留 Web 终端渲染器的键盘、光标和 ANSI/TUI 语义，
-            // 但只嵌入终端工作区；标题已上收到自绘顶栏。
+            // PTY 使用 AppKit 终端直连 /ws；标题由原生主壳统一呈现。
             VStack(spacing: 0) {
                 if showsHeader {
                     SessionHeaderView(

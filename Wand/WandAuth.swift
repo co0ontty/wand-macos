@@ -2,9 +2,8 @@ import Foundation
 
 /// Token-based login against wand 服务端 `/api/login`，对称 Android `ConnectActivity.testConnectionWithToken`。
 ///
-/// 服务端不接受 `?token=` query 参数（`requireAuth` 只读 cookie），所以原生壳必须
-/// 用 appToken 走一次 `/api/login`，拿到 `Set-Cookie` 头里的 session cookie 注入 `WKHTTPCookieStore`，
-/// 然后 WebView 加载 SPA 时才会带着已认证的 cookie。
+/// 原生客户端用 appToken 调 `/api/login`，由 SelfSignedSession 的内存 cookieStorage
+/// 保存 Set-Cookie；REST 与终端 WebSocket 共享该登录状态，不把 token 放进 URL。
 ///
 /// 服务端按 scheme 发不同名字的 cookie（详见 src/auth.ts SESSION_COOKIE_*）：
 ///   - HTTPS：`__Host-wand_session` + 兼容 `wand_session`
@@ -13,7 +12,7 @@ import Foundation
 enum WandAuth {
 
     /// 服务端可能发送的所有 session cookie 名字。任一存在即视为登录成功。
-    /// 顺序无关——`WKHTTPCookieStore` 会把所有 cookie 注入，浏览器请求时按 scheme 选合适的发送。
+    /// 顺序无关——URLSession 请求时按 scheme 选择合适的 cookie。
     static let sessionCookieNames: Set<String> = [
         "__Host-wand_session",
         "wand_session_local",

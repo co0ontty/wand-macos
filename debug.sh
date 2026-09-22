@@ -47,6 +47,7 @@ if ! xcodebuild -version >/dev/null 2>&1; then
 fi
 
 cd "$(dirname "$0")"
+bash scripts/ensure-metal-toolchain.sh
 
 # 默认 Release:单二进制,无 dylib 拆分,本地启动稳。
 BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-Release}"

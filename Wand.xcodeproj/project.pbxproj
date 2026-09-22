@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D800000000000000000000A5 /* THIRD-PARTY-NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B5 /* THIRD-PARTY-NOTICES.md */; };
+		D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B4 /* NativeTerminalTests.swift */; };
+		D800000000000000000000A1 /* NativeTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B1 /* NativeTerminalView.swift */; };
+		D800000000000000000000A2 /* PtyTerminalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B2 /* PtyTerminalStore.swift */; };
+		D800000000000000000000A3 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = D800000000000000000000D1 /* SwiftTerm */; };
 		A100000000000000000000A1 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1 /* App.swift */; };
 		A100000000000000000000A2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2 /* ContentView.swift */; };
 		A100000000000000000000A3 /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B3 /* ConnectView.swift */; };
@@ -77,6 +82,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D800000000000000000000B5 /* THIRD-PARTY-NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = "THIRD-PARTY-NOTICES.md"; sourceTree = "<group>"; };
+		D800000000000000000000B4 /* NativeTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalTests.swift; sourceTree = "<group>"; };
+		D800000000000000000000B1 /* NativeTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalView.swift; sourceTree = "<group>"; };
+		D800000000000000000000B2 /* PtyTerminalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PtyTerminalStore.swift; sourceTree = "<group>"; };
 		A100000000000000000000B1 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A100000000000000000000B2 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B3 /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectView.swift; sourceTree = "<group>"; };
@@ -145,6 +154,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D800000000000000000000A3 /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -164,6 +174,7 @@
 			children = (
 				A1000000000000000000F500 /* Wand */,
 				E5000000000000000000F500 /* WandTests */,
+				D800000000000000000000B5 /* THIRD-PARTY-NOTICES.md */,
 				A1000000000000000000F600 /* Products */,
 				E500000000000000000000B5 /* XCTest.framework */,
 			);
@@ -187,6 +198,8 @@
 				A200000000000000000000B1 /* WandModels.swift */,
 				A200000000000000000000B2 /* WandAPI.swift */,
 				A200000000000000000000B3 /* WandSocket.swift */,
+				D800000000000000000000B1 /* NativeTerminalView.swift */,
+				D800000000000000000000B2 /* PtyTerminalStore.swift */,
 				A200000000000000000000B4 /* ChatStore.swift */,
 				A200000000000000000000B5 /* ChatView.swift */,
 				A200000000000000000000B7 /* NewSessionView.swift */,
@@ -246,6 +259,7 @@
 				D7000000000000000000B101 /* DesktopConversationTests.swift */,
 				D7000000000000000000B103 /* DesktopLifecycleTests.swift */,
 				D7000000000000000000B104 /* GitStatusPresentationTests.swift */,
+				D800000000000000000000B4 /* NativeTerminalTests.swift */,
 			);
 			path = WandTests;
 			sourceTree = "<group>";
@@ -266,6 +280,9 @@
 			dependencies = (
 			);
 			name = Wand;
+			packageProductDependencies = (
+				D800000000000000000000D1 /* SwiftTerm */,
+			);
 			productName = Wand;
 			productReference = A100000000000000000000F1 /* Wand.app */;
 			productType = "com.apple.product-type.application";
@@ -317,6 +334,9 @@
 				Base,
 			);
 			mainGroup = A1000000000000000000F400;
+			packageReferences = (
+				D800000000000000000000C1 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+			);
 			productRefGroup = A1000000000000000000F600 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -333,6 +353,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A100000000000000000000C1 /* Assets.xcassets in Resources */,
+				D800000000000000000000A5 /* THIRD-PARTY-NOTICES.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -365,6 +386,8 @@
 				A200000000000000000000A1 /* WandModels.swift in Sources */,
 				A200000000000000000000A2 /* WandAPI.swift in Sources */,
 				A200000000000000000000A3 /* WandSocket.swift in Sources */,
+				D800000000000000000000A1 /* NativeTerminalView.swift in Sources */,
+				D800000000000000000000A2 /* PtyTerminalStore.swift in Sources */,
 				A200000000000000000000A4 /* ChatStore.swift in Sources */,
 				A200000000000000000000A5 /* ChatView.swift in Sources */,
 				A200000000000000000000A7 /* NewSessionView.swift in Sources */,
@@ -412,6 +435,7 @@
 				D7000000000000000000A101 /* DesktopConversationTests.swift in Sources */,
 				D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */,
 				D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */,
+				D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -424,6 +448,22 @@
 			targetProxy = E500000000000000000000C1 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D800000000000000000000C1 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = { kind = exactVersion; version = 1.18.0; };
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D800000000000000000000D1 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D800000000000000000000C1 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A100000000000000000000D2 /* Debug */ = {

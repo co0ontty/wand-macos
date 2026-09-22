@@ -51,6 +51,8 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 - 新建：`POST /api/structured-sessions` 或 `POST /api/commands`
 - 输入与权限：`POST /api/sessions/:id/input` 及 escalation / permission 端点
 - 实时更新：连接 `/ws`，订阅会话并合并 `init` / `output` / `status` / `ended`
+- PTY：SwiftTerm AppKit 原生终端直接发送 `pty_input` / `pty_resize` / `pty_ack`，不加载网页；详见 [原生终端](docs/native-terminal.md)
+- 终端快捷键：⌘L 聚焦、⌘F 查找回滚、⌘± 缩放、⌘0 重置、⌘K 仅清除本地回滚历史
 
 ## 本地构建（仅 macOS）
 
@@ -64,6 +66,7 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 - macOS 12+
 - 安装完整 Xcode（仅 Command Line Tools 不足以构建）；系统新材质需要 Xcode 26+
 - 不需要 Apple Developer 账号（ad-hoc 自签名）
+- SwiftTerm 含 Metal shader，Xcode 26+ 首次构建需下载官方 Metal Toolchain；build/debug 脚本自动检查，直接 xcodebuild 前运行 `bash scripts/ensure-metal-toolchain.sh`
 
 ## 部署 DMG 供下载
 
@@ -137,8 +140,8 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 因此日常更新不再需要重新挂载 DMG 或拖拽安装。当前 app 所在目录必须可写；若从只读 DMG
 直接运行，先将 `Wand.app` 拖到 Applications。Release 同时保留 DMG，供首次安装或自动更新失败时兜底。
 
-嵌入网页版发来的旧 `downloadUpdate` 消息只会触发原生官方检查，不再接受连接服务器提供的
-DMG 地址。服务端 `/api/macos-dmg-update` 暂时保留，供旧客户端和浏览器手动下载兼容。
+当前客户端不再包含 WebView 更新桥，更新由原生官方检查处理。服务端 `/api/macos-dmg-update`
+暂时保留，供旧客户端和浏览器手动下载兼容。
 
 ## 工程结构
 
@@ -169,7 +172,8 @@ macos/Wand/
 ├── WandSocket.swift           # WebSocket 订阅、重连与 resync
 ├── WandModels.swift           # 服务端协议 Codable 模型
 ├── LocalNetworkPermission.swift # macOS 15+ 本地网络权限：触发弹窗/被拒探测/设置深链
-└── WebContainerView.swift     # PTY 终端画布、登录与加载状态
+├── NativeTerminalView.swift   # SwiftTerm AppKit 终端、中文输入、选区与查找
+└── PtyTerminalStore.swift     # PTY 快照回放、输入、ACK、尺寸和权限
 ```
 
 ## 验收环境

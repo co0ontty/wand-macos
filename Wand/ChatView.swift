@@ -1302,39 +1302,46 @@ private struct ConversationScrollObserver: NSViewRepresentable {
     }
 }
 
-/// PTY 会话的原生终端外壳。目标体验：像打开 Terminal.app / iTerm2 一样自然。
-/// xterm passthrough 让键盘直达 PTY；底部一条紧凑状态栏显示 cwd、终端尺寸、缩放
-/// 和操作按钮（清屏 / 刷新 / 停止）。快捷键：Cmd±缩放、Cmd+0 重置、Cmd+K 清屏。
+/// 原生 AppKit 终端直接订阅 Wand /ws，不加载网页或创建本地 shell。
+/// 键盘、中文输入、选择、复制粘贴、查找与滚动由 SwiftTerm / AppKit 处理。
 struct PtySessionView: View {
     let sessionId: String
     let api: WandAPI
 
-    @StateObject private var store: ChatStore
-    @StateObject private var terminalWebModel = WebViewModel()
+    @StateObject private var store: PtyTerminalStore
     @State private var showStopConfirm = false
-    /// 终端信息刷新定时器（cols/rows/scale label）。
-    @State private var infoTimer: Timer?
 
     init(sessionId: String, api: WandAPI) {
         self.sessionId = sessionId
         self.api = api
-        _store = StateObject(wrappedValue: ChatStore(sessionId: sessionId, api: api))
+        _store = StateObject(wrappedValue: PtyTerminalStore(sessionId: sessionId, api: api))
     }
 
     private static let statusBarBackground = Color(red: 0.063, green: 0.050, blue: 0.043)
 
     var body: some View {
         VStack(spacing: 0) {
-            WebContainerView(
-                serverURL: api.baseURL,
-                token: api.token,
-                sessionId: sessionId,
-                embedTerminal: true,
-                embedNativeInput: true,
-                embedPassthrough: true,
-                webViewModel: terminalWebModel
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if store.loading || !store.ready || store.sessionEnded {
+                HStack(spacing: 10) {
+                    if store.loading { ProgressView().controlSize(.small) }
+                    Text(store.loadError ?? (store.loading ? "正在连接原生终端…"
+                        : store.sessionEnded ? "终端已结束" : "连接中断或正在同步，输入暂不可用"))
+                        .font(.system(size: 12))
+                        .textSelection(.enabled)
+                    Spacer()
+                    if store.sessionEnded {
+                        Button("恢复会话") { store.resume() }
+                    } else if !store.loading {
+                        Button("重新连接") { store.retry() }
+                    }
+                }
+                .padding(10)
+                .foregroundColor(Theme.textPrimary)
+                .background(Theme.surface)
+            }
+            NativeTerminalSurface(terminal: store.terminal)
+                .padding(6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if store.pendingEscalation != nil || store.legacyPermissionPrompt != nil {
                 PermissionCard(
@@ -1348,39 +1355,18 @@ struct PtySessionView: View {
 
             terminalStatusBar
         }
-        .background(EmbeddedTerminalStyle.background)
-        .onAppear {
-            store.start()
-            // 初始延迟 + 周期刷新终端尺寸 / 缩放标签
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                terminalWebModel.refreshTerminalInfo()
+        .background(Color(nsColor: NativeTerminalView.canvasColor))
+        .onAppear { store.start() }
+        .onDisappear { store.shutdown() }
+        .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { notification in
+            guard let command = notification.object as? DesktopCommand else { return }
+            switch command {
+            case .focusComposer: store.terminal.focusTerminal()
+            case .findConversation: store.terminal.showFind()
+            default: break
             }
-            infoTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
-                terminalWebModel.refreshTerminalInfo()
-            }
-        }
-        .onDisappear {
-            store.shutdown()
-            infoTimer?.invalidate()
-            infoTimer = nil
         }
         .overlay(alignment: .top) { toastView }
-        .background(
-            // 隐藏快捷键：Cmd±缩放、Cmd+0 重置、Cmd+K 清屏。
-            // SwiftUI 的 keyboardShortcut 必须挂在可见控件上才生效。
-            Group {
-                Button("缩小") { terminalWebModel.adjustEmbeddedTerminalScale(delta: -0.25) }
-                    .keyboardShortcut("-", modifiers: .command)
-                Button("放大") { terminalWebModel.adjustEmbeddedTerminalScale(delta: 0.25) }
-                    .keyboardShortcut("+", modifiers: .command)
-                Button("重置缩放") { terminalWebModel.resetEmbeddedTerminalScale() }
-                    .keyboardShortcut("0", modifiers: .command)
-                Button("清屏") { terminalWebModel.clearTerminal() }
-                    .keyboardShortcut("k", modifiers: .command)
-            }
-            .opacity(0)
-            .frame(width: 0, height: 0)
-        )
         .confirmationDialog(
             "确定要停止当前终端任务吗？",
             isPresented: $showStopConfirm,
@@ -1407,11 +1393,11 @@ struct PtySessionView: View {
             }
             .font(.system(size: 10, weight: .medium, design: .monospaced))
             .foregroundColor(Color.white.opacity(0.45))
-            .help(store.snapshot?.cwd ?? "")
+            .help(store.cwd)
 
-            // 终端尺寸
-            if !terminalWebModel.terminalSizeLabel.isEmpty {
-                Text(terminalWebModel.terminalSizeLabel)
+            // 终端尺寸由原生 layout 回调更新，不轮询 JS。
+            if !store.sizeLabel.isEmpty {
+                Text(store.sizeLabel)
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundColor(Color.white.opacity(0.35))
                     .padding(.leading, 10)
@@ -1423,27 +1409,27 @@ struct PtySessionView: View {
             // 右侧：操作按钮组
             HStack(spacing: 1) {
                 statusBarButton(systemName: "minus", help: "缩小（Cmd−）") {
-                    terminalWebModel.adjustEmbeddedTerminalScale(delta: -0.25)
+                    store.adjustScale(-0.25)
                 }
-                Text(terminalWebModel.terminalScaleLabel)
+                Text(store.scaleLabel)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(Color.white.opacity(0.6))
                     .frame(width: 36, height: 22)
                     .help("缩放比例（Cmd+0 重置）")
                 statusBarButton(systemName: "plus", help: "放大（Cmd+）") {
-                    terminalWebModel.adjustEmbeddedTerminalScale(delta: 0.25)
+                    store.adjustScale(0.25)
                 }
 
                 statusBarDivider()
 
-                statusBarButton(systemName: "trash", help: "清屏（Cmd+K）") {
-                    terminalWebModel.clearTerminal()
+                statusBarButton(systemName: "trash", help: "清除本地回滚历史（Cmd+K）") {
+                    store.terminal.clearScrollback()
                 }
-                statusBarButton(systemName: "arrow.clockwise", help: "刷新页面") {
-                    terminalWebModel.refreshEmbeddedTerminal()
+                statusBarButton(systemName: "arrow.clockwise", help: "重新同步终端") {
+                    store.refresh()
                 }
 
-                if !store.loading && store.status == "running" {
+                if store.ready && store.status == "running" {
                     statusBarDivider()
                     statusBarButton(systemName: "stop.fill", help: "停止任务（Esc）", tint: .red) {
                         showStopConfirm = true
@@ -1462,9 +1448,9 @@ struct PtySessionView: View {
     }
 
     private var shortCwd: String {
-        guard let cwd = store.snapshot?.cwd, !cwd.isEmpty else { return "—" }
-        let name = (cwd as NSString).lastPathComponent
-        return name.isEmpty ? cwd : name
+        guard !store.cwd.isEmpty else { return "—" }
+        let name = (store.cwd as NSString).lastPathComponent
+        return name.isEmpty ? store.cwd : name
     }
 
     private func statusBarButton(
@@ -1492,18 +1478,7 @@ struct PtySessionView: View {
     }
 
     private func stopPtyInput() {
-        Task {
-            do {
-                _ = try await api.sendInput(
-                    id: sessionId,
-                    input: "\u{1B}",
-                    view: "terminal",
-                    shortcutKey: "esc"
-                )
-            } catch {
-                store.toast = error.localizedDescription
-            }
-        }
+        store.sendInput("\u{1B}")
     }
 
     @ViewBuilder private var toastView: some View {
