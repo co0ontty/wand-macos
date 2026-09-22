@@ -173,7 +173,14 @@ struct SidebarColumn: View {
         Binding(
             get: { pendingDeletion != nil },
             set: { isPresented in
-                if !isPresented { pendingDeletion = nil }
+                // SwiftUI closes a confirmationDialog before invoking its button action.
+                // Keep the payload alive until that action consumes it; otherwise the
+                // destructive button observes nil and silently skips the deletion.
+                if !isPresented, !deleteInProgress {
+                    DispatchQueue.main.async {
+                        if !deleteInProgress { pendingDeletion = nil }
+                    }
+                }
             }
         )
     }
@@ -476,6 +483,7 @@ struct SidebarColumn: View {
 
     private func confirmPendingDeletion() {
         guard let pendingDeletion, !deleteInProgress else { return }
+        deleteInProgress = true
         self.pendingDeletion = nil
 
         switch pendingDeletion {
@@ -489,8 +497,10 @@ struct SidebarColumn: View {
     /// 不做乐观删除：仅在请求成功后移除本地项目。批量请求逐个执行并收集失败项，
     /// 这样局部失败不会让用户误以为所有会话都已删除。
     private func deleteSessions(_ targets: [SessionSnapshot]) {
-        guard !targets.isEmpty, !deleteInProgress else { return }
-        deleteInProgress = true
+        guard !targets.isEmpty else {
+            deleteInProgress = false
+            return
+        }
 
         Task {
             var deletedIds = Set<String>()
@@ -533,9 +543,6 @@ struct SidebarColumn: View {
     }
 
     private func deleteHistory(_ history: HistorySession) {
-        guard !deleteInProgress else { return }
-        deleteInProgress = true
-
         Task {
             var deleteFailure: String?
             do {
