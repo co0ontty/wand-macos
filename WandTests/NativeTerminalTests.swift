@@ -96,6 +96,95 @@ final class NativeTerminalTests: XCTestCase {
         XCTAssertEqual(inputs, ["中文输入", "\r"])
     }
 
+    func testStreamingShellOutputKeepsManualSelectionAndScrollPosition() {
+        let view = NativeTerminalView()
+        view.feedOutput((0..<100).map { "line-\($0)\r\n" }.joined())
+        view.scroll(toPosition: 0)
+        view.selection.setSelection(start: Position(col: 0, row: 0), end: Position(col: 6, row: 0))
+        let selected = view.selection.getSelectedText()
+        let firstLine = view.getTerminal().getLine(row: 0)?.translateToString(trimRight: true)
+        XCTAssertEqual(selected, "line-0")
+        view.feedOutput("more output\r\n")
+        XCTAssertTrue(view.selection.active, "Streaming output must not cancel a user's copy selection")
+        XCTAssertEqual(view.selection.getSelectedText(), selected)
+        XCTAssertEqual(view.getTerminal().getLine(row: 0)?.translateToString(trimRight: true), firstLine)
+        XCTAssertTrue(view.allowMouseReporting, "Keeping a selection must not disable TUI mouse support")
+    }
+
+    func testCheckpointInvalidatesSelectionsFromTheOldScreen() throws {
+        let view = NativeTerminalView()
+        view.feedOutput("old screen")
+        view.selection.setSelection(start: Position(col: 0, row: 0), end: Position(col: 3, row: 0))
+        view.restore(try XCTUnwrap(event("init", data: ["output": "new screen"]).data))
+        XCTAssertFalse(view.selection.active)
+    }
+
+    func testMouseTrackingTUIStillClearsStaleSelectionsOnRepaint() {
+        let view = NativeTerminalView()
+        view.feedOutput("\u{1B}[?1049h\u{1B}[?1000hTUI screen")
+        view.selection.setSelection(start: Position(col: 0, row: 0), end: Position(col: 3, row: 0))
+        XCTAssertTrue(view.selection.active)
+        view.feedOutput("\u{1B}[Hnew screen")
+        XCTAssertFalse(view.selection.active)
+        XCTAssertTrue(view.allowMouseReporting)
+        XCTAssertEqual(view.getTerminal().mouseMode, .vt200)
+    }
+
+    func testIMEConfirmationDoesNotSendKittyReturnOrItsKeyRelease() throws {
+        let view = NativeTerminalView()
+        var inputs: [String] = []
+        view.onInput = { text, _ in inputs.append(text) }
+        view.feedOutput("\u{1B}[>31u")
+        XCTAssertFalse(view.getTerminal().keyboardEnhancementFlags.isEmpty)
+        view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        let down = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        if let event = view.handleCompositionEvent(down) { view.keyDown(with: event) }
+        XCTAssertTrue(inputs.isEmpty, "Candidate confirmation must not reach the remote application")
+        // Some input methods clear marked text before the matching key-up is delivered.
+        view.unmarkText()
+        let up = try XCTUnwrap(NSEvent.keyEvent(with: .keyUp, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        if let event = view.handleCompositionEvent(up) { view.keyUp(with: event) }
+        XCTAssertTrue(inputs.isEmpty, "An IME-owned key release must not leak into Kitty reports")
+        if let event = view.handleCompositionEvent(down) { view.keyDown(with: event) }
+        XCTAssertFalse(inputs.isEmpty, "A later non-composing Return must still reach the TUI")
+    }
+
+    func testIMEFilteringKeepsAppShortcutsAndCatchesInitialCompositionKeyRelease() throws {
+        let view = NativeTerminalView()
+        view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        let commandF = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil,
+            characters: "f", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3))
+        XCTAssertTrue(view.handleCompositionEvent(commandF) === commandF)
+        let release = try XCTUnwrap(NSEvent.keyEvent(with: .keyUp, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
+        XCTAssertNil(view.handleCompositionEvent(release), "The first phonetic key was routed before marked text existed")
+        view.unmarkText()
+        XCTAssertTrue(view.handleCompositionEvent(release) === release)
+    }
+
+    func testIMECommitStaysLiteralTextWithEnhancedKeyboardProtocol() {
+        let view = NativeTerminalView()
+        var inputs: [String] = []
+        view.onInput = { text, _ in inputs.append(text) }
+        view.feedOutput("\u{1B}[>31u")
+        view.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.doCommand(by: #selector(NSResponder.moveDown(_:)))
+        XCTAssertTrue(inputs.isEmpty, "Candidate navigation cannot become remote cursor movement")
+        view.insertText(NSAttributedString(string: "中"),
+                        replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(inputs, ["中"])
+        XCTAssertFalse(view.hasMarkedText())
+    }
+
     func testNativePastePreservesBracketedPasteAndDoesNotSubmit() {
         let view = NativeTerminalView()
         var inputs: [String] = []

@@ -10,6 +10,10 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
     var onScaleChange: ((Double?) -> Void)?
     private var feeding = false
     private var restoring = false
+    private var interpretingComposition = false
+    private var committingComposition = false
+    private var compositionKeyCodes: Set<UInt16> = []
+    private var compositionEventMonitor: Any?
 
     static let canvasColor = NSColor(srgbRed: 0.090, green: 0.071, blue: 0.059, alpha: 1)
 
@@ -33,12 +37,27 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
 
     func feedOutput(_ text: String) {
         feeding = true
-        defer { feeding = false }
+        let reporting = allowMouseReporting
+        let terminal = getTerminal()
+        // SwiftTerm clears selections before every feed when mouse reporting is allowed,
+        // even if the shell has not enabled a mouse mode. Preserve manual shell selection
+        // without permanently disabling mouse input in interactive TUIs.
+        if !terminal.isCurrentBufferAlternate && terminal.mouseMode == .off {
+            allowMouseReporting = false
+        }
+        defer {
+            allowMouseReporting = reporting
+            feeding = false
+        }
         feed(text: text)
+        if reporting && (terminal.isCurrentBufferAlternate || terminal.mouseMode != .off) {
+            selection.active = false
+        }
     }
 
     func restore(_ data: WsData) {
         restoring = true
+        selection.active = false
         let previousScroll = scrollPosition
         let wasBrowsing = previousScroll < 0.999
         let terminal = getTerminal()
@@ -93,10 +112,60 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
         if bracketed { send(txt: "\u{1B}[201~") }
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let compositionEventMonitor { NSEvent.removeMonitor(compositionEventMonitor) }
+        compositionEventMonitor = nil
+        compositionKeyCodes.removeAll()
+        guard window != nil else {
+            unmarkText()
+            return
+        }
+        // SwiftTerm 1.18's keyDown/keyUp overrides are not open. Use an AppKit local
+        // monitor scoped to this view's first responder, never a global keyboard hook.
+        compositionEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+            guard let self, let window = self.window, event.window === window,
+                  window.firstResponder === self else { return event }
+            return self.handleCompositionEvent(event)
+        }
+    }
+
+    deinit {
+        if let compositionEventMonitor { NSEvent.removeMonitor(compositionEventMonitor) }
+    }
+
+    func handleCompositionEvent(_ event: NSEvent) -> NSEvent? {
+        // Application shortcuts (copy/paste/find/settings) must still reach the responder chain.
+        if event.modifierFlags.contains(.command) { return event }
+        if event.type == .keyUp {
+            // Confirmation can clear marked text before the matching release arrives.
+            if compositionKeyCodes.remove(event.keyCode) != nil || hasMarkedText() { return nil }
+        } else if event.type == .keyDown {
+            if hasMarkedText() {
+                compositionKeyCodes.insert(event.keyCode)
+                // Kitty functional-key encoding must not run before the input method.
+                interpretingComposition = true
+                defer { interpretingComposition = false }
+                interpretKeyEvents([event])
+                return nil
+            }
+            compositionKeyCodes.remove(event.keyCode)
+        }
+        return event
+    }
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
         // Some macOS input methods commit attributed strings, not NSString.
-        super.insertText((string as? NSAttributedString)?.string ?? string,
-                         replacementRange: replacementRange)
+        let normalized: Any = (string as? NSAttributedString)?.string ?? string
+        if (hasMarkedText() || interpretingComposition), let text = normalized as? String {
+            unmarkText()
+            // IME commits are text, not a replay of the phonetic key or candidate Return.
+            committingComposition = true
+            defer { committingComposition = false }
+            send(txt: text)
+            return
+        }
+        super.insertText(normalized, replacementRange: replacementRange)
     }
 
     func focusTerminal() {
@@ -135,6 +204,9 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
         guard !restoring, !data.isEmpty else { return }
+        // An input method may fall back to doCommand during interpretKeyEvents. Such
+        // candidate keys must not become remote input; only the committed text may pass.
+        guard committingComposition || (!interpretingComposition && !hasMarkedText()) else { return }
         onInput?(String(decoding: data, as: UTF8.self), true)
     }
 

@@ -29,6 +29,11 @@ macOS PTY 使用 SwiftTerm 1.18.0 的 AppKit `TerminalView`，不是 WKWebView�
 
 - 键盘/中文提交/控制键走 `pty_input`，普通 Return 是单独的 `"\r"` 并标 `enter_text`。
 - 用户粘贴由终端自己的 bracketed-paste 模式决定，不自动附回车，不改变空白或换行。
+- 中文组词期间，候选按键先交给 NSTextInputContext，不走 SwiftTerm 的 Kitty 功能键编码；
+  确认键释放也不发往远端，提交文字按原文发送。局部 AppKit 事件监听仅作用于该终端获得焦点的窗口，
+  不监听其他应用；Command 应用快捷键继续走响应链。
+- 普通 shell 持续输出时保留手动选区与历史滚动；TUI 重绘与快照重建清除失效选区，
+  不为保留选区永久关闭鼠标上报。
 - 终端设备状态回复标 `userInput=false`；历史快照重放产生的回复不发送。
 - 断线、同步和结束期间不发送输入，不保留到重连后执行；写入失败不重试用户字节。
 - Command-K 仅调用本地 `clearScrollback`，不把 ANSI 清屏串当作用户命令写给 shell。
@@ -42,8 +47,9 @@ SwiftTerm 含 Metal shader 资源（即便使用 CoreGraphics 渲染）。Xcode 
 `scripts/ensure-metal-toolchain.sh` 检查并下载 Apple 官方组件。直接 xcodebuild 前也需准备此组件。
 保留 Universal Binary 和既有 ad-hoc 签名。SwiftTerm 为 MIT 协议，见 `THIRD-PARTY-NOTICES.md`。
 
-`NativeTerminalTests` 覆盖回放顺序、备用屏幕/粘贴模式、中文预编辑/提交、输入分包、ACK、
-序号缺口、重连隔离、尺寸去抖和 OSC 52 边界。
+`NativeTerminalTests` 覆盖回放顺序、备用屏幕/粘贴模式、中文预编辑/提交、Kitty 模式下的候选按键隔离、
+选区/历史滚动、输入分包、ACK、序号缺口、重连隔离、尺寸去抖和 OSC 52 边界。
+最新验证和人工验收边界见 [2026-09-23 记录](native-terminal-2026-09-23/verification.md)。
 `testInstalledServiceNativeTerminalRoundTrip` 默认跳过；显式设置
 `WAND_INSTALLED_TERMINAL_ACCEPTANCE=1` 后，只读取 `~/.wand/acceptance-connection.json` 指定服务，
 新建一个临时 shell 做中文/ANSI、Return、stty 尺寸、resync、重连与备用屏幕验证，结束删除该测试会话。
