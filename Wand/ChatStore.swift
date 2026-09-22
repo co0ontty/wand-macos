@@ -316,12 +316,6 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// 原生 PTY composer 与网页终端保持同一提交协议：正文与 Return 分成两个
-    /// chunk，间隔一帧发送，避免 CLI 的 bracketed-paste 检测把末尾回车吞掉。
-    func sendPtyTerminalInput(_ text: String) async throws {
-        try await sendPtyInput(text, view: "terminal")
-    }
-
     private func sendPtyChatInput(_ text: String) async throws {
         try await sendPtyInput(text, view: "chat")
     }

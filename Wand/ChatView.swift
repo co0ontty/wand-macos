@@ -1305,15 +1305,10 @@ private struct ConversationScrollObserver: NSViewRepresentable {
 /// 原生 AppKit 终端直接订阅 Wand /ws，不加载网页或创建本地 shell。
 /// 键盘、中文输入、选择、复制粘贴、查找与滚动由 SwiftTerm / AppKit 处理。
 struct PtySessionView: View {
-    let sessionId: String
-    let api: WandAPI
-
     @StateObject private var store: PtyTerminalStore
     @State private var showStopConfirm = false
 
     init(sessionId: String, api: WandAPI) {
-        self.sessionId = sessionId
-        self.api = api
         _store = StateObject(wrappedValue: PtyTerminalStore(sessionId: sessionId, api: api))
     }
 

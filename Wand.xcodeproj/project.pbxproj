@@ -15,8 +15,6 @@
 		A100000000000000000000A1 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1 /* App.swift */; };
 		A100000000000000000000A2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2 /* ContentView.swift */; };
 		A100000000000000000000A3 /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B3 /* ConnectView.swift */; };
-		A100000000000000000000A4 /* WebContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B4 /* WebContainerView.swift */; };
-		A100000000000000000000A5 /* WebBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B5 /* WebBridge.swift */; };
 		A100000000000000000000A6 /* ServerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B6 /* ServerStore.swift */; };
 		A100000000000000000000A9 /* SelfSignedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B9 /* SelfSignedSession.swift */; };
 		A100000000000000000000AA /* WandAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BA /* WandAuth.swift */; };
@@ -89,8 +87,6 @@
 		A100000000000000000000B1 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A100000000000000000000B2 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B3 /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectView.swift; sourceTree = "<group>"; };
-		A100000000000000000000B4 /* WebContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebContainerView.swift; sourceTree = "<group>"; };
-		A100000000000000000000B5 /* WebBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebBridge.swift; sourceTree = "<group>"; };
 		A100000000000000000000B6 /* ServerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerStore.swift; sourceTree = "<group>"; };
 		A100000000000000000000B9 /* SelfSignedSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfSignedSession.swift; sourceTree = "<group>"; };
 		A100000000000000000000BA /* WandAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WandAuth.swift; sourceTree = "<group>"; };
@@ -189,8 +185,6 @@
 				D7000000000000000000B001 /* DesktopCommands.swift */,
 				A100000000000000000000B2 /* ContentView.swift */,
 				A100000000000000000000B3 /* ConnectView.swift */,
-				A100000000000000000000B4 /* WebContainerView.swift */,
-				A100000000000000000000B5 /* WebBridge.swift */,
 				A100000000000000000000B6 /* ServerStore.swift */,
 				A100000000000000000000B9 /* SelfSignedSession.swift */,
 				A100000000000000000000BA /* WandAuth.swift */,
@@ -377,8 +371,6 @@
 				D7000000000000000000A001 /* DesktopCommands.swift in Sources */,
 				A100000000000000000000A2 /* ContentView.swift in Sources */,
 				A100000000000000000000A3 /* ConnectView.swift in Sources */,
-				A100000000000000000000A4 /* WebContainerView.swift in Sources */,
-				A100000000000000000000A5 /* WebBridge.swift in Sources */,
 				A100000000000000000000A6 /* ServerStore.swift in Sources */,
 				A100000000000000000000A9 /* SelfSignedSession.swift in Sources */,
 				A100000000000000000000AA /* WandAuth.swift in Sources */,

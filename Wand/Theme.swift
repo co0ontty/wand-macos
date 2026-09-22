@@ -213,13 +213,6 @@ enum Theme {
         }
     }
 
-    // MARK: - WKWebView 兜底底色
-
-    /// WKWebView overscroll 区域底色,避免加载前/回弹时露出白底。
-    static var nsBackground: NSColor {
-        dynamicNS(light: rgb(0.980, 0.969, 0.949), dark: rgb(0.102, 0.094, 0.086))
-    }
-
     // MARK: - 渐变背景(对齐 web body 径向渐变)
 
     /// 整个窗口的暖色径向渐变底,跟 web body 的多层渐变对齐。
