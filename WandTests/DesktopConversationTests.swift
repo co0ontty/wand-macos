@@ -110,7 +110,7 @@ final class DesktopConversationTests: XCTestCase {
             ConversationTurn(role: "user", content: [.text(text: "请检查登录", subagent: nil)]),
             ConversationTurn(role: "assistant", content: [
                 .toolUse(id: "read-1", name: "Read", description: "读取文件", input: ["path": .string("/repo/auth.ts")], subagent: nil),
-                .toolResult(toolUseId: "read-1", text: "登录错误已定位", isError: false, truncated: false, subagent: nil)
+                .toolResult(toolUseId: "read-1", text: "登录错误已定位", isError: false, truncated: false, images: [], subagent: nil)
             ]),
             ConversationTurn(role: "assistant", content: [.text(text: "修复完成", subagent: nil)])
         ]
@@ -124,7 +124,7 @@ final class DesktopConversationTests: XCTestCase {
     func testSearchExcerptShowsHiddenToolMatchWithUnicodeContext() {
         let text = String(repeating: "上下文🙂", count: 30) + "\n登录失败\n" + String(repeating: "后续内容", count: 60)
         let turn = ConversationTurn(role: "assistant", content: [
-            .toolResult(toolUseId: "tool-1", text: text, isError: true, truncated: false, subagent: nil)
+            .toolResult(toolUseId: "tool-1", text: text, isError: true, truncated: false, images: [], subagent: nil)
         ])
         let excerpt = ConversationSearch.excerpt(from: turn, query: "登录失败")
         XCTAssertTrue(excerpt?.contains("登录失败") == true)

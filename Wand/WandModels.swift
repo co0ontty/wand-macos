@@ -254,7 +254,7 @@ enum ContentBlock: Decodable {
     case text(text: String, subagent: SubagentMeta?)
     case thinking(thinking: String, subagent: SubagentMeta?)
     case toolUse(id: String, name: String, description: String?, input: [String: JSONValue], subagent: SubagentMeta?)
-    case toolResult(toolUseId: String, text: String, isError: Bool, truncated: Bool, subagent: SubagentMeta?)
+    case toolResult(toolUseId: String, text: String, isError: Bool, truncated: Bool, images: [String], subagent: SubagentMeta?)
     case unknown
 
     private enum CodingKeys: String, CodingKey {
@@ -293,8 +293,9 @@ enum ContentBlock: Decodable {
                 subagent: subagent
             )
         case "tool_result":
-            // content: string | Array<{type, text?, ...}> —— 数组时抽取所有 text 拼接。
+            // content: string | Array<{type, text?, ...}> —— 数组时抽取 text 拼接 + 内联图片。
             var text = ""
+            var images: [String] = []
             if let s = try? c.decode(String.self, forKey: .content) {
                 text = s
             } else if let parts = try? c.decode([JSONValue].self, forKey: .content) {
@@ -303,6 +304,7 @@ enum ContentBlock: Decodable {
                     if case .object(let obj) = part, case .string(let t)? = obj["text"] {
                         pieces.append(t)
                     }
+                    images.append(contentsOf: structuredToolImages(part))
                 }
                 text = pieces.joined(separator: "\n")
             }
@@ -311,6 +313,7 @@ enum ContentBlock: Decodable {
                 text: text,
                 isError: (try? c.decode(Bool.self, forKey: .isError)) ?? false,
                 truncated: (try? c.decode(Bool.self, forKey: .truncated)) ?? false,
+                images: images,
                 subagent: subagent
             )
         default:
@@ -1046,4 +1049,44 @@ func effectiveSessionStatus(
     let normalized = status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     if ["running", "initializing", "thinking"].contains(normalized) { return "idle" }
     return normalized.isEmpty ? "idle" : normalized
+}
+
+/// 抽 tool_result 内联图片：服务端已归一化为 `{type:"image", source:{type:"url"|"base64", …}}`，
+/// 统一成可直接加载的源（站内相对 URL 或 data URI）。
+private func structuredToolImages(_ part: JSONValue) -> [String] {
+    guard case .object(let object) = part else { return [] }
+    switch object["type"] {
+    case .string("image"):
+        if case .object(let source)? = object["source"] {
+            if case .string("url")? = source["type"], case .string(let url)? = source["url"], !url.isEmpty {
+                return [url]
+            }
+            if case .string("base64")? = source["type"], case .string(let data)? = source["data"], !data.isEmpty {
+                var mime = "image/png"
+                if case .string(let m)? = source["media_type"] { mime = m }
+                return ["data:\(mime);base64,\(data)"]
+            }
+            return []
+        }
+        if case .string(let url)? = object["url"], !url.isEmpty { return [url] }
+        if case .string(let data)? = object["data"], !data.isEmpty {
+            var mime = "image/png"
+            if case .string(let m)? = object["mimeType"] { mime = m }
+            else if case .string(let m)? = object["mime_type"] { mime = m }
+            return ["data:\(mime);base64,\(data)"]
+        }
+        return []
+    case .string("image_url"):
+        switch object["image_url"] {
+        case .string(let url)? where !url.isEmpty:
+            return [url]
+        case .object(let inner)?:
+            if case .string(let url)? = inner["url"], !url.isEmpty { return [url] }
+            return []
+        default:
+            return []
+        }
+    default:
+        return []
+    }
 }

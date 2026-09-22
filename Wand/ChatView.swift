@@ -1224,7 +1224,7 @@ private func conversationSearchText(_ turn: ConversationTurn) -> String {
         case .thinking(let text, _): return text
         case .toolUse(_, let name, let description, let input, _):
             return ([name, description ?? ""] + input.values.map(\.summaryText)).joined(separator: "\n")
-        case .toolResult(_, let text, _, _, _): return text
+        case .toolResult(_, let text, _, _, _, _): return text
         case .unknown: return ""
         }
     }.joined(separator: "\n")
@@ -2218,6 +2218,67 @@ private struct ComposerAttachmentImage: View {
     }
 }
 
+/// 工具结果内联图片：服务端取图 URL（/api/sessions/…/tool-images/…，按 baseURL 补全）
+/// 或 data URI。只读缩略图，对齐 Web 端 inline-tool-image；加载失败不占位。
+private struct ToolResultImageThumbnail: View {
+    let baseURL: URL
+    let source: String
+    var maxWidth: CGFloat = 240
+    var maxHeight: CGFloat = 200
+
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 1)
+                    )
+            }
+        }
+        .task(id: source) { await load() }
+    }
+
+    private func load() async {
+        image = nil
+        failed = false
+        if source.hasPrefix("data:") {
+            guard let comma = source.firstIndex(of: ","),
+                  let data = Data(base64Encoded: String(source[source.index(after: comma)...])),
+                  let decoded = NSImage(data: data) else {
+                failed = true
+                return
+            }
+            image = decoded
+            return
+        }
+        guard let url = URL(string: source, relativeTo: baseURL)?.absoluteURL else {
+            failed = true
+            return
+        }
+        do {
+            let (data, response) = try await SelfSignedSession.shared.session.data(for: URLRequest(url: url))
+            guard !Task.isCancelled,
+                  let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  let decoded = NSImage(data: data) else {
+                if !Task.isCancelled { failed = true }
+                return
+            }
+            image = decoded
+        } catch {
+            if !Task.isCancelled { failed = true }
+        }
+    }
+}
+
 // MARK: - 单条消息
 
 private struct HistorySummaryStrip: View {
@@ -2323,7 +2384,7 @@ private func blockSubagentMeta(_ block: ContentBlock) -> SubagentMeta? {
     case .text(_, let subagent),
          .thinking(_, let subagent),
          .toolUse(_, _, _, _, let subagent),
-         .toolResult(_, _, _, _, let subagent):
+         .toolResult(_, _, _, _, _, let subagent):
         return subagent
     case .unknown:
         return nil
@@ -2424,6 +2485,8 @@ struct ToolResultInfo {
     let text: String
     let isError: Bool
     let truncated: Bool
+    /// 结果内联图片（站内取图 URL 或 data URI）；服务端已归一化。
+    var images: [String] = []
 }
 
 /// 优先按 tool_use_id 精确配对（并行工具调用时顺序会交错）；
@@ -2441,7 +2504,7 @@ private func pairToolBlocks(_ content: [ContentBlock]) -> [DisplayItem] {
         if !id.isEmpty {
             // 1) 全局按 tool_use_id 精确配对
             for j in (i + 1)..<content.count where !consumed.contains(j) {
-                if case .toolResult(let rid, _, _, _, _) = content[j], rid == id {
+                if case .toolResult(let rid, _, _, _, _, _) = content[j], rid == id {
                     resultIndex = j
                     break
                 }
@@ -2451,16 +2514,16 @@ private func pairToolBlocks(_ content: [ContentBlock]) -> [DisplayItem] {
             // 2) 邻接兜底：中间隔着下一个 ToolUse 视为无结果；id 双方都有但不匹配时不抢配。
             for j in (i + 1)..<content.count where !consumed.contains(j) {
                 if case .toolUse = content[j] { break }
-                if case .toolResult(let rid, _, _, _, _) = content[j] {
+                if case .toolResult(let rid, _, _, _, _, _) = content[j] {
                     if rid.isEmpty || id.isEmpty { resultIndex = j }
                     break
                 }
             }
         }
         var result: ToolResultInfo?
-        if resultIndex >= 0, case .toolResult(_, let text, let isError, let truncated, _) = content[resultIndex] {
+        if resultIndex >= 0, case .toolResult(_, let text, let isError, let truncated, let images, _) = content[resultIndex] {
             consumed.insert(resultIndex)
-            result = ToolResultInfo(text: text, isError: isError, truncated: truncated)
+            result = ToolResultInfo(text: text, isError: isError, truncated: truncated, images: images)
         }
         paired.append(.tool(
             id: id, name: name, description: description,
@@ -2583,7 +2646,7 @@ private func displayItemStableKey(_ item: DisplayItem) -> String {
         switch block {
         case .thinking(let text, let subagent):
             return "thinking:\(subagent?.taskId ?? String(text.prefix(24)))"
-        case .toolResult(let id, let text, _, _, _):
+        case .toolResult(let id, let text, _, _, _, _):
             return "result:\(id.isEmpty ? String(text.prefix(24)) : id)"
         case .text(let text, _):
             return "text:\(String(text.prefix(24)))"
@@ -2612,9 +2675,10 @@ private func isCollapsibleActivityItem(_ item: DisplayItem) -> Bool {
         }
     case .explorationGroup:
         return true
-    case .tool(_, let name, _, let input, _, _):
+    case .tool(_, let name, _, let input, _, let result):
         if name == "AskUserQuestion" { return false }
         if toolShowsImage(input) { return false }
+        if !(result?.images.isEmpty ?? true) { return false }
         return true
     }
 }
@@ -2783,7 +2847,7 @@ private func activitySummary(_ items: [DisplayItem], running: Bool) -> String {
         switch block {
         case .thinking:
             return running ? "正在思考" : "已思考"
-        case .toolResult(_, _, let isError, _, _):
+        case .toolResult(_, _, let isError, _, _, _):
             return isError ? "有 1 条执行错误" : "已生成 1 条执行结果"
         default:
             return "已完成 1 项活动"
@@ -2802,7 +2866,7 @@ private func activitySummary(_ items: [DisplayItem], running: Bool) -> String {
         return false
     }.count
     let resultCount = items.filter {
-        if case .plain(.toolResult(_, _, _, _, _)) = $0 { return true }
+        if case .plain(.toolResult(_, _, _, _, _, _)) = $0 { return true }
         return false
     }.count
 
@@ -3134,7 +3198,7 @@ private func subagentTailRefreshToken(_ items: [DisplayItem]) -> Int {
             case .toolUse(let id, let name, _, _, _):
                 hasher.combine(id)
                 hasher.combine(name)
-            case .toolResult(let id, let text, let isError, let truncated, _):
+            case .toolResult(let id, let text, let isError, let truncated, _, _):
                 hasher.combine(id)
                 hasher.combine(text)
                 hasher.combine(isError)
@@ -3454,7 +3518,8 @@ private struct TurnView: View {
         } else {
             ToolUseCard(
                 name: name, description: description, input: input,
-                result: result, running: result == nil && isLastTurn && isResponding
+                result: result, running: result == nil && isLastTurn && isResponding,
+                baseURL: baseURL
             )
         }
     }
@@ -3512,7 +3577,7 @@ private struct BlockView: View {
                 }
                 ToolUseCard(name: name, description: description, input: input, result: nil, running: false)
             }
-        case .toolResult(_, let text, let isError, let truncated, _):
+        case .toolResult(_, let text, let isError, let truncated, _, _):
             if !text.isEmpty {
                 CollapsibleSection(
                     icon: isError ? "xmark.octagon" : "doc.text",
@@ -4063,6 +4128,7 @@ private struct ToolUseCard: View {
     let input: [String: JSONValue]
     var result: ToolResultInfo?
     var running = false
+    var baseURL: URL?
 
     @State private var expanded = false
 
@@ -4085,6 +4151,16 @@ private struct ToolUseCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            // 结果内联图片（服务端已归一化）常驻卡片，不藏在展开区里，对齐 Web。
+            if let baseURL, let images = result?.images, !images.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(images.enumerated()), id: \.offset) { _, source in
+                        ToolResultImageThumbnail(baseURL: baseURL, source: source)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            }
             if expanded, let result, hasBody {
                 Divider()
                     .overlay(Theme.border.opacity(0.7))
