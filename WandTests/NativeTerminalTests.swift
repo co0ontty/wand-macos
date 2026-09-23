@@ -111,6 +111,44 @@ final class NativeTerminalTests: XCTestCase {
         XCTAssertTrue(view.allowMouseReporting, "Keeping a selection must not disable TUI mouse support")
     }
 
+    func testFreshCheckpointAndLiveOutputFollowTailUntilUserScrollsUp() throws {
+        let view = NativeTerminalView()
+        let history = (0..<120).map { "line-\($0)\r\n" }.joined()
+        let data = try XCTUnwrap(event("init", data: ["output": history]).data)
+        // A new terminal has scrollPosition == 0 even though nobody scrolled up.
+        XCTAssertEqual(view.scrollPosition, 0)
+        view.restore(data)
+        XCTAssertEqual(view.scrollPosition, 1, "Initial history must open at the newest output")
+        view.feedOutput("newest\r\n")
+        XCTAssertEqual(view.scrollPosition, 1, "Streaming output must continue to follow")
+        XCTAssertTrue(visibleText(view).contains("newest"))
+
+        view.scroll(toPosition: 0)
+        let firstLine = view.getTerminal().getLine(row: 0)?.translateToString(trimRight: true)
+        view.feedOutput("later\r\n")
+        XCTAssertEqual(view.scrollPosition, 0, "Reading history must pause auto-follow")
+        XCTAssertEqual(view.getTerminal().getLine(row: 0)?.translateToString(trimRight: true), firstLine)
+
+        view.scroll(toPosition: 1)
+        view.feedOutput("resumed\r\n")
+        XCTAssertEqual(view.scrollPosition, 1, "Returning to the tail must resume auto-follow")
+        XCTAssertTrue(visibleText(view).contains("resumed"))
+    }
+
+    func testResyncPreservesScrollbackButFollowsWhenAtTail() throws {
+        let view = NativeTerminalView()
+        let data = try XCTUnwrap(event("init", data: [
+            "output": (0..<120).map { "line-\($0)\r\n" }.joined(),
+        ]).data)
+        view.restore(data)
+        view.scroll(toPosition: 0)
+        view.restore(data)
+        XCTAssertEqual(view.scrollPosition, 0)
+        view.scroll(toPosition: 1)
+        view.restore(data)
+        XCTAssertEqual(view.scrollPosition, 1)
+    }
+
     func testCheckpointInvalidatesSelectionsFromTheOldScreen() throws {
         let view = NativeTerminalView()
         view.feedOutput("old screen")
@@ -381,6 +419,20 @@ final class NativeTerminalTests: XCTestCase {
             store.start()
             try await waitUntil { store.ready }
             XCTAssertTrue(visibleText(store.terminal).contains("原生接口验收_OK"))
+            store.sendInput("seq 1 130; printf 'PTY_TAIL_READY\\n'")
+            store.sendInput("\r")
+            try await waitUntil { self.visibleText(store.terminal).contains("PTY_TAIL_READY") }
+            XCTAssertEqual(store.terminal.scrollPosition, 1, "Live server output should follow the tail")
+            store.terminal.scroll(toPosition: 0)
+            store.sendInput("printf 'PTY_WHILE_BROWSING\\n'")
+            store.sendInput("\r")
+            try await Task.sleep(nanoseconds: 300_000_000)
+            XCTAssertEqual(store.terminal.scrollPosition, 0, "Output must not interrupt history browsing")
+            store.terminal.scroll(toPosition: 1)
+            try await waitUntil { self.visibleText(store.terminal).contains("PTY_WHILE_BROWSING") }
+            store.refresh()
+            try await waitUntil { store.ready }
+            XCTAssertEqual(store.terminal.scrollPosition, 1, "Resync at the tail must not jump to the top")
             store.sendInput("printf '\\033[?1049h\\033[2J\\033[H原生_TUI_OK'; sleep 2; printf '\\033[?1049l'")
             store.sendInput("\r")
             try await waitUntil { store.terminal.getTerminal().isCurrentBufferAlternate }

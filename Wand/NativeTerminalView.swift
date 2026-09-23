@@ -49,7 +49,12 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
             allowMouseReporting = reporting
             feeding = false
         }
+        // SwiftTerm normally tracks the tail itself, but a prior restore/resize can leave
+        // its userScrolling flag stale. Follow only when the user was already at the tail;
+        // never pull a reader away from scrollback during a streaming response.
+        let shouldFollow = !restoring && (!canScroll || scrollPosition >= 1)
         feed(text: text)
+        if shouldFollow && !terminal.isCurrentBufferAlternate { scroll(toPosition: 1) }
         if reporting && (terminal.isCurrentBufferAlternate || terminal.mouseMode != .off) {
             selection.active = false
         }
@@ -59,7 +64,9 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
         restoring = true
         selection.active = false
         let previousScroll = scrollPosition
-        let wasBrowsing = previousScroll < 0.999
+        // With no scrollback SwiftTerm reports position 0, not 1. A fresh view
+        // must therefore be considered at the tail, not browsing history.
+        let wasBrowsing = canScroll && previousScroll < 1
         let terminal = getTerminal()
         terminal.resetToInitialState()
         nativeBackgroundColor = Self.canvasColor
