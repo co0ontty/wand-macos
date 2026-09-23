@@ -63,7 +63,7 @@ struct WandApp: App {
 final class WandAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // helper 只有收到新版启动确认后才删除旧版备份；必须在其他启动任务前确认。
-        MacUpdateManager.shared.completeLaunchedUpdateIfNeeded()
+        let launchedAfterUpdate = MacUpdateManager.shared.completeLaunchedUpdateIfNeeded()
 
         // XCTest 会启动完整 App 宿主。测试期间不应弹本地网络权限或访问真实 GitHub API；
         // 更新检查本身由注入 DataLoader 的测试覆盖。
@@ -77,6 +77,14 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             LocalNetworkPermission.triggerPromptIfNeeded()
         }
+        if launchedAfterUpdate,
+           LocalNetworkPermission.isLikelyLanHost(ServerStore.shared.serverURL?.host) {
+            // 新版启动后访问局域网时再查一次权限：未决定时上面的访问会触发系统申请；
+            // 已被拒绝时 macOS 不再弹申请，确认 PolicyDenied 后引导到系统设置。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                LocalNetworkPermission.offerRecoveryIfDenied()
+            }
+        }
 
         // SwiftUI WindowGroup 可能先恢复多个旧窗口；等首个主窗口完成创建后再去重，
         // 避免在启动过渡阶段误判临时窗口。
@@ -86,7 +94,7 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
 
         // 主窗口建立后后台查一次；24 小时内已成功检查会自动跳过。发现新版时以
         // 原生提醒呈现，不依赖用户是否已连接某一台 Wand 服务。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (launchedAfterUpdate ? 5 : 3)) {
             Task { @MainActor in
                 guard let result = await MacUpdateManager.shared.check(.launch),
                       case let .updateAvailable(update) = result else {

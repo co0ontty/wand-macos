@@ -229,9 +229,14 @@ final class MacUpdateManagerTests: XCTestCase {
         let manager = MacUpdateManager(defaults: defaults, currentVersion: { "2.0.0" })
         let ack = staging.appendingPathComponent(".wand-update-ack")
 
-        manager.completeLaunchedUpdateIfNeeded(arguments: [
+        XCTAssertFalse(manager.completeLaunchedUpdateIfNeeded(arguments: ["Wand"]))
+        XCTAssertFalse(manager.completeLaunchedUpdateIfNeeded(arguments: [
+            "Wand", "--wand-update-token", "wrong-token", "--wand-update-ack", ack.path,
+        ]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ack.path))
+        XCTAssertTrue(manager.completeLaunchedUpdateIfNeeded(arguments: [
             "Wand", "--wand-update-token", "transaction-1", "--wand-update-ack", ack.path,
-        ])
+        ]))
 
         XCTAssertEqual(try String(contentsOf: ack, encoding: .utf8), "ok\n")
         XCTAssertNil(defaults.data(forKey: "wand.macUpdate.pendingInstall"))

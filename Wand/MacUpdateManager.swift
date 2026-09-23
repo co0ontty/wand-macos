@@ -262,22 +262,26 @@ final class MacUpdateManager: ObservableObject {
     }
 
     /// 新版 App 由 helper 以一次性 token 启动。写入确认文件后，helper 才删除旧版备份。
-    func completeLaunchedUpdateIfNeeded(arguments: [String] = CommandLine.arguments) {
+    /// 返回 true 供启动流程重新检查可能因 ad-hoc 签名变化而失效的系统权限。
+    @discardableResult
+    func completeLaunchedUpdateIfNeeded(arguments: [String] = CommandLine.arguments) -> Bool {
         guard let token = argument(after: "--wand-update-token", in: arguments),
               let ackPath = argument(after: "--wand-update-ack", in: arguments),
               let pending = loadPendingInstall(),
               pending.transactionID == token,
               pending.version == currentVersionProvider(),
               isSafeAcknowledgementPath(ackPath, pending: pending) else {
-            return
+            return false
         }
 
         do {
             try Data("ok\n".utf8).write(to: URL(fileURLWithPath: ackPath), options: .atomic)
             clearPendingInstall()
             restoreAvailability(for: channel)
+            return true
         } catch {
             state = .failed(message: "无法确认新版启动：\(error.localizedDescription)", update: nil)
+            return false
         }
     }
 

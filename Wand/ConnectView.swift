@@ -436,6 +436,7 @@ struct ConnectView: View {
         let host: String? = WandAuth.decodeConnectCode(rawInput)?.url.host
             ?? WandAuth.candidateURLs(from: rawInput).first?.host
         guard LocalNetworkPermission.isLikelyLanHost(host) else { return }
+        LocalNetworkPermission.triggerPromptIfNeeded()
         LocalNetworkPermission.probeDenied { denied in
             localNetworkDenied = denied
         }

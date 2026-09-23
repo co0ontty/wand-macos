@@ -32,6 +32,7 @@ enum LocalNetworkPermission {
 
     /// 本进程是否已触发过弹窗（系统只在「未决定」状态弹窗，重复触发无害但没必要）。
     private static var triggered = false
+    private static var recoveryAlertShown = false
 
     /// 是否运行在受本地网络隐私约束的系统上（macOS 15+）。
     static var isEnforced: Bool {
@@ -43,7 +44,6 @@ enum LocalNetworkPermission {
     /// macOS 15 之前没有这个权限概念，直接跳过。
     static func triggerPromptIfNeeded() {
         guard isEnforced, !triggered else { return }
-        triggered = true
         // TN3179：connect 一个 UDP socket 到本地网络地址的 9 端口（discard
         // 协议），即可触发本地网络权限检查，不发出任何真实流量。
         //
@@ -58,6 +58,7 @@ enum LocalNetworkPermission {
         }
         let fd = socket(AF_INET, SOCK_DGRAM, 0)
         guard fd >= 0 else { return }
+        triggered = true
         _ = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
@@ -81,6 +82,25 @@ enum LocalNetworkPermission {
             } else {
                 runBrowserProbe(timeout: 1.2, completion)
             }
+        }
+    }
+
+    /// 原位更新后 ad-hoc 签名可能让 macOS 忘掉本地网络授权。首次未决定时
+    /// triggerPromptIfNeeded() 会触发系统申请；已经被拒绝时系统不会再次弹申请，
+    /// 此处只在探测确认 PolicyDenied 后引导用户打开系统设置。每次启动最多提醒一次。
+    static func offerRecoveryIfDenied() {
+        guard isEnforced, !recoveryAlertShown else { return }
+        probeDenied { denied in
+            guard denied, !recoveryAlertShown else { return }
+            recoveryAlertShown = true
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Wand 需要本地网络权限"
+            alert.informativeText = "macOS 可能在更新后重置了 Wand 的本地网络授权。请在系统设置 → 隐私与安全性 → 本地网络中允许 Wand，然后回到应用重试连接。已拒绝的权限无法由应用直接再次弹出系统申请。"
+            alert.addButton(withTitle: "打开系统设置")
+            alert.addButton(withTitle: "稍后")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn { openSettings() }
         }
     }
 

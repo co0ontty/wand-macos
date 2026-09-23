@@ -116,7 +116,7 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 用户侧已知坑（均为系统行为）：
 
 - 弹窗只出现在「未决定」状态；**Wand.app 不在 /Applications 里时弹窗可能永远不出现**（FB16077972）。
-- ad-hoc 签名的 designated requirement 随二进制 cdhash 变化，系统跟踪应用身份不稳定：**即使原位更新，授权也可能丢失、需要重新弹窗**。若需要保证跨版本系统权限连续性，必须使用稳定的 Developer ID 签名身份（当前构建环境无此证书），不能通过更新方式绕过 macOS 权限机制。
+- ad-hoc 签名的 designated requirement 随二进制 cdhash 变化，系统跟踪应用身份不稳定：**即使原位更新，授权也可能丢失**。新版启动时会主动触发系统申请，并探测 PolicyDenied；已拒绝时 macOS 不允许应用再次弹申请，Wand 会显示前往「本地网络」系统设置的按钮。若要保证授权始终连续，仍需稳定的 Developer ID 签名身份（当前构建环境无此证书）。
 - **重启 Mac 后授权偶尔失效**（开关显示打开但实际被拒，FB16512666）：在设置里把 Wand 的开关关掉再打开即可恢复；macOS 15.6+ 已修部分场景。
 - macOS 上**没有**重置本地网络权限状态的官方手段（TN3179 明确说明，`tccutil` 管不到它）。
 
@@ -136,7 +136,7 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 3. 解包后校验 bundle id、`CFBundleShortVersionString`、主可执行文件与代码签名。
 4. 下载完成后写入可恢复事务；选择“稍后”时，设置页会保留“重启完成更新”入口 7 天。
 5. helper 备份并替换当前 `Wand.app`，只有新版写入启动确认后才删除备份。
-6. 复制、启动或确认失败时 helper 自动恢复旧应用；诊断日志写入 `~/Library/Logs/Wand/update.log`。
+6. 复制、启动或确认失败时 helper 自动恢复旧应用；诊断日志写入 `~/Library/Logs/Wand/update.log`。新版确认启动后重新触发本地网络权限申请，并在检测到已拒绝时引导到系统设置；以后局域网连接失败也会再检测。
 
 因此日常更新不再需要重新挂载 DMG 或拖拽安装。当前 app 所在目录必须可写；若从只读 DMG
 直接运行，先将 `Wand.app` 拖到 Applications。Release 同时保留 DMG，供首次安装或自动更新失败时兜底。
