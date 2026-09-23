@@ -96,7 +96,7 @@ enum LocalNetworkPermission {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Wand 需要本地网络权限"
-            alert.informativeText = "macOS 可能在更新后重置了 Wand 的本地网络授权。请在系统设置 → 隐私与安全性 → 本地网络中允许 Wand，然后回到应用重试连接。已拒绝的权限无法由应用直接再次弹出系统申请。"
+            alert.informativeText = "macOS 已拒绝 Wand 的本地网络权限，更新后可能需要重新授权。若连接的是局域网服务，请在系统设置 → 隐私与安全性 → 本地网络中允许 Wand，然后回到应用重试。已拒绝的权限无法由应用再次弹出系统申请。"
             alert.addButton(withTitle: "打开系统设置")
             alert.addButton(withTitle: "稍后")
             NSApp.activate(ignoringOtherApps: true)
@@ -129,11 +129,20 @@ enum LocalNetworkPermission {
         queue.asyncAfter(deadline: .now() + timeout) { finish(false) }
     }
 
+    /// 域名可能通过分流 DNS 解析到局域网；仅按字面排除确定不需要权限的回环目标。
+    static func shouldCheckForServer(_ host: String?) -> Bool {
+        isEnforced && host != nil && !isLoopbackHost(host)
+    }
+
+    private static func isLoopbackHost(_ host: String?) -> Bool {
+        guard let raw = host?.lowercased(), !raw.isEmpty else { return true }
+        return raw == "localhost" || raw.hasPrefix("127.") || raw == "::1" || raw == "[::1]"
+    }
+
     /// 判断 host 是否大概率在局域网内（私有网段 / mDNS / link-local）。
     /// 回环地址不算——本机流量不需要「本地网络」权限。
     static func isLikelyLanHost(_ host: String?) -> Bool {
-        guard let raw = host?.lowercased(), !raw.isEmpty else { return false }
-        if raw == "localhost" || raw == "127.0.0.1" || raw == "::1" { return false }
+        guard !isLoopbackHost(host), let raw = host?.lowercased() else { return false }
         if raw.hasSuffix(".local") { return true }
         if raw.hasPrefix("10.") || raw.hasPrefix("192.168.")
             || raw.hasPrefix("169.254.") || raw.hasPrefix("fe80:") { return true }

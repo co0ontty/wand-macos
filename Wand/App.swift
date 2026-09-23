@@ -78,8 +78,9 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
             LocalNetworkPermission.triggerPromptIfNeeded()
         }
         if launchedAfterUpdate,
-           LocalNetworkPermission.isLikelyLanHost(ServerStore.shared.serverURL?.host) {
-            // 新版启动后访问局域网时再查一次权限：未决定时上面的访问会触发系统申请；
+           LocalNetworkPermission.shouldCheckForServer(ServerStore.shared.serverURL?.host) {
+            // 连接域名也可能解析到局域网地址，不能只根据 host 字面值跳过检查。
+            // 未决定时上面的访问会触发系统申请；
             // 已被拒绝时 macOS 不再弹申请，确认 PolicyDenied 后引导到系统设置。
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 LocalNetworkPermission.offerRecoveryIfDenied()

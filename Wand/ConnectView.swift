@@ -435,10 +435,12 @@ struct ConnectView: View {
         guard case .network = err else { return }
         let host: String? = WandAuth.decodeConnectCode(rawInput)?.url.host
             ?? WandAuth.candidateURLs(from: rawInput).first?.host
-        guard LocalNetworkPermission.isLikelyLanHost(host) else { return }
-        LocalNetworkPermission.triggerPromptIfNeeded()
+        guard LocalNetworkPermission.shouldCheckForServer(host) else { return }
+        let likelyLan = LocalNetworkPermission.isLikelyLanHost(host)
+        if likelyLan { LocalNetworkPermission.triggerPromptIfNeeded() }
         LocalNetworkPermission.probeDenied { denied in
-            localNetworkDenied = denied
+            // 公网域名也可能被分流 DNS 指向内网；只有确认拒绝时才对非 LAN 字面地址显示引导。
+            if denied || likelyLan { localNetworkDenied = denied }
         }
     }
 

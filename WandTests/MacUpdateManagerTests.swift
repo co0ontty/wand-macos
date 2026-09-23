@@ -5,6 +5,19 @@ import XCTest
 @MainActor
 final class MacUpdateManagerTests: XCTestCase {
 
+    func testPermissionRecoveryChecksDomainsButNeverLoopback() {
+        XCTAssertFalse(LocalNetworkPermission.shouldCheckForServer("localhost"))
+        XCTAssertFalse(LocalNetworkPermission.shouldCheckForServer("127.0.0.2"))
+        XCTAssertFalse(LocalNetworkPermission.shouldCheckForServer("::1"))
+        XCTAssertFalse(LocalNetworkPermission.shouldCheckForServer(nil))
+        if LocalNetworkPermission.isEnforced {
+            XCTAssertTrue(LocalNetworkPermission.shouldCheckForServer("home.example.test"))
+            XCTAssertTrue(LocalNetworkPermission.shouldCheckForServer("192.168.0.4"))
+        }
+        XCTAssertTrue(LocalNetworkPermission.isLikelyLanHost("192.168.0.4"))
+        XCTAssertFalse(LocalNetworkPermission.isLikelyLanHost("home.example.test"))
+    }
+
     func testInstallOrderTreatsSameBaseBetaAsNewerThanStable() {
         XCTAssertGreaterThan(
             MacUpdateManager.compareInstallOrder("4.38.0-beta.202608081200.10.gabcdef", "4.38.0"),

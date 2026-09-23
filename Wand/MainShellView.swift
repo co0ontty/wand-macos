@@ -264,7 +264,7 @@ struct MainShellView: View {
             connectionState = .failure(error)
             if let apiError = error as? WandAPI.APIError,
                case .network = apiError,
-               LocalNetworkPermission.isLikelyLanHost(serverURL.host) {
+               LocalNetworkPermission.shouldCheckForServer(serverURL.host) {
                 LocalNetworkPermission.offerRecoveryIfDenied()
             }
         }
