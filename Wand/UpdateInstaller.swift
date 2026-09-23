@@ -520,7 +520,7 @@ final class UpdateInstaller {
         fi
 
         /usr/bin/xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
-        if ! /usr/bin/open "$DEST" --args --wand-update-token "$TRANSACTION_ID" --wand-update-ack "$ACK"; then
+        if ! /usr/bin/open -n "$DEST" --args --wand-update-token "$TRANSACTION_ID" --wand-update-ack "$ACK"; then
             rollback
             mark_failure "新版 Wand 无法启动，已恢复旧版。"
             /usr/bin/open "$DEST" >/dev/null 2>&1 || true
@@ -534,9 +534,22 @@ final class UpdateInstaller {
         done
         if [ ! -f "$ACK" ]; then
             echo "new Wand did not acknowledge launch; rolling back"
-            /usr/bin/pkill -TERM -x Wand 2>/dev/null || true
-            /bin/sleep 1
-            /usr/bin/pkill -KILL -x Wand 2>/dev/null || true
+            # 同一台 Mac 上可能还有从别的路径启动的 Wand；绝不能按进程名 pkill。
+            # 只关闭这次安装目标路径里的新版实例，再恢复备份。
+            for pid in $(/usr/bin/pgrep -x Wand 2>/dev/null || true); do
+                command=$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)
+                case "$command" in
+                    "$DEST/Contents/MacOS/Wand" | "$DEST/Contents/MacOS/Wand "*)
+                        /bin/kill -TERM "$pid" 2>/dev/null || true
+                        /bin/sleep 1
+                        command=$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)
+                        case "$command" in
+                            "$DEST/Contents/MacOS/Wand" | "$DEST/Contents/MacOS/Wand "*)
+                                /bin/kill -KILL "$pid" 2>/dev/null || true ;;
+                        esac
+                        ;;
+                esac
+            done
             rollback
             mark_failure "新版 Wand 未能完成启动，已自动恢复旧版。"
             /usr/bin/open "$DEST" >/dev/null 2>&1 || true

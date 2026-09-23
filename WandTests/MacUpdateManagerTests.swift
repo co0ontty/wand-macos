@@ -263,6 +263,9 @@ final class MacUpdateManagerTests: XCTestCase {
             expectedVersion: "2.0.0",
             logPath: root.appendingPathComponent("helper.log").path
         )
+        let helper = try String(contentsOfFile: scriptPath, encoding: .utf8)
+        XCTAssertFalse(helper.contains("/usr/bin/pkill"), "回滚不能误杀其他路径运行的 Wand")
+        XCTAssertTrue(helper.contains("/usr/bin/open -n \"$DEST\""))
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [scriptPath]
