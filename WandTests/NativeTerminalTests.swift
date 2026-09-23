@@ -421,7 +421,9 @@ final class NativeTerminalTests: XCTestCase {
             XCTAssertTrue(visibleText(store.terminal).contains("原生接口验收_OK"))
             store.sendInput("seq 1 130; printf 'PTY_TAIL_READY\\n'")
             store.sendInput("\r")
-            try await waitUntil { self.visibleText(store.terminal).contains("PTY_TAIL_READY") }
+            try await waitUntil {
+                self.visibleText(store.terminal).components(separatedBy: "\n").contains("PTY_TAIL_READY")
+            }
             XCTAssertEqual(store.terminal.scrollPosition, 1, "Live server output should follow the tail")
             store.terminal.scroll(toPosition: 0)
             store.sendInput("printf 'PTY_WHILE_BROWSING\\n'")
@@ -429,7 +431,9 @@ final class NativeTerminalTests: XCTestCase {
             try await Task.sleep(nanoseconds: 300_000_000)
             XCTAssertEqual(store.terminal.scrollPosition, 0, "Output must not interrupt history browsing")
             store.terminal.scroll(toPosition: 1)
-            try await waitUntil { self.visibleText(store.terminal).contains("PTY_WHILE_BROWSING") }
+            try await waitUntil {
+                self.visibleText(store.terminal).components(separatedBy: "\n").contains("PTY_WHILE_BROWSING")
+            }
             store.refresh()
             try await waitUntil { store.ready }
             XCTAssertEqual(store.terminal.scrollPosition, 1, "Resync at the tail must not jump to the top")
