@@ -325,6 +325,12 @@ final class WandAPI {
         )
     }
 
+    func editQueued(id: String, index: Int, expectedText: String, text: String) async throws -> SessionSnapshot {
+        try await request(SessionSnapshot.self, method: "PATCH",
+                          path: "/api/structured-sessions/\(id)/queued/\(index)",
+                          body: ["expectedText": expectedText, "text": text])
+    }
+
     func deleteQueued(id: String, index: Int) async throws {
         _ = try await requestData(method: "DELETE", path: "/api/structured-sessions/\(id)/queued/\(index)")
     }

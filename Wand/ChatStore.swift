@@ -471,6 +471,20 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func editQueued(index: Int, text: String) {
+        guard queuedMessages.indices.contains(index) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { toast = "排队消息不能为空。"; return }
+        let original = queuedMessages[index]
+        Task {
+            do {
+                let snap = try await api.editQueued(id: sessionId, index: index,
+                                                    expectedText: original, text: trimmed)
+                apply(snapshot: snap)
+            } catch { toast = error.localizedDescription }
+        }
+    }
+
     /// 删除第 index 条排队消息（乐观 + 失败回滚）。
     func deleteQueued(index: Int) {
         let previous = queuedMessages

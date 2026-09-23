@@ -105,6 +105,40 @@ final class DesktopConversationTests: XCTestCase {
         }
     }
 
+    func testStructuredImageResultStaysVisibleWithoutImagePath() throws {
+        let json = """
+        {"type":"tool_result","tool_use_id":"view-1","content":[
+          {"type":"text","text":"截图"},
+          {"type":"image","source":{"type":"url","url":"/api/sessions/s/tool-images/view-1/0"}}
+        ]}
+        """
+        let block = try JSONDecoder().decode(ContentBlock.self, from: Data(json.utf8))
+        guard case .toolResult(let id, let text, _, _, let images, _) = block else {
+            return XCTFail("图片工具结果未解析")
+        }
+        XCTAssertEqual(id, "view-1")
+        XCTAssertEqual(text, "截图")
+        XCTAssertEqual(images, ["/api/sessions/s/tool-images/view-1/0"])
+        let result = ToolResultInfo(text: text, isError: false, truncated: false, images: images)
+        XCTAssertTrue(toolHasVisibleImage(input: [:], result: result))
+        XCTAssertTrue(toolHasVisibleImage(input: ["path": .string("/tmp/capture.png")], result: nil))
+        XCTAssertFalse(toolHasVisibleImage(input: ["path": .string("/tmp/config.json")], result: nil))
+    }
+
+    func testImageOnlyToolResultDecodesWithoutText() throws {
+        let json = """
+        {"type":"tool_result","tool_use_id":"view-2","content":[
+          {"type":"image","source":{"type":"url","url":"/api/sessions/s/tool-images/view-2/0"}}
+        ]}
+        """
+        let block = try JSONDecoder().decode(ContentBlock.self, from: Data(json.utf8))
+        guard case .toolResult(_, let text, _, _, let images, _) = block else {
+            return XCTFail("纯图片工具结果未解析")
+        }
+        XCTAssertEqual(text, "")
+        XCTAssertEqual(images.count, 1)
+    }
+
     func testSearchFindsTextAndToolOutputAndKeepsAbsoluteHistoryPositions() {
         let turns = [
             ConversationTurn(role: "user", content: [.text(text: "请检查登录", subagent: nil)]),

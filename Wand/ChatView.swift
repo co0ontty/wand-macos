@@ -2228,6 +2228,7 @@ private struct ToolResultImageThumbnail: View {
 
     @State private var image: NSImage?
     @State private var failed = false
+    @State private var retryCount = 0
 
     var body: some View {
         Group {
@@ -2241,9 +2242,15 @@ private struct ToolResultImageThumbnail: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Theme.border, lineWidth: 1)
                     )
+            } else if failed {
+                Button("图片加载失败，重试") { retryCount += 1 }
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+            } else {
+                ProgressView().controlSize(.small).frame(width: 40, height: 40)
             }
         }
-        .task(id: source) { await load() }
+        .task(id: "\(source):\(retryCount)") { await load() }
     }
 
     private func load() async {
@@ -2468,7 +2475,7 @@ private func explorationToolsOnly(in turn: ConversationTurn) -> [ExplorationTool
         case .explorationGroup(let group):
             tools.append(contentsOf: group)
         case .tool(let id, let name, let description, let input, let subagent, let result)
-            where isExplorationTool(name):
+            where isExplorationTool(name) && !toolHasVisibleImage(input: input, result: result):
             tools.append(ExplorationToolItem(
                 id: id, name: name, description: description,
                 input: input, subagent: subagent, result: result
@@ -2553,7 +2560,7 @@ private func collapseConsecutiveExplorationTools(_ paired: [DisplayItem]) -> [Di
 
     for item in paired {
         if case .tool(let id, let name, let description, let input, let subagent, let result) = item,
-           isExplorationTool(name) {
+           isExplorationTool(name) && !toolHasVisibleImage(input: input, result: result) {
             exploration.append(ExplorationToolItem(
                 id: id, name: name, description: description,
                 input: input, subagent: subagent, result: result
@@ -2671,19 +2678,21 @@ private func isCollapsibleActivityItem(_ item: DisplayItem) -> Bool {
     case .plain(let block):
         switch block {
         case .text, .unknown, .toolUse: return false
-        case .thinking, .toolResult: return true
+        case .thinking: return true
+        case .toolResult(_, _, _, _, let images, _): return images.isEmpty
         }
     case .explorationGroup:
         return true
     case .tool(_, let name, _, let input, _, let result):
         if name == "AskUserQuestion" { return false }
-        if toolShowsImage(input) { return false }
-        if !(result?.images.isEmpty ?? true) { return false }
+        if toolHasVisibleImage(input: input, result: result) { return false }
         return true
     }
 }
 
-private func toolShowsImage(_ input: [String: JSONValue]) -> Bool {
+/// 图片工具不应被探索分组或活动折叠吞掉；图片可能来自路径，也可能只在结果里。
+func toolHasVisibleImage(input: [String: JSONValue], result: ToolResultInfo?) -> Bool {
+    if !(result?.images.isEmpty ?? true) { return true }
     let candidate = input["file_path"]?.stringValue ?? input["path"]?.stringValue ?? input["url"]?.stringValue ?? ""
     return isImageAttachmentPath(candidate)
 }
@@ -3476,7 +3485,7 @@ private struct TurnView: View {
     @ViewBuilder private func itemView(_ item: DisplayItem, showSubagentTags: Bool = true) -> some View {
         switch item {
         case .plain(let block):
-            BlockView(block: block, showSubagentTag: showSubagentTags)
+            BlockView(block: block, baseURL: baseURL, showSubagentTag: showSubagentTags)
         case .tool(let id, let name, let description, let input, let subagent, let result):
             VStack(alignment: .leading, spacing: 4) {
                 if showSubagentTags {
@@ -3511,6 +3520,9 @@ private struct TurnView: View {
                 onToggle: { qIdx, optIdx, multi in onAskToggle(id, qIdx, optIdx, multi) },
                 onSubmit: { answerText in onAskSubmit(id, answerText) }
             )
+        } else if !(result?.images.isEmpty ?? true) {
+            // 专用 diff / 终端卡不渲染图片；有图时使用可展示缩略图的通用卡。
+            ToolUseCard(name: name, description: description, input: input, result: result, baseURL: baseURL)
         } else if name == "Edit" || name == "Write" || name == "MultiEdit" {
             DiffCard(toolName: name, input: input, result: result)
         } else if name == "Bash" {
@@ -3542,6 +3554,7 @@ private struct TurnView: View {
 private struct BlockView: View {
     @Environment(\.activityFoldCompact) private var compact
     let block: ContentBlock
+    var baseURL: URL?
     var showSubagentTag = true
 
     var body: some View {
@@ -3577,23 +3590,32 @@ private struct BlockView: View {
                 }
                 ToolUseCard(name: name, description: description, input: input, result: nil, running: false)
             }
-        case .toolResult(_, let text, let isError, let truncated, _, _):
-            if !text.isEmpty {
-                CollapsibleSection(
-                    icon: isError ? "xmark.octagon" : "doc.text",
-                    title: isError ? "执行出错" : "执行结果",
-                    tint: isError ? Theme.danger : Theme.textSecondary
-                ) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(text.count > 4000 ? String(text.prefix(4000)) + "\n…（已截断）" : text)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(isError ? Theme.danger : Theme.textPrimary)
-                            .textSelection(.enabled)
+        case .toolResult(_, let text, let isError, let truncated, let images, _):
+            if !images.isEmpty || !text.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let baseURL {
+                        ForEach(Array(images.enumerated()), id: \.offset) { _, source in
+                            ToolResultImageThumbnail(baseURL: baseURL, source: source)
+                        }
                     }
-                    if truncated {
-                        Text("内容过长，已截断")
-                            .font(.system(size: 11))
-                            .foregroundColor(Theme.textSecondary)
+                    if !text.isEmpty {
+                        CollapsibleSection(
+                            icon: isError ? "xmark.octagon" : "doc.text",
+                            title: isError ? "执行出错" : "执行结果",
+                            tint: isError ? Theme.danger : Theme.textSecondary
+                        ) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                Text(text.count > 4000 ? String(text.prefix(4000)) + "\n…（已截断）" : text)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(isError ? Theme.danger : Theme.textPrimary)
+                                    .textSelection(.enabled)
+                            }
+                            if truncated {
+                                Text("内容过长，已截断")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Theme.textSecondary)
+                            }
+                        }
                     }
                 }
             }
@@ -5008,7 +5030,8 @@ private struct QueueBar: View {
                             index: index,
                             text: text,
                             onPromote: { store.promoteQueued(index: index) },
-                            onDelete: { store.deleteQueued(index: index) }
+                            onDelete: { store.deleteQueued(index: index) },
+                            onEdit: { store.editQueued(index: index, text: $0) }
                         )
                     }
                     HStack {
@@ -5044,6 +5067,9 @@ private struct QueueItemRow: View {
     let text: String
     let onPromote: () -> Void
     let onDelete: () -> Void
+    let onEdit: (String) -> Void
+    @State private var editing = false
+    @State private var draft = ""
 
     var body: some View {
         HStack(spacing: 8) {
@@ -5057,6 +5083,15 @@ private struct QueueItemRow: View {
                 .lineLimit(2)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
+            Button {
+                draft = text
+                editing = true
+            } label: {
+                Image(systemName: "pencil")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .help("编辑")
             Button(action: onPromote) {
                 Image(systemName: "bolt.fill")
                     .font(.system(size: 12, weight: .semibold))
@@ -5073,6 +5108,11 @@ private struct QueueItemRow: View {
             }
             .buttonStyle(.plain)
             .help("删除")
+        }
+        .alert("编辑排队消息", isPresented: $editing) {
+            TextField("消息", text: $draft)
+            Button("取消", role: .cancel) { }
+            Button("保存") { onEdit(draft) }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
