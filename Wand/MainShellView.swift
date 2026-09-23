@@ -450,9 +450,9 @@ struct MainShellView: View {
             sidebarChrome
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 0) {
                         workspaceSidebar.id(SidebarSection.workspaces)
-                        Divider().padding(.horizontal, 12)
+                        sidebarSectionBreak
                         SidebarColumn(
                             api: api,
                             selectedSessionId: Binding(
@@ -473,7 +473,8 @@ struct MainShellView: View {
                         )
                         .id(SidebarSection.sessions)
                     }
-                    .padding(.bottom, 12)
+                    .padding(.top, 4)
+                    .padding(.bottom, 16)
                 }
                 .onChange(of: sidebarScrollRequest?.id) { _ in
                     if let request = sidebarScrollRequest {
@@ -706,8 +707,18 @@ struct MainShellView: View {
             }
             .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 32)
             .wandInputSurface(focused: sidebarSearchFocused, cornerRadius: Theme.Radius.control)
-            .padding(.top, 14)
-        }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+            .padding(.top, 12)
+        }.padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
+    }
+
+    /// 操作区结束之后，用一条短分隔把工作空间树和单独会话切开。
+    private var sidebarSectionBreak: some View {
+        Rectangle()
+            .fill(Theme.border.opacity(0.9))
+            .frame(height: 0.5)
+            .padding(.horizontal, 14)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
     }
 
     private func navigationRow(_ command: DesktopCommand, active: Bool = false) -> some View {

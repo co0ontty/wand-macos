@@ -14,6 +14,7 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
     private var committingComposition = false
     private var compositionKeyCodes: Set<UInt16> = []
     private var compositionEventMonitor: Any?
+    private var magnifyAccumulated: CGFloat = 0
 
     static let canvasColor = NSColor(srgbRed: 0.090, green: 0.071, blue: 0.059, alpha: 1)
 
@@ -199,6 +200,24 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
         default: return super.performKeyEquivalent(with: event)
         }
         return true
+    }
+
+    override func magnify(with event: NSEvent) {
+        switch event.phase {
+        case .began:
+            magnifyAccumulated = 0
+        case .changed:
+            magnifyAccumulated += event.magnification
+            if magnifyAccumulated >= 0.12 {
+                magnifyAccumulated = 0
+                onScaleChange?(0.25)
+            } else if magnifyAccumulated <= -0.12 {
+                magnifyAccumulated = 0
+                onScaleChange?(-0.25)
+            }
+        default:
+            break
+        }
     }
 
     // MARK: - SwiftTerm callbacks

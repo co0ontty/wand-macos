@@ -1,6 +1,78 @@
 import Combine
 import SwiftUI
 
+// MARK: - 侧栏层级
+
+/// 分区标题。比导航行和列表行更轻、更短，用来切开「工作空间」和「单独会话」。
+struct SidebarSectionCaption: View {
+    let title: String
+    var count: Int? = nil
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Theme.textTertiary)
+            if let count {
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.textMuted)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Theme.textPrimary.opacity(0.06))
+                    )
+                    .accessibilityLabel("\(count) 项")
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 行悬停只服务于侧栏树，避免每个按钮再画一层自己的底。
+struct SidebarHoveringRow<Content: View>: View {
+    @ViewBuilder var content: (Bool) -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        content(hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+extension View {
+    /// 当前项同时使用淡底和一条短的强调线。强调线只标出「正在看的那一行」，
+    /// 不把整组涂成品牌色。
+    func sidebarSelectionChrome(isSelected: Bool, isHovered: Bool = false) -> some View {
+        modifier(SidebarSelectionChromeModifier(isSelected: isSelected, isHovered: isHovered))
+    }
+}
+
+private struct SidebarSelectionChromeModifier: ViewModifier {
+    let isSelected: Bool
+    let isHovered: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .wandSelectionSurface(
+                isSelected: isSelected,
+                isHovered: isHovered,
+                cornerRadius: 7
+            )
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(Theme.wandAccent)
+                        .frame(width: 3)
+                        .padding(.vertical, 5)
+                        .padding(.leading, 3)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+}
+
 // MARK: - 侧栏容器
 
 struct SidebarColumn: View {
@@ -226,10 +298,11 @@ struct SidebarColumn: View {
                 .disabled(deleteInProgress)
                 .help("退出多选")
             } else {
-                Text("单独会话")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Theme.textTertiary)
-                Spacer()
+                SidebarSectionCaption(
+                    title: "单独会话",
+                    count: listEntries.isEmpty ? nil : listEntries.count
+                )
+                Spacer(minLength: 0)
                 Button {
                     isSelecting = true
                     selectedSessionIds.removeAll()
@@ -247,7 +320,7 @@ struct SidebarColumn: View {
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
-        .frame(height: 38)
+        .frame(minHeight: 32)
     }
 
     // MARK: - 列表
@@ -291,7 +364,7 @@ struct SidebarColumn: View {
                         .padding(.vertical, 8)
                 }
             } else {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: 3) {
                     ForEach(listEntries) { entry in
                         switch entry {
                         case .session(let session):
@@ -301,7 +374,7 @@ struct SidebarColumn: View {
                         }
                     }
                 }
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 8)
                 .padding(.bottom, 8)
             }
         }
@@ -745,18 +818,19 @@ struct SessionTile: View {
                             .foregroundColor(Theme.textMuted)
                             .lineLimit(1)
                             .help(session.cwd ?? folderName)
-                    } else {
-                        Text(status)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundColor(Theme.textSecondary)
+                    } else if !prominentStatus {
+                        Text(statusLabel)
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textMuted)
+                            .lineLimit(1)
                     }
                 }
             }
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
-        .frame(minHeight: 50)
-        .wandSelectionSurface(isSelected: isSelected && !isSelecting, isHovered: hovering, cornerRadius: Theme.Radius.control)
+        .frame(minHeight: 48)
+        .sidebarSelectionChrome(isSelected: isSelected && !isSelecting, isHovered: hovering)
         .onHover { hovering = $0 }
     }
 }
@@ -783,8 +857,8 @@ struct HistoryTile: View {
                 .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Theme.textPrimary)
+                    .font(.system(size: 12.5, weight: .regular))
+                    .foregroundColor(Theme.textSecondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 5) {
@@ -803,9 +877,9 @@ struct HistoryTile: View {
             }
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .frame(minHeight: 50)
-        .wandSelectionSurface(isSelected: false, isHovered: hovering, cornerRadius: Theme.Radius.control)
+        .padding(.vertical, 6)
+        .frame(minHeight: 44)
+        .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
         .onHover { hovering = $0 }
     }
 }
