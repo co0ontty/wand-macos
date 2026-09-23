@@ -177,6 +177,11 @@ final class PtyTerminalStore: ObservableObject {
             loadError = event.error ?? "终端请求失败"
             loading = false
             ready = false
+        case "pty_error":
+            // 写入结果可能不确定；保持终端可读，阻止再次输入直到快照重新同步。
+            loadError = "终端操作未确认。请检查输出后重新连接，避免重复执行命令。"
+            loading = false
+            ready = false
         default: break
         }
     }

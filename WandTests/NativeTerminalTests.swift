@@ -270,6 +270,25 @@ final class NativeTerminalTests: XCTestCase {
         XCTAssertEqual(socket.inputs.count, 2)
     }
 
+    func testPtyWriteErrorRequiresResyncBeforeFurtherInput() throws {
+        let socket = RecordingTerminalSocket()
+        let store = store(socket)
+        defer { store.shutdown() }
+        store.start()
+        socket.onEvent?(try event("init", data: ["status": "running", "output": "ready"]))
+        XCTAssertTrue(store.ready)
+
+        socket.onEvent?(try event("pty_error"))
+        XCTAssertFalse(store.ready)
+        XCTAssertTrue(store.loadError?.contains("未确认") == true)
+        store.sendInput("should-not-repeat")
+        XCTAssertTrue(socket.inputs.isEmpty)
+
+        socket.onEvent?(try event("init", data: ["status": "running", "output": "ready"]))
+        XCTAssertTrue(store.ready)
+        XCTAssertNil(store.loadError)
+    }
+
     func testLifecycleDoesNotDuplicateSubscriptionsOrApplyLateEvents() throws {
         let socket = RecordingTerminalSocket()
         let store = store(socket)

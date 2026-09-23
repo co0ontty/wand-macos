@@ -129,8 +129,9 @@ final class WandSocket: PtySocketTransport {
                 try await self.prepareConnection?()
                 guard !self.closed, gen == self.generation else { return }
                 let socket = SelfSignedSession.shared.session.webSocketTask(with: url)
-                // A 5,000-line terminal checkpoint can exceed URLSession's 1 MB default.
-                socket.maximumMessageSize = 16 * 1024 * 1024
+                // Render v1 permits a 64 MiB attach frame; Node's init also adds session DTO.
+                // Keep a bounded allowance above that size so large valid snapshots can resync.
+                socket.maximumMessageSize = 80 * 1024 * 1024
                 self.task = socket
                 self.lastMessageAt = Date()
                 socket.resume()
