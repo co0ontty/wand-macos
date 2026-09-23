@@ -66,48 +66,77 @@ final class MacUpdateManagerTests: XCTestCase {
         XCTAssertEqual(requestedPaths.count, 2)
     }
 
-    func testBetaCheckIncludesPrereleaseAndChoosesProductInstallOrder() async {
+    func testBetaUsesConnectedServerAndInvalidatesUpdateAfterSwitch() async {
         let defaults = makeDefaults()
         defer { clear(defaults) }
-        let releases = """
-        [
-          {
-            "tag_name":"v4.38.0",
-            "html_url":"https://github.com/co0ontty/wand/releases/tag/v4.38.0",
-            "draft":false,
-            "prerelease":false,
-            "published_at":"2026-08-01T00:00:00Z",
-            "body":null,
-            "assets":[{"name":"wand-v4.38.0.zip","browser_download_url":"https://example.test/stable.zip","size":1}]
-          },
-          {
-            "tag_name":"v4.38.0-beta.202608081230.12.gabcdef",
-            "html_url":"https://github.com/co0ontty/wand/releases/tag/beta",
-            "draft":false,
-            "prerelease":true,
-            "published_at":"2026-08-08T04:30:00Z",
-            "body":null,
-            "assets":[{"name":"wand-v4.38.0-beta.202608081230.12.gabcdef+202608081230.zip","browser_download_url":"https://example.test/beta.zip","size":2}]
-          }
-        ]
+        defaults.set("beta", forKey: "wand.macUpdate.channel")
+        let first = URL(string: "https://one.example.test:8443")!
+        let second = URL(string: "https://two.example.test:8443")!
+        var connected: URL? = first
+        var requested: [URL] = []
+        let metadata = """
+        {
+          "updateAvailable":true,"latestVersion":"4.38.0-debug.08081230",
+          "downloadUrl":"/macos/update-download?fileName=wand-v4.38.0-debug.08081230.zip",
+          "fileName":"wand-v4.38.0-debug.08081230.zip","size":42,
+          "sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "source":"local","channel":"beta"
+        }
         """
-        var requestedURL: URL?
         let manager = MacUpdateManager(
             defaults: defaults,
             currentVersion: { "4.38.0" },
-            dataLoader: { request in
-                requestedURL = request.url
-                return Self.response(for: request, body: releases)
-            }
+            dataLoader: { _ in XCTFail("Beta must not request GitHub"); throw URLError(.badURL) },
+            betaDataLoader: { request in
+                requested.append(request.url!)
+                return Self.response(for: request, body: metadata)
+            },
+            connectedServer: { connected }
         )
-
-        let result = await manager.setChannel(.beta)
-        guard case let .updateAvailable(update) = result else {
-            return XCTFail("expected beta update, got \(String(describing: result))")
+        guard case let .updateAvailable(update) = await manager.check(.launch) else {
+            return XCTFail("expected server beta update")
         }
         XCTAssertEqual(update.channel, .beta)
-        XCTAssertEqual(update.latestVersion, "4.38.0-beta.202608081230.12.gabcdef")
-        XCTAssertEqual(requestedURL?.query, "per_page=20")
+        XCTAssertEqual(update.latestVersion, "4.38.0-debug.08081230")
+        XCTAssertEqual(update.preferredAsset?.downloadURL.host, first.host)
+        XCTAssertEqual(update.preferredAsset?.sha256, String(repeating: "a", count: 64))
+        XCTAssertEqual(requested[0].path, "/api/macos-app-update")
+        let throttled = await manager.check(.launch)
+        XCTAssertNil(throttled) // 同一服务器的启动检查被防抖
+
+        connected = second
+        XCTAssertNotNil(manager.installAvailableUpdate()) // 旧服务器包不得跨连接安装
+        _ = await manager.check(.launch) // 切换服务器后不得用旧检查时间防抖
+        XCTAssertEqual(requested.count, 2)
+        XCTAssertEqual(requested[1].host, second.host)
+        XCTAssertEqual(manager.availableUpdate?.preferredAsset?.downloadURL.host, second.host)
+        connected = nil
+        guard case .failed = await manager.check(.manual) else {
+            return XCTFail("disconnected beta must fail rather than fall back to GitHub")
+        }
+    }
+
+    func testBetaRejectsCrossOriginAndMissingIntegrity() async {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set("beta", forKey: "wand.macUpdate.channel")
+        let server = URL(string: "http://127.0.0.1:8443")!
+        var link = "https://evil.example.test/macos/update-download?fileName=wand-v2.0.0.zip"
+        let manager = MacUpdateManager(
+            defaults: defaults,
+            currentVersion: { "1.0.0" },
+            betaDataLoader: { request in
+                let body = """
+                {"updateAvailable":true,"latestVersion":"2.0.0","fileName":"wand-v2.0.0.zip",
+                "downloadUrl":"\(link)","size":20,"sha256":null,"source":"local","channel":"beta"}
+                """
+                return Self.response(for: request, body: body)
+            },
+            connectedServer: { server }
+        )
+        guard case .failed = await manager.check(.manual) else { return XCTFail("foreign URL must fail") }
+        link = "/macos/update-download?fileName=wand-v2.0.0.zip"
+        guard case .failed = await manager.check(.manual) else { return XCTFail("missing hash must fail") }
     }
 
     func testFailedLaunchCheckDoesNotThrottleRetry() async {

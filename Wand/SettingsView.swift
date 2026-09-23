@@ -317,14 +317,16 @@ struct SettingsView: View {
                     .foregroundColor(Theme.textSecondary)
                     .frame(width: 24, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(updateManager.isChecking ? "正在检查 GitHub Release" : "当前 \(appVersion)")
+                    Text(updateManager.isChecking
+                        ? (updateManager.channel == .beta ? "正在检查连接的服务器" : "正在检查 GitHub Release")
+                        : "当前 \(appVersion)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
                     Text(updateManager.pendingInstall != nil
                         ? "新版本已准备好，等待重启"
                         : updateManager.availableUpdate != nil
                             ? "新版本可以自动更新"
-                            : "通过 GitHub Release 保持最新")
+                            : (updateManager.channel == .beta ? "从连接的服务器获取 Beta 包" : "通过 GitHub Release 保持最新"))
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textSecondary)
                 }
@@ -358,14 +360,14 @@ struct SettingsView: View {
                     .font(.system(size: 13, weight: .semibold))
                 if let asset = update.preferredAsset {
                     let integrity = asset.sha256 == nil ? "签名校验" : "SHA-256 + 签名校验"
-                    Text("GitHub Release · \(asset.fileExtension.uppercased()) · \(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)) · \(integrity)")
+                    Text("\(update.channel == .beta ? "连接的服务器" : "GitHub Release") · \(asset.fileExtension.uppercased()) · \(ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)) · \(integrity)")
                         .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
                     if let reason = UpdateInstaller.installBlockReason {
                         Text(reason)
                             .font(.system(size: 11)).foregroundColor(Theme.warning)
                     }
                 } else {
-                    Text("该 Release 未附带严格匹配版本的 macOS ZIP 或 DMG，可在 GitHub 页面手动下载。")
+                    Text("更新源未附带匹配版本的 macOS ZIP 或 DMG。")
                         .font(.system(size: 11)).foregroundColor(Theme.warning)
                 }
                 if let updateError = updateManager.lastError {
@@ -374,7 +376,9 @@ struct SettingsView: View {
             } else if let updateError = updateManager.lastError {
                 Text(updateError).font(.system(size: 12)).foregroundColor(Theme.danger)
             } else {
-                Text(updateManager.lastSuccessfulCheck == nil ? "启动后将自动检查 GitHub Release" : "当前已是最新版本")
+                Text(updateManager.lastSuccessfulCheck == nil
+                    ? (updateManager.channel == .beta ? "连接服务器后自动检查 Beta 更新" : "启动后将自动检查 GitHub Release")
+                    : "当前已是最新版本")
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
             }
             HStack(spacing: 8) {
@@ -391,15 +395,15 @@ struct SettingsView: View {
                         Button("立即更新") { installUpdate() }
                             .buttonStyle(WandSecondaryButtonStyle())
                     }
-                    Button("查看 Release") { NSWorkspace.shared.open(update.releaseURL) }
+                    Button(update.channel == .beta ? "打开服务器" : "查看 Release") { NSWorkspace.shared.open(update.releaseURL) }
                         .buttonStyle(WandSecondaryButtonStyle())
                 } else if let pending = updateManager.pendingInstall {
-                    Button("查看 Release") { NSWorkspace.shared.open(pending.releaseURL) }
+                    Button("打开更新源") { NSWorkspace.shared.open(pending.releaseURL) }
                         .buttonStyle(WandSecondaryButtonStyle())
                 }
             }
             Text(updateManager.channel == .beta
-                ? "Beta 包按 Wand 安装顺序更新；切回 Stable 不会自动降级。"
+                ? "Beta 仅使用当前连接服务器的本地 ZIP（DMG 兜底）；切回 Stable 不会自动降级。"
                 : "Stable 通道不会接收 GitHub prerelease。")
                 .font(.system(size: 10))
                 .foregroundColor(Theme.textSecondary)

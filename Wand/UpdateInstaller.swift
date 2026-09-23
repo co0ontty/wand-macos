@@ -3,7 +3,7 @@ import Combine
 import CryptoKit
 import Foundation
 
-/// GitHub Release 自更新器：下载 ZIP/DMG、校验其中的 Wand.app，并在当前进程退出后原位替换。
+/// 下载 Stable Release / 所连服务端 Beta 的 ZIP/DMG，校验后在进程退出时原位替换。
 ///
 /// ZIP 是首选格式；已有 Release 只有 DMG 时也能直接解包更新。真正替换由临时 helper
 /// 完成，因此不需要用户重新挂载 DMG 或把 app 拖进 Applications。
@@ -58,8 +58,14 @@ final class UpdateInstaller {
             progress(.failed("Release 没有可用于自动更新的 ZIP 或 DMG。"))
             return
         }
-        guard asset.downloadURL.scheme?.lowercased() == "https" else {
-            progress(.failed("更新包不是安全的 HTTPS 下载地址。"))
+        let isServerBeta = update.channel == .beta
+        guard (isServerBeta
+            ? (["http", "https"].contains(asset.downloadURL.scheme?.lowercased() ?? "")
+                && Self.sameOrigin(asset.downloadURL, update.releaseURL)
+                && asset.downloadURL.path == "/macos/update-download"
+                && asset.sha256 != nil)
+            : asset.downloadURL.scheme?.lowercased() == "https") else {
+            progress(.failed("更新包来源、地址或完整性信息无效。"))
             return
         }
         guard Self.canInstallInPlace else {
@@ -87,6 +93,7 @@ final class UpdateInstaller {
 
         let delegate = UpdateDownloadDelegate(
             fileExtension: fileExtension,
+            trustedBetaServer: isServerBeta ? update.releaseURL : nil,
             onProgress: { [weak self] received, reportedTotal in
                 let total = reportedTotal > 0 ? reportedTotal : asset.size
                 self?.emit(.downloading(received: received, total: total), for: updateID)
@@ -407,6 +414,12 @@ final class UpdateInstaller {
         }
     }
 
+    private static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        a.scheme?.lowercased() == b.scheme?.lowercased()
+            && a.host?.lowercased() == b.host?.lowercased()
+            && (a.port ?? (a.scheme == "https" ? 443 : 80)) == (b.port ?? (b.scheme == "https" ? 443 : 80))
+    }
+
     // MARK: - Replacement helper
 
     private func writeHelperScript(
@@ -660,7 +673,7 @@ final class UpdateFlowController {
             return
         }
         guard update.preferredAsset != nil else {
-            showFailure("该 Release 没有可用于自动更新的 ZIP 或 DMG。", releaseURL: update.releaseURL)
+            showFailure("当前来源没有可用于自动更新的 ZIP 或 DMG。", releaseURL: update.releaseURL)
             return
         }
         if let reason = UpdateInstaller.installBlockReason {
@@ -723,19 +736,21 @@ final class UpdateFlowController {
         alert.alertStyle = .informational
 
         let canAutoUpdate = update.preferredAsset != nil && UpdateInstaller.canInstallInPlace
+        let sourceTitle = update.channel == .beta ? "连接的服务器" : "GitHub Release"
+        let sourceButton = update.channel == .beta ? "打开服务器" : "查看 Release"
         if let asset = update.preferredAsset, canAutoUpdate {
             let size = ByteCountFormatter.string(fromByteCount: asset.size, countStyle: .file)
             let integrity = asset.sha256 == nil ? "旧版 Release 将使用应用签名校验。" : "下载完成后会校验 SHA-256 与应用签名。"
-            alert.informativeText = "当前版本 v\(update.currentVersion) · \(update.channel.title) 通道。\n\n更新包：\(asset.fileExtension.uppercased()) · \(size)\n\(integrity)"
+            alert.informativeText = "当前版本 v\(update.currentVersion) · \(update.channel.title) 通道（\(sourceTitle)）。\n\n更新包：\(asset.fileExtension.uppercased()) · \(size)\n\(integrity)\n更新将直接替换当前应用并重启，无需手动重装。"
             alert.addButton(withTitle: "立即更新")
-            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: sourceButton)
             alert.addButton(withTitle: "稍后提醒")
         } else {
             let reason = update.preferredAsset == nil
-                ? "该 GitHub Release 未包含匹配版本的 macOS ZIP 或 DMG。"
+                ? "\(sourceTitle)未包含匹配版本的 macOS ZIP 或 DMG。"
                 : (UpdateInstaller.installBlockReason ?? "当前 Wand.app 无法原位更新。")
-            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n\(reason)请在 Release 页面手动下载。"
-            alert.addButton(withTitle: "查看 Release")
+            alert.informativeText = "当前版本 v\(update.currentVersion)。\n\n\(reason)请检查更新源或应用安装位置。"
+            alert.addButton(withTitle: sourceButton)
             alert.addButton(withTitle: "稍后提醒")
         }
 
@@ -791,7 +806,7 @@ final class UpdateFlowController {
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
-        if releaseURL != nil { alert.addButton(withTitle: "查看 Release") }
+        if releaseURL != nil { alert.addButton(withTitle: "打开更新源") }
         alert.addButton(withTitle: "关闭")
         if present(alert) == .alertFirstButtonReturn, let releaseURL {
             NSWorkspace.shared.open(releaseURL)
@@ -810,7 +825,7 @@ final class UpdateFlowController {
 private final class UpdateProgressWindow: NSWindowController {
 
     private let titleLabel = NSTextField(labelWithString: "正在准备下载…")
-    private let detailLabel = NSTextField(labelWithString: "正在连接 GitHub Release")
+    private let detailLabel = NSTextField(labelWithString: "正在连接更新源")
     private let progressIndicator = NSProgressIndicator()
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
 
@@ -919,18 +934,50 @@ private final class UpdateProgressWindow: NSWindowController {
 private final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate {
 
     private let fileExtension: String
+    private let trustedBetaServer: URL?
     private let onProgress: (Int64, Int64) -> Void
     private let onFinish: (Result<URL, Error>) -> Void
     private var didFinish = false
 
     init(
         fileExtension: String,
+        trustedBetaServer: URL?,
         onProgress: @escaping (Int64, Int64) -> Void,
         onFinish: @escaping (Result<URL, Error>) -> Void
     ) {
         self.fileExtension = fileExtension
+        self.trustedBetaServer = trustedBetaServer
         self.onProgress = onProgress
         self.onFinish = onFinish
+    }
+
+    // Beta 服务端可能使用自签 HTTPS；仅原始连接的同源证书可放行，绝不信任跨站跳转。
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let space = challenge.protectionSpace
+        guard let server = trustedBetaServer,
+              server.scheme?.lowercased() == "https",
+              space.host.lowercased() == server.host?.lowercased(),
+              space.port == (server.port ?? 443),
+              space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = space.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(trustedBetaServer == nil ? request : nil)
     }
 
     func urlSession(
@@ -948,6 +995,15 @@ private final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
+        guard let response = downloadTask.response as? HTTPURLResponse,
+              response.statusCode == 200 else {
+            didFinish = true
+            onFinish(.failure(NSError(
+                domain: "Wand.UpdateInstaller", code: 42,
+                userInfo: [NSLocalizedDescriptionKey: "更新包下载失败：服务器未返回完整文件（HTTP \((downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0)）。"]
+            )))
+            return
+        }
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent("wand-update-\(UUID().uuidString)")
             .appendingPathExtension(fileExtension)

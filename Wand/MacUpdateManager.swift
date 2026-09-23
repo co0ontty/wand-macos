@@ -3,7 +3,7 @@ import Foundation
 
 /// Wand macOS 更新的唯一状态源。
 ///
-/// 调用方只负责触发检查、安装、取消或重启；GitHub 通道策略、缓存、防抖、
+/// 调用方只负责触发检查、安装、取消或重启；Stable GitHub / Beta 服务端策略、缓存、防抖、
 /// 延后提醒和待重启事务都封装在这个 module 内。
 @MainActor
 final class MacUpdateManager: ObservableObject {
@@ -115,6 +115,7 @@ final class MacUpdateManager: ObservableObject {
     private static let reminderDelay: TimeInterval = 24 * 60 * 60
     private static let pendingInstallLifetime: TimeInterval = 7 * 24 * 60 * 60
     private static let channelKey = "wand.macUpdate.channel"
+    private static let betaServerKey = "wand.macUpdate.beta.serverURL"
     private static let pendingInstallKey = "wand.macUpdate.pendingInstall"
     private static let legacyLastCheckKey = "wand.githubRelease.lastCheckAt"
     private static let legacyCachedUpdateKey = "wand.githubRelease.cachedUpdate"
@@ -123,9 +124,12 @@ final class MacUpdateManager: ObservableObject {
     private let now: () -> Date
     private let currentVersionProvider: () -> String
     private let dataLoader: DataLoader
+    private let betaDataLoader: DataLoader
+    private let connectedServer: () -> URL?
     private let fileManager: FileManager
     private var activeCheck: Task<CheckResult, Never>?
     private var activeCheckID: UUID?
+    private var activeCheckServerURL: URL?
 
     init(
         defaults: UserDefaults = .standard,
@@ -134,52 +138,71 @@ final class MacUpdateManager: ObservableObject {
         fileManager: FileManager = .default,
         dataLoader: @escaping DataLoader = { request in
             try await URLSession.shared.data(for: request)
-        }
+        },
+        betaDataLoader: @escaping DataLoader = { request in
+            try await SelfSignedSession.shared.session.data(for: request)
+        },
+        connectedServer: @escaping () -> URL? = { ServerStore.shared.serverURL }
     ) {
         self.defaults = defaults
         self.now = now
         self.currentVersionProvider = currentVersion
         self.fileManager = fileManager
         self.dataLoader = dataLoader
+        self.betaDataLoader = betaDataLoader
+        self.connectedServer = connectedServer
         self.channel = Channel(rawValue: defaults.string(forKey: Self.channelKey) ?? "") ?? .stable
 
         migrateLegacyKeysIfNeeded()
         restorePersistedState()
     }
 
-    /// 启动检查受 24 小时防抖；手动检查与通道切换始终请求 GitHub。
+    /// 启动检查受 24 小时防抖；手动检查与通道切换始终请求所选来源。
     @discardableResult
     func check(_ trigger: CheckTrigger) async -> CheckResult? {
         // 已准备好的更新优先级最高；不要用一次网络检查覆盖可恢复的安装事务。
         if pendingInstall != nil { return nil }
+        let checkedServer = channel == .beta ? connectedServer() : nil
         if trigger == .launch,
            let lastSuccessfulCheck,
+           (channel == .stable || defaults.string(forKey: Self.betaServerKey) == checkedServer?.absoluteString),
            now().timeIntervalSince(lastSuccessfulCheck) < Self.launchCheckInterval {
             return nil
         }
 
+        if channel == .beta, activeCheck != nil, activeCheckServerURL != checkedServer {
+            activeCheck?.cancel()
+            activeCheck = nil
+            activeCheckID = nil
+        }
         if let activeCheck {
             return await activeCheck.value
         }
 
         let checkedChannel = channel
-        let previousUpdate = availableUpdate
+        let previousUpdate = availableUpdate.flatMap { isCurrentSource($0) ? $0 : nil }
         state = .checking
         let checkID = UUID()
         let task = Task { [weak self] () -> CheckResult in
             guard let self else { return .failed(message: "更新检查器已释放。") }
-            return await self.fetchLatestRelease(channel: checkedChannel)
+            return checkedChannel == .beta
+                ? await self.fetchServerBeta(serverURL: checkedServer)
+                : await self.fetchLatestRelease()
         }
         activeCheck = task
         activeCheckID = checkID
+        activeCheckServerURL = checkedServer
         let result = await task.value
-        if activeCheckID == checkID {
-            activeCheck = nil
-            activeCheckID = nil
-        }
-
-        // 通道切换会取消旧任务；旧响应不得覆盖新通道状态。
+        // 通道/服务器切换会取消旧任务；旧响应不得覆盖新连接状态。
+        guard activeCheckID == checkID else { return result }
+        activeCheck = nil
+        activeCheckID = nil
+        activeCheckServerURL = nil
         guard checkedChannel == channel else { return result }
+        if checkedChannel == .beta, checkedServer != connectedServer() {
+            restoreAvailability(for: channel)
+            return result
+        }
         persist(result, channel: checkedChannel, previousUpdate: previousUpdate)
         return result
     }
@@ -191,6 +214,7 @@ final class MacUpdateManager: ObservableObject {
         activeCheck?.cancel()
         activeCheck = nil
         activeCheckID = nil
+        activeCheckServerURL = nil
         channel = newChannel
         defaults.set(newChannel.rawValue, forKey: Self.channelKey)
         clearReminderDeferral()
@@ -202,8 +226,8 @@ final class MacUpdateManager: ObservableObject {
     @discardableResult
     func installAvailableUpdate() -> String? {
         if pendingInstall != nil { return nil }
-        guard let update = availableUpdate else { return "当前没有可安装的新版本。" }
-        guard update.preferredAsset != nil else { return "该 Release 没有可用于自动更新的 ZIP 或 DMG。" }
+        guard let update = availableUpdate, isCurrentSource(update) else { return "请先连接服务器并重新检查更新。" }
+        guard update.preferredAsset != nil else { return "当前来源没有可用于自动更新的 ZIP 或 DMG。" }
         if let reason = UpdateInstaller.installBlockReason { return reason }
 
         state = .downloading(update: update, received: 0, total: update.preferredAsset?.size ?? 0)
@@ -285,29 +309,16 @@ final class MacUpdateManager: ObservableObject {
         }
     }
 
-    // MARK: - GitHub release source
+    // MARK: - Stable GitHub / Beta server sources
 
-    private func fetchLatestRelease(channel: Channel) async -> CheckResult {
+    private func fetchLatestRelease() async -> CheckResult {
         do {
-            let releases: [GitHubRelease]
-            switch channel {
-            case .stable:
-                let url = try githubURL(path: "/releases/latest")
-                let data = try await loadGitHubData(from: url)
-                releases = [try JSONDecoder().decode(GitHubRelease.self, from: data)]
-            case .beta:
-                let url = try githubURL(path: "/releases?per_page=20")
-                let data = try await loadGitHubData(from: url)
-                releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
-            }
-
-            guard let release = Self.selectRelease(releases, channel: channel) else {
-                return .failed(message: channel == .stable
-                    ? "GitHub 尚未发布稳定版 Release。"
-                    : "GitHub 尚未发布可用的 Stable 或 Beta Release。")
-            }
-            guard let latestVersion = Self.version(fromTag: release.tagName) else {
-                return .failed(message: "GitHub Release 的版本标签无效：\(release.tagName)")
+            let url = try githubURL(path: "/releases/latest")
+            let data = try await loadGitHubData(from: url)
+            let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+            guard !release.draft, !release.prerelease,
+                  let latestVersion = Self.version(fromTag: release.tagName) else {
+                return .failed(message: "GitHub 尚未发布有效的稳定版 Release。")
             }
 
             let currentVersion = currentVersionProvider()
@@ -328,7 +339,7 @@ final class MacUpdateManager: ObservableObject {
             }
 
             return .updateAvailable(Update(
-                channel: channel,
+                channel: .stable,
                 currentVersion: currentVersion,
                 latestVersion: latestVersion,
                 releaseURL: release.htmlURL,
@@ -343,6 +354,101 @@ final class MacUpdateManager: ObservableObject {
         } catch {
             return .failed(message: "检查 GitHub Release 失败：\(error.localizedDescription)")
         }
+    }
+
+    private func fetchServerBeta(serverURL: URL?) async -> CheckResult {
+        guard let serverURL,
+              ["http", "https"].contains(serverURL.scheme?.lowercased() ?? ""),
+              serverURL.host != nil, serverURL.user == nil, serverURL.password == nil else {
+            return .failed(message: "请先连接 Wand 服务端，再检查 Beta 更新。")
+        }
+        do {
+            let path = "/api/macos-app-update?currentVersion=\(percentEncode(currentVersionProvider()))"
+            guard let url = URL(string: path, relativeTo: serverURL)?.absoluteURL else {
+                return .failed(message: "无法构造服务端更新地址。")
+            }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 15
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            let (data, response) = try await betaDataLoader(request)
+            guard let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let responseURL = http.url,
+                  Self.sameOrigin(responseURL, serverURL) else {
+                return .failed(message: "当前服务端无法提供 macOS Beta 更新信息。")
+            }
+            let info = try JSONDecoder().decode(ServerBetaUpdate.self, from: data)
+            guard info.channel == "beta", info.source == "local" || info.latestVersion == nil else {
+                return .failed(message: "服务端返回了无效的 Beta 更新来源。")
+            }
+            guard let version = info.latestVersion else {
+                return .failed(message: "当前连接的服务端尚未提供 macOS Beta 更新包。")
+            }
+            let current = currentVersionProvider()
+            guard ParsedVersion(version) != nil else {
+                return .failed(message: "服务端返回了无效的更新版本。")
+            }
+            guard Self.isVersionNewer(version, than: current) else {
+                return .upToDate(currentVersion: current)
+            }
+            guard info.updateAvailable, info.source == "local",
+                  let name = info.fileName,
+                  Self.isMatchingServerAsset(name, version: version),
+                  let link = info.downloadUrl, link.hasPrefix("/"), !link.hasPrefix("//"),
+                  let downloadURL = URL(string: link, relativeTo: serverURL)?.absoluteURL,
+                  Self.sameOrigin(downloadURL, serverURL),
+                  downloadURL.path == "/macos/update-download",
+                  downloadURL.fragment == nil,
+                  URLComponents(url: downloadURL, resolvingAgainstBaseURL: false)?
+                    .queryItems == [URLQueryItem(name: "fileName", value: name)],
+                  let size = info.size, size > 0,
+                  let sha256 = info.sha256,
+                  sha256.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil else {
+                return .failed(message: "服务端 Beta 更新包缺少有效的下载地址、大小或 SHA-256。")
+            }
+            let asset = Update.Asset(name: name, downloadURL: downloadURL, size: size, sha256: sha256)
+            return .updateAvailable(Update(
+                channel: .beta,
+                currentVersion: current,
+                latestVersion: version,
+                releaseURL: serverURL,
+                releaseNotes: nil,
+                zipAsset: name.lowercased().hasSuffix(".zip") ? asset : nil,
+                dmgAsset: name.lowercased().hasSuffix(".dmg") ? asset : nil
+            ))
+        } catch is CancellationError {
+            return .failed(message: "更新检查已取消。")
+        } catch {
+            return .failed(message: "检查当前服务端 Beta 更新失败：\(error.localizedDescription)")
+        }
+    }
+
+    private static func isMatchingServerAsset(_ name: String, version: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: version)
+        return name.range(
+            of: "^wand-v\(escaped)(?:\\+[A-Za-z0-9.-]+)?\\.(zip|dmg)$",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
+
+    private func percentEncode(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value
+    }
+
+    private static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        a.scheme?.lowercased() == b.scheme?.lowercased()
+            && a.host?.lowercased() == b.host?.lowercased()
+            && (a.port ?? (a.scheme == "https" ? 443 : 80)) == (b.port ?? (b.scheme == "https" ? 443 : 80))
+    }
+
+    private func isCurrentSource(_ update: Update) -> Bool {
+        guard update.channel == .beta else { return true }
+        guard let server = connectedServer(),
+              update.releaseURL == server,
+              let asset = update.preferredAsset,
+              asset.sha256 != nil else { return false }
+        return Self.sameOrigin(asset.downloadURL, server)
+            && asset.downloadURL.path == "/macos/update-download"
     }
 
     private func githubURL(path: String) throws -> URL {
@@ -396,18 +502,6 @@ final class MacUpdateManager: ObservableObject {
 
     static func isVersionNewer(_ candidate: String, than baseline: String) -> Bool {
         compareInstallOrder(candidate, baseline) > 0
-    }
-
-    static func selectRelease(_ releases: [GitHubRelease], channel: Channel) -> GitHubRelease? {
-        releases
-            .filter { !$0.draft && (channel == .beta || !$0.prerelease) && version(fromTag: $0.tagName) != nil }
-            .max { left, right in
-                guard let lhs = version(fromTag: left.tagName), let rhs = version(fromTag: right.tagName) else {
-                    return left.publishedAt < right.publishedAt
-                }
-                let order = compareInstallOrder(lhs, rhs)
-                return order == 0 ? left.publishedAt < right.publishedAt : order < 0
-            }
     }
 
     static func preferredAsset(
@@ -514,6 +608,7 @@ final class MacUpdateManager: ObservableObject {
         let date = now()
         lastSuccessfulCheck = date
         defaults.set(date.timeIntervalSince1970, forKey: lastCheckKey(channel))
+        if channel == .beta { defaults.set(connectedServer()?.absoluteString, forKey: Self.betaServerKey) }
     }
 
     private func restorePersistedState() {
@@ -577,7 +672,9 @@ final class MacUpdateManager: ObservableObject {
 
     private func restoreAvailability(for channel: Channel) {
         let timestamp = defaults.double(forKey: lastCheckKey(channel))
-        lastSuccessfulCheck = timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : nil
+        lastSuccessfulCheck = timestamp > 0
+            && (channel == .stable || defaults.string(forKey: Self.betaServerKey) == connectedServer()?.absoluteString)
+            ? Date(timeIntervalSince1970: timestamp) : nil
         if let update = cachedUpdate(for: channel) {
             state = .available(update)
         } else {
@@ -590,6 +687,7 @@ final class MacUpdateManager: ObservableObject {
         guard let data = defaults.data(forKey: cachedUpdateKey(channel)),
               let update = try? JSONDecoder().decode(Update.self, from: data),
               update.channel == channel,
+              isCurrentSource(update),
               Self.isVersionNewer(update.latestVersion, than: currentVersionProvider()) else {
             return nil
         }
@@ -682,6 +780,17 @@ final class MacUpdateManager: ObservableObject {
 extension MacUpdateManager.CheckTrigger: Equatable {}
 
 extension MacUpdateManager {
+    private struct ServerBetaUpdate: Decodable {
+        let updateAvailable: Bool
+        let latestVersion: String?
+        let downloadUrl: String?
+        let fileName: String?
+        let size: Int64?
+        let source: String?
+        let channel: String
+        let sha256: String?
+    }
+
     struct GitHubRelease: Decodable, Equatable {
         struct Asset: Decodable, Equatable {
             let name: String
@@ -699,7 +808,6 @@ extension MacUpdateManager {
         let htmlURL: URL
         let draft: Bool
         let prerelease: Bool
-        let publishedAt: String
         let body: String?
         let assets: [Asset]
 
@@ -708,7 +816,6 @@ extension MacUpdateManager {
             case htmlURL = "html_url"
             case draft
             case prerelease
-            case publishedAt = "published_at"
             case body
             case assets
         }
