@@ -41,7 +41,7 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 
 - 工程代码放在 `macos/Wand/`
 - `.app` 与 `.dmg` 构建产物**不要提交到仓库**（已在 `.gitignore`）
-- 原生客户端更新始终查询官方 GitHub Release，不依赖当前连接的 wand 服务
+- Stable 更新查询官方 GitHub Release；Beta 更新只查询当前连接服务端的本地 macOS 更新包，不回退 GitHub
 - 原生界面与 iOS 共用协议模型：会话列表、新建会话、聊天、权限审批、恢复与快捷提交
 
 ## 原生客户端协议
