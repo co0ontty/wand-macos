@@ -90,7 +90,12 @@ struct SidebarColumn: View {
         var sortTimestamp: Double {
             switch self {
             case .session(let session):
-                return Self.parseISO8601(session.startedAt)?.timeIntervalSince1970 ?? 0
+                // 与行上的时间（`endedAt ?? startedAt`）同一口径，详见
+                // SessionTimeFormatting.sessionSortTimestamp。
+                return SessionTimeFormatting.sessionSortTimestamp(
+                    startedAt: session.startedAt,
+                    endedAt: session.endedAt
+                )
             case .recoverable(let session):
                 if let mtimeMs = session.mtimeMs { return mtimeMs / 1000 }
                 return Self.parseISO8601(session.timestamp)?.timeIntervalSince1970 ?? 0

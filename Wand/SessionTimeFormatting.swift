@@ -24,6 +24,14 @@ enum SessionTimeFormatting {
         return date(from: timestamp)?.timeIntervalSince1970 ?? 0
     }
 
+    /// 普通会话在「单独会话」列表里的排序时间：与行上显示的时间（`endedAt ?? startedAt`）
+    /// 同一口径，否则副标题写着「刚刚」的会话会按开始时间沉到列表底部。
+    /// 运行中的会话 `endedAt` 为空，自然按开始时间排。
+    /// 可恢复历史另外用 `mtimeMs`，两条规则不要合并。
+    static func sessionSortTimestamp(startedAt: String?, endedAt: String?) -> Double {
+        date(from: endedAt ?? startedAt)?.timeIntervalSince1970 ?? 0
+    }
+
     static func relativeTime(for value: String?, relativeTo referenceDate: Date = Date()) -> String {
         guard let timestamp = date(from: value) else { return "" }
         return relativeFormatter.localizedString(for: timestamp, relativeTo: referenceDate)
