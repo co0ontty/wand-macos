@@ -583,6 +583,8 @@ struct GitQuickCommitView: View {
     /// 生成并回填说明与 Tag，不产生提交；生成失败时明确告知用户仍需手填。
     private func prefillBeforeCommit(withTag: Bool) async {
         await generateAI()
+        // 已有一轮生成正在跑（用户连点两次）时不要下结论：等那轮自己反馈。
+        guard !generating else { return }
         let ready = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !(withTag && tagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         prefillNotice = ready
