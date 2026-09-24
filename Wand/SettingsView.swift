@@ -152,7 +152,7 @@ struct SettingsView: View {
                 }
             }
 
-            settingsCard("消息输入", description: "选择你在对话输入框中使用的发送方式。") {
+            settingsCard("消息输入", description: "选择你在已打开的对话里使用的发送方式。") {
                 Picker("发送消息", selection: $sendWithCommandEnter) {
                     Text("Return 发送").tag(false)
                     Text("⌘ Return 发送").tag(true)
@@ -163,6 +163,9 @@ struct SettingsView: View {
                     : "Return 发送；按 ⇧ Return 换行。")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
+                Text("新建会话页固定用 ⌘ Return 启动，这里的 Return 换行不受影响。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textTertiary)
                 Text("终端保留命令行原本的按键行为。")
                     .font(.system(size: 11))
                     .foregroundColor(Theme.textTertiary)
