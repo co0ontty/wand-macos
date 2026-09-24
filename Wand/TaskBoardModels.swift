@@ -595,9 +595,21 @@ func wandBoardCreateDispatches(status: String) -> Bool { status == WandBoardStat
 /**
  * 拖进「处理中」是否顺带派发：只有还没派发过（没有绑定会话）的任务才自动派发，
  * 已经在跑 / 跑过的卡再拖回来只改状态，避免拖一次就多开一个 session。
+ *
+ * 命中时调用方必须先向用户确认：派发会创建真实会话，不能拖一下就静默启动 Agent。
  */
 func wandBoardDropDispatches(status: String, sessionCount: Int) -> Bool {
     status == WandBoardStatus.doing.rawValue && sessionCount == 0
+}
+
+/// 拖进「处理中」前的派发确认：把将要发给 Agent 的说明一并列出。
+struct WandBoardDropDispatchConfirm: Identifiable, Equatable {
+    let taskId: String
+    let status: String
+    let title: String
+    let prompt: String
+
+    var id: String { taskId }
 }
 
 /// 拖拽派发用的提示词：优先任务描述，其次标题，最后给一句兜底指令。

@@ -38,6 +38,8 @@ struct TaskBoardView: View {
     @State private var ganttZoom: WandBoardGanttZoom = .week
     @State private var hideCompleted = false
     @State private var archiveConfirm: WandBoardTask?
+    /// 拖进「处理中」且卡片还没有会话时要先确认：确认后两次点击都会创建真实会话。
+    @State private var dropDispatchConfirm: WandBoardDropDispatchConfirm?
     @State private var didLoad = false
     @FocusState private var searchFocused: Bool
 
@@ -128,6 +130,25 @@ struct TaskBoardView: View {
                 },
                 secondaryButton: .cancel(Text("取消"))
             )
+        }
+        .confirmationDialog(
+            "用当前说明启动执行？",
+            isPresented: Binding(
+                get: { dropDispatchConfirm != nil },
+                set: { if !$0 { dropDispatchConfirm = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: dropDispatchConfirm
+        ) { confirm in
+            Button("启动执行") {
+                Task { await applyDrop(status: confirm.status, taskId: confirm.taskId, dispatch: true) }
+            }
+            Button("只移入「处理中」，不派发") {
+                Task { await applyDrop(status: confirm.status, taskId: confirm.taskId, dispatch: false) }
+            }
+            Button("取消，什么都不做", role: .cancel) { dropDispatchConfirm = nil }
+        } message: { confirm in
+            Text("「\(confirm.title)」还没有任何会话，会按下面这段说明派发 Agent：\n\n\(confirm.prompt)")
         }
         .onAppear { Task { await bootstrap() } }
         .onReceive(ticker) { _ in
@@ -627,14 +648,30 @@ struct TaskBoardView: View {
         }
     }
 
-    /// 拖拽换列：换到「处理中」且这条任务还没派发过时，顺手把首次指派发出去。
+    /// 拖拽换列：换到「处理中」且这条任务还没派发过时，先确认再派发。
     private func dropTask(status: String, taskId: String) async {
         guard let moving = tasks.first(where: { $0.id == taskId }), moving.status != status else { return }
-        let dispatches = wandBoardDropDispatches(status: status, sessionCount: moving.sessions.count)
+        guard wandBoardDropDispatches(status: status, sessionCount: moving.sessions.count) else {
+            // 已有会话的卡片只换列，避免拖一次多开一个会话。
+            await applyDrop(status: status, taskId: taskId, dispatch: false)
+            return
+        }
+        // 派发会创建真实会话：先把将要使用的说明摆出来让用户确认，不要拖一下就静默启动 Agent。
+        dropDispatchConfirm = WandBoardDropDispatchConfirm(
+            taskId: taskId,
+            status: status,
+            title: moving.title,
+            prompt: wandBoardDropDispatchPrompt(title: moving.title, description: moving.description)
+        )
+    }
+
+    /// 执行换列；dispatch 为 true 时顺带完成首次指派。
+    private func applyDrop(status: String, taskId: String, dispatch: Bool) async {
+        guard let moving = tasks.first(where: { $0.id == taskId }) else { return }
         var dispatchError = ""
         await runFor(taskId) {
             _ = try await api.updateBoardTask(id: taskId, body: ["status": status])
-            if dispatches {
+            if dispatch {
                 let agent = moving.agent ?? lastAgent
                 rememberAgent(agent)
                 do {
@@ -656,7 +693,11 @@ struct TaskBoardView: View {
             }
             await reload(showProgress: false)
             // reload() 会清错误横幅，所以派发失败的提示必须放在它之后才留得住。
-            if !dispatchError.isEmpty { errorMessage = dispatchError }
+            // 列已经改成「处理中」且不回滚，提示里必须说清这一点。
+            if !dispatchError.isEmpty {
+                let column = WandBoardStatus(rawValue: status)?.label ?? status
+                errorMessage = "已移入「\(column)」，但启动执行失败：\(dispatchError)"
+            }
         }
     }
 
