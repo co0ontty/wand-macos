@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 @testable import Wand
@@ -220,6 +221,32 @@ final class MacUpdateManagerTests: XCTestCase {
         XCTAssertTrue(manager.shouldPresentReminder(for: second))
         currentDate = currentDate.addingTimeInterval(24 * 60 * 60)
         XCTAssertTrue(manager.shouldPresentReminder(for: first))
+    }
+
+    func testReadyNotificationCanRelaunchAfterStateIsCommitted() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stagedApp = root.appendingPathComponent("staging-test/Wand.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagedApp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = MacUpdateManager(defaults: defaults, currentVersion: { "1.0.0" })
+        let ready = expectation(description: "ready notification after state commit")
+        let observation = manager.committedStates.sink { state in
+            guard case let .readyToRelaunch(pending) = state else { return }
+            XCTAssertEqual(manager.pendingInstall, pending)
+            XCTAssertNotNil(defaults.data(forKey: "wand.macUpdate.pendingInstall"))
+            guard case let .failure(error) = manager.relaunchPendingUpdate() else {
+                return XCTFail("incomplete staged app must not be installed")
+            }
+            XCTAssertEqual((error as NSError).domain, "Wand.UpdateInstaller")
+            ready.fulfill()
+        }
+
+        manager.handleInstallerStage(.readyToRelaunch(stagedAppPath: stagedApp.path), update: makeUpdate(version: "2.0.0"))
+        await fulfillment(of: [ready], timeout: 5)
+        observation.cancel()
     }
 
     func testPendingInstallAcknowledgementClearsTransaction() throws {

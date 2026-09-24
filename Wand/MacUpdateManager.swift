@@ -76,6 +76,12 @@ final class MacUpdateManager: ObservableObject {
     static let shared = MacUpdateManager()
 
     @Published private(set) var state: State = .idle
+
+    /// @Published 会在赋值前通知订阅者；弹窗/安装动作必须等 state 真正提交后执行。
+    var committedStates: AnyPublisher<State, Never> {
+        $state.receive(on: DispatchQueue.main).eraseToAnyPublisher()
+    }
+
     @Published private(set) var channel: Channel
     @Published private(set) var lastSuccessfulCheck: Date?
 
@@ -287,7 +293,7 @@ final class MacUpdateManager: ObservableObject {
 
     // MARK: - Installer state
 
-    private func handleInstallerStage(_ stage: UpdateInstaller.Stage, update: Update) {
+    func handleInstallerStage(_ stage: UpdateInstaller.Stage, update: Update) {
         switch stage {
         case let .downloading(received, total):
             state = .downloading(update: update, received: received, total: total)

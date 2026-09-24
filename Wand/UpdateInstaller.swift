@@ -641,7 +641,7 @@ final class UpdateFlowController {
     private var presentedReminderVersion: String?
 
     private init() {
-        stateObservation = manager.$state.sink { [weak self] state in
+        stateObservation = manager.committedStates.sink { [weak self] state in
             self?.handle(state)
         }
     }
@@ -717,7 +717,7 @@ final class UpdateFlowController {
     }
 
     private func handle(_ state: MacUpdateManager.State) {
-        guard isPresentingInstall else { return }
+        guard isPresentingInstall, manager.state == state else { return }
         switch state {
         case let .downloading(_, received, total):
             progressWindow?.setDownloading(received: received, total: total)
