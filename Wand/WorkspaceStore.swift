@@ -425,8 +425,9 @@ final class WorkspaceStore: ObservableObject {
         currentWorkspace = workspace
         currentTask = task
         taskState = .loading
-        visibleSessionID = nil
-        visibleSnapshot = nil
+        // 这里刻意不清 visibleSessionID / visibleSnapshot：清空会让壳层把「正在加载」
+        // 当成「这个任务没有会话」，从而把选中会话（以及右侧文件树的根目录）一起清掉。
+        // 任务确实没有会话时由 applyLoadedDetail 清空。
         sessionLoading = false
         sessionError = nil
         layoutWarning = nil

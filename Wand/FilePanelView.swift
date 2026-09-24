@@ -44,6 +44,10 @@ struct FilePanelView: View {
     let sessionId: String?
     let api: WandAPI
     let session: SessionSnapshot?
+    /// 文件栏的实际根目录；会话快照未到时由调用方用侧栏摘要里的 cwd 兜底。
+    var rootPath: String? = nil
+    /// 会话已选定、工作目录还在读：文件树只等目录，不请求默认目录。
+    var rootPathPending = false
     @ObservedObject var gitStatusStore: GitStatusStore
     @Binding var tab: MainShellView.RightPanelTab
 
@@ -53,7 +57,8 @@ struct FilePanelView: View {
             FileTreeView(
                 api: api,
                 sessionId: sessionId,
-                rootPath: session?.cwd
+                rootPath: rootPath,
+                isResolvingRoot: rootPathPending
             )
         case .git:
             if let id = sessionId {

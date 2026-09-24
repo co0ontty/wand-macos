@@ -191,8 +191,12 @@ struct WorkspaceTaskView: View {
 
     @ViewBuilder
     private var sessionContent: some View {
+        // 换任务时 store 会保留上一个会话快照直到新快照到达（否则壳层会把「加载中」
+        // 当成「没有会话」）。这里只渲染确实属于当前任务详情的会话，避免旧会话
+        // 在新任务下闪一帧。
         if let snapshot = store.visibleSnapshot,
-           snapshot.id == store.visibleSessionID {
+           snapshot.id == store.visibleSessionID,
+           store.taskState.detail?.sessions.contains(where: { $0.id == snapshot.id }) == true {
             MainColumn(
                 api: api,
                 sessionId: snapshot.id,

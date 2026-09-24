@@ -10,8 +10,11 @@ struct FileTreeView: View {
     let api: WandAPI
     /// 用 sessionId + cwd 共同作为重载键：不同会话即使工作目录相同，也要重新拉取目录。
     let sessionId: String?
-    /// 会话的工作目录；为空时由服务端使用默认工作目录。
+    /// 会话的工作目录；为空且正在解析时等待，不为空时直接作为根目录。
     let rootPath: String?
+    /// 会话已选定但工作目录还没到（任务详情 / 会话快照正在读）：
+    /// 此时空路径不等于「服务器默认目录」，不能据此发起目录请求。
+    let isResolvingRoot: Bool
 
     @State private var items: [DirectoryItem] = []
     @State private var loading = false
@@ -40,7 +43,9 @@ struct FileTreeView: View {
             Rectangle().fill(Theme.border).frame(height: 0.5)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if !trimmedSearchQuery.isEmpty {
+                    if isResolvingRoot {
+                        resolvingRootState
+                    } else if !trimmedSearchQuery.isEmpty {
                         searchContent
                     } else if let loadError {
                         errorState(loadError)
@@ -97,7 +102,7 @@ struct FileTreeView: View {
                     .foregroundColor(Theme.textSecondary)
             }
             .buttonStyle(WandIconButtonStyle())
-            .disabled(loading)
+            .disabled(loading || isResolvingRoot)
             .help(loading ? "正在刷新目录" : "刷新目录")
             .accessibilityLabel("刷新目录")
         }
@@ -112,6 +117,7 @@ struct FileTreeView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($searchFocused)
+                .disabled(isResolvingRoot)
             HStack(spacing: 2) {
                 ZStack {
                     if searchLoading {
@@ -218,7 +224,8 @@ struct FileTreeView: View {
     }
 
     private var displayPath: String {
-        effectiveRootPath.isEmpty ? "服务器默认目录" : effectiveRootPath
+        if isResolvingRoot { return "正在读取工作目录…" }
+        return effectiveRootPath.isEmpty ? "服务器默认目录" : effectiveRootPath
     }
 
     private var effectiveRootPath: String {
@@ -265,6 +272,20 @@ struct FileTreeView: View {
         .accessibilityLabel("正在读取文件")
     }
 
+    /// 会话已切换、工作目录还没返回：等目录，不要去列服务器默认目录。
+    private var resolvingRootState: some View {
+        VStack(spacing: 8) {
+            ProgressView().controlSize(.small).tint(Theme.wandAccent)
+            Text("正在读取工作目录…")
+                .font(.system(size: 12))
+                .foregroundColor(Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("正在读取工作目录")
+    }
+
     private func errorState(_ message: String) -> some View {
         VStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle")
@@ -304,6 +325,13 @@ struct FileTreeView: View {
     // MARK: - 数据加载
 
     private func reload() async {
+        // 根目录没到位时只等待：空路径在服务端等于「默认工作目录」，会把用户带到别的项目。
+        guard !isResolvingRoot else {
+            loading = false
+            loadError = nil
+            items = []
+            return
+        }
         let rootKey = rootLoadKey
         let path = effectiveRootPath
         rootGeneration += 1
@@ -361,7 +389,7 @@ struct FileTreeView: View {
 
     private func runSearch() async {
         let query = trimmedSearchQuery
-        guard !query.isEmpty else {
+        guard !isResolvingRoot, !query.isEmpty else {
             searchResults = []
             searchError = nil
             searchLoading = false

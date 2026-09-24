@@ -42,6 +42,9 @@ struct MainShellView: View {
     @State private var rightPanelTab: RightPanelTab = .files
     /// 当前选中的会话 id。
     @State private var selectedSessionId: String?
+    /// 侧栏点开任务会话时先记住它自己的 cwd，等会话快照回来再接替。
+    /// 没有它，右侧文件树会在快照到达前向服务器要「默认目录」（问题清单 #3）。
+    @State private var selectedSessionCwdHint: String?
     @State private var selectedSessionProvider: String = "claude"
     @State private var selectedSession: SessionSnapshot?
     @State private var selectedWorkspaceTask: WorkspaceTaskSelection?
@@ -182,13 +185,18 @@ struct MainShellView: View {
             guard !showCreation, let selection = selectedWorkspaceTask,
                   selection.task.id == workspaceStore.currentTask?.id else { return }
             guard let snapshot = workspaceStore.visibleSnapshot else {
+                // 会话快照正在重读（store 先清空再写回）属于过程态，不是「用户没有会话」。
+                // 这里清选择会让右侧文件树退回服务器默认目录。
+                guard !workspaceStore.sessionLoading else { return }
                 selectedSessionId = nil
                 selectedSession = nil
+                selectedSessionCwdHint = nil
                 return
             }
             selectedSessionId = snapshot.id
             selectedSessionProvider = snapshot.provider ?? "claude"
             selectedSession = snapshot
+            selectedSessionCwdHint = nil
         }
         .onReceive(sidebarRefreshTimer) { _ in
             Task { await workspaceStore.loadTaskGroups(force: true) }
@@ -272,6 +280,7 @@ struct MainShellView: View {
 
     private func openSessionFromMissions(_ sessionId: String) {
         selectedWorkspaceTask = nil
+        selectedSessionCwdHint = nil
         showTaskBoard = false
         showCreation = false
         Task {
@@ -291,6 +300,7 @@ struct MainShellView: View {
         showTaskBoard = false
         showCreation = false
         selectedWorkspaceTask = nil
+        selectedSessionCwdHint = nil
         selectedSessionId = session.id
         selectedSessionProvider = session.provider ?? "claude"
         selectedSession = session
@@ -316,6 +326,7 @@ struct MainShellView: View {
         selectedWorkspaceTask = taskSelection
         selectedSessionId = nil
         selectedSession = nil
+        selectedSessionCwdHint = nil
     }
 
     private func beginNewTask(_ request: NewTaskSheetRequest) {
@@ -503,6 +514,7 @@ struct MainShellView: View {
                 showCreation = false
                 selectedSessionId = nil
                 selectedSession = nil
+                selectedSessionCwdHint = nil
                 selectedWorkspaceTask = WorkspaceTaskSelection(
                     workspace: workspace,
                     task: task
@@ -535,6 +547,8 @@ struct MainShellView: View {
                 showTaskBoard = false
                 showCreation = false
                 selectedSessionId = session.id
+                // 摘要里已带 cwd：先用它填右侧文件栏，避免空路径被当成服务器默认目录。
+                selectedSessionCwdHint = session.cwd
                 selectedSession = nil
                 selectedWorkspaceTask = WorkspaceTaskSelection(
                     workspace: workspace,
@@ -931,9 +945,38 @@ struct MainShellView: View {
             sessionId: selectedSessionId,
             api: api,
             session: selectedSession,
+            rootPath: filePanelRootPath,
+            rootPathPending: filePanelRootPending,
             gitStatusStore: gitStatusStore,
             tab: $rightPanelTab
         )
+    }
+
+    /// 文件栏根目录：会话快照优先，其次本次点开时记住的 cwd。
+    private var filePanelRootPath: String? {
+        Self.normalizedPath(selectedSession?.cwd) ?? Self.normalizedPath(selectedSessionCwdHint)
+    }
+
+    /// 会话或任务已经选定、但工作目录还没到：文件树应等待而不是列出服务器默认目录。
+    private var filePanelRootPending: Bool {
+        guard filePanelRootPath == nil else { return false }
+        if selectedSessionId != nil || workspaceStore.sessionLoading { return true }
+        guard selectedWorkspaceTask != nil else { return false }
+        switch workspaceStore.taskState {
+        case .idle, .loading:
+            return true
+        case .ready(let detail):
+            // 有会话但快照还没回来。
+            return !detail.sessions.isEmpty
+        case .empty, .failed:
+            return false
+        }
+    }
+
+    private static func normalizedPath(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
 }
