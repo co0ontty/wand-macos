@@ -528,9 +528,20 @@ struct NewSessionView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("工作目录").font(.system(size: 14, weight: .semibold))
                     if isExistingTask {
-                        Text(draft.cwd).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                        fieldHint("跟随所选任务的工作目录。切换任务可更改目录。")
+                        if draft.loadingTask {
+                            // 还没拿到任务详情：不能把入口上下文里的目录当成任务目录展示。
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("正在读取任务的工作目录…")
+                            }
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
+                            fieldHint("读取完成前不能启动会话。")
+                        } else {
+                            Text(draft.cwd).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                            fieldHint("跟随所选任务的工作目录。切换任务可更改目录。")
+                        }
                     } else { cwdCard }
                     HStack { Spacer(); Button("完成") { showDirectoryOptions = false }.buttonStyle(WandSecondaryButtonStyle()) }
                 }.padding(20).frame(width: 400).background(Theme.workspaceBackground)
@@ -915,12 +926,18 @@ struct NewSessionView: View {
         }
         let generation = draft.taskGeneration
         draft.loadingTask = true
+        // 记下发起时的目录：任务详情返回时只在用户没动过这一栏的情况下写入。
+        let cwdAtRequest = draft.cwd
         Task {
             do {
                 let detail = try await api.getWorkspaceTask(taskId: destination)
                 guard draft.taskGeneration == generation, draft.destination == destination else { return }
                 draft.binding = WorkspaceBinding(workspaceId: detail.workspaceId, workspaceTaskId: detail.id, cwd: detail.cwd)
-                draft.cwd = detail.cwd
+                // 等待期间用户改过目录就不静默覆盖（已有任务下这一栏是只读的，
+                // 但其它写入路径不该被一个过期的响应盖掉）。
+                if draft.cwd.isEmpty || Self.isSamePath(draft.cwd, cwdAtRequest) {
+                    draft.cwd = detail.cwd
+                }
                 draft.loadingTask = false
                 if !draft.providerWasEdited {
                     let preferred = draft.workspaces.first(where: { $0.id == detail.workspaceId })?.defaultProvider?.rawValue
@@ -935,6 +952,13 @@ struct NewSessionView: View {
                 draft.taskError = "无法读取任务目录：" + error.localizedDescription
             }
         }
+    }
+
+    /// 路径比较只用于判断「用户是否改过目录」，容忍多余空格与 `..`、重复斜杠。
+    private static func isSamePath(_ lhs: String, _ rhs: String) -> Bool {
+        let left = lhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        let right = rhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (left as NSString).standardizingPath == (right as NSString).standardizingPath
     }
 
     private func loadInitial() async {
