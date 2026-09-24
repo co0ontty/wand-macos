@@ -207,7 +207,7 @@ struct MainShellView: View {
     }
 
     private var nativeShell: some View {
-        // 标题区与正文同色；侧栏首行仅保留窗口操作，品牌、连接和工具归入底部。
+        // 标题区与正文同色；侧栏首行保留窗口操作，品牌置于下方，连接和设置留在底部。
         GeometryReader { geo in
                 content(width: geo.size.width)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -458,6 +458,7 @@ struct MainShellView: View {
     private var sidebarColumn: some View {
         VStack(spacing: 0) {
             sidebarTitleBar
+            sidebarBrand
             sidebarChrome
             ScrollViewReader { proxy in
                 ScrollView {
@@ -572,7 +573,7 @@ struct MainShellView: View {
         )
     }
 
-    // The window controls and navigation share the sidebar surface.
+    // Leave the first row clear for the macOS traffic lights and sidebar toggle.
     private var sidebarTitleBar: some View {
         HStack(spacing: 8) {
             WindowDragRegion().frame(maxWidth: .infinity).frame(height: 52)
@@ -584,6 +585,18 @@ struct MainShellView: View {
         .padding(.leading, 82).padding(.trailing, 12)
         .frame(height: 52)
         .windowDrag()
+    }
+
+    private var sidebarBrand: some View {
+        HStack(spacing: 10) {
+            WandBrandMark(size: 36)
+            Text("Wand")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 56)
     }
 
     private var filePanelToggleButton: some View {
@@ -610,8 +623,7 @@ struct MainShellView: View {
         .accessibilityLabel("设置")
     }
 
-    /// 左侧只承载全局身份和连接状态。把服务器信息做成可点击的菜单，而非一个
-    /// 只能靠悬停理解的绿/红小点；既不抢会话标题的位置，也能直接抵达恢复动作。
+    /// 底部连接状态和服务器地址保持可点击，可直接恢复连接或切换服务器。
     private var identityMenu: some View {
         Menu {
             Section("服务器") {
@@ -639,12 +651,21 @@ struct MainShellView: View {
                 Label("切换服务器…", systemImage: "server.rack")
             }
         } label: {
-            Text("Wand").font(.system(size: 13, weight: .semibold))
-                .foregroundColor(Theme.textPrimary)
+            HStack(spacing: 6) {
+                connectionBadge
+                Text(displayHost)
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .help("\(connectionHelp) · \(displayHost)")
-        .accessibilityLabel("Wand，\(connectionAccessibilityValue)")
+        .accessibilityLabel(connectionAccessibilityValue)
         .accessibilityHint("打开服务器状态与连接操作")
     }
 
@@ -756,16 +777,7 @@ struct MainShellView: View {
         VStack(spacing: 8) {
             Divider()
             HStack(spacing: 10) {
-                WandBrandMark(size: 30).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    identityMenu.fixedSize()
-                    HStack(spacing: 5) {
-                        connectionBadge
-                        Text(displayHost).font(.system(size: 11)).lineLimit(1)
-                            .foregroundColor(Theme.textSecondary)
-                    }
-                }
-                Spacer(minLength: 0)
+                identityMenu
                 settingsMenu
             }.padding(.horizontal, 4).padding(.vertical, 4)
         }.padding(12)
