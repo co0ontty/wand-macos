@@ -2,8 +2,10 @@ import SwiftUI
 
 /// 快速提交面板：常用操作保持线性，额外的组合操作收在菜单和可选磁吸 dock 中。
 ///
-/// message 留空 → 服务端 AI 根据 staged diff 生成；tag 留空且带 Tag 动作 → AI 推荐
-/// 版本号；「AI」按钮可预生成两者填进表单。提交未推送时结果面板提供 Push & Close。
+/// message 留空（或带 Tag 动作时 Tag 留空）就点提交：客户端先让服务端根据 staged diff
+/// 生成说明与版本号并回填，用户确认后再点一次才真正提交 —— 不会在用户没看到说明的
+/// 情况下产生 commit。「AI」按钮是同一个预生成的快捷入口。
+/// 提交未推送时结果面板提供 Push & Close。
 struct GitQuickCommitView: View {
     let sessionId: String
     let api: WandAPI
@@ -31,10 +33,11 @@ struct GitQuickCommitView: View {
 
     // AI 预生成
     @State private var generating = false
+    /// 上一句「说明为空，先生成」的提示；确认或重新生成前一直可见。
+    @State private var prefillNotice: String?
 
     // 提交
     @State private var committing = false
-    @State private var autoGenerating = false
     @State private var submoduleIntent = false
     @State private var errorMessage: String?
     @State private var showMagneticComposer = false
@@ -203,7 +206,7 @@ struct GitQuickCommitView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Theme.textSecondary)
             Spacer()
-            Button(action: generateAI) {
+            Button { Task { await generateAI() } } label: {
                 HStack(spacing: 6) {
                     if generating {
                         ProgressView().controlSize(.small)
@@ -243,7 +246,7 @@ struct GitQuickCommitView: View {
             Text("新 Tag（可选）")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.textSecondary)
-            TextField("选择含 Tag 的提交方式时生效；留空自动生成", text: $tagName)
+            TextField("选择含 Tag 的提交方式时生效；留空时点提交会先生成待确认", text: $tagName)
                 .font(.system(size: 14, design: .monospaced))
                 .textFieldStyle(.plain)
                 .foregroundColor(Theme.textPrimary)
@@ -260,6 +263,12 @@ struct GitQuickCommitView: View {
             Text(errorMessage)
                 .font(.footnote)
                 .foregroundColor(Theme.danger)
+        }
+
+        if let prefillNotice {
+            Text(prefillNotice)
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textSecondary)
         }
 
         // 常规路径保持线性可预测；磁吸组合降为可选的效率工具。
@@ -317,7 +326,16 @@ struct GitQuickCommitView: View {
     }
 
     private var busyLabel: String {
-        (autoGenerating ? "AI 生成 + 提交中…" : "执行中…") + (submoduleIntent ? "（含 submodule）" : "")
+        "执行中…" + (submoduleIntent ? "（含 submodule）" : "")
+    }
+
+    /// 提交动作旁边的小字：说清这一次点击到底会发生什么。
+    private var commitActionHint: String {
+        guard hasChanges else { return "工作区干净" }
+        if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "说明为空：点提交先生成说明，确认后再提交"
+        }
+        return "执行前会使用上方提交信息"
     }
 
     private var standardCommitActions: some View {
@@ -357,7 +375,7 @@ struct GitQuickCommitView: View {
             .disabled(!hasChanges || committing)
 
             Spacer()
-            Text(hasChanges ? "执行前会使用上方提交信息" : "工作区干净")
+            Text(commitActionHint)
                 .font(.system(size: 11))
                 .foregroundColor(Theme.textMuted)
         }
@@ -522,29 +540,28 @@ struct GitQuickCommitView: View {
         statusLoading = false
     }
 
-    private func generateAI() {
+    /// 让服务端根据 staged diff 生成说明与 Tag 候选并回填表单；绝不覆盖用户已输入的内容。
+    private func generateAI() async {
         guard !generating, !committing else { return }
         generating = true
         errorMessage = nil
-        Task {
-            do {
-                let r = try await api.generateCommitMessage(sessionId: sessionId)
-                let aiMessage = (r.message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let aiTag = (r.suggestedTag ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                // 只在空白时填 message，绝不覆盖用户已输入的内容。
-                if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !aiMessage.isEmpty {
-                    message = aiMessage
-                }
-                if !aiTag.isEmpty, !tagEdited {
-                    tagName = aiTag
-                    // onChange(tagName) 会把 tagEdited 置 true —— 这里是程序填充，复位。
-                    DispatchQueue.main.async { tagEdited = false }
-                }
-            } catch {
-                errorMessage = error.localizedDescription
+        do {
+            let r = try await api.generateCommitMessage(sessionId: sessionId)
+            let aiMessage = (r.message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let aiTag = (r.suggestedTag ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // 只在空白时填 message，绝不覆盖用户已输入的内容。
+            if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !aiMessage.isEmpty {
+                message = aiMessage
             }
-            generating = false
+            if !aiTag.isEmpty, !tagEdited {
+                tagName = aiTag
+                // onChange(tagName) 会把 tagEdited 置 true —— 这里是程序填充，复位。
+                DispatchQueue.main.async { tagEdited = false }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
+        generating = false
     }
 
     /// action ∈ {commit, commit-tag, commit-push, commit-tag-push}，与网页一致；
@@ -552,24 +569,43 @@ struct GitQuickCommitView: View {
     private func submit(action: String, includeSubmodule: Bool) {
         guard !committing, hasChanges else { return }
         let withTag = action == "commit-tag" || action == "commit-tag-push"
-        let push = action == "commit-push" || action == "commit-tag-push"
         let userTag = withTag ? tagName.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let msg = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        prefillNotice = nil
+        guard !msg.isEmpty, !(withTag && userTag.isEmpty) else {
+            // 说明（或 Tag）还空着：先生成并回填，让用户看清将要写进 git 的内容再决定是否提交。
+            Task { await prefillBeforeCommit(withTag: withTag) }
+            return
+        }
+        performCommit(action: action, includeSubmodule: includeSubmodule, message: msg, tag: userTag)
+    }
+
+    /// 生成并回填说明与 Tag，不产生提交；生成失败时明确告知用户仍需手填。
+    private func prefillBeforeCommit(withTag: Bool) async {
+        await generateAI()
+        let ready = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !(withTag && tagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        prefillNotice = ready
+            ? "已生成提交前的内容，确认无误后再点一次提交。"
+            : "没能自动生成提交内容，请手动填写后再提交。"
+    }
+
+    private func performCommit(action: String, includeSubmodule: Bool, message msg: String, tag userTag: String) {
+        let push = action == "commit-push" || action == "commit-tag-push"
         let before = status
 
         committing = true
         onRunning()
         submoduleIntent = includeSubmodule
-        autoGenerating = msg.isEmpty || (withTag && userTag.isEmpty)
         errorMessage = nil
         pushError = nil
         Task {
             do {
                 let r = try await api.quickCommit(
                     sessionId: sessionId,
-                    customMessage: msg.isEmpty ? nil : msg,
+                    customMessage: msg,
                     tag: userTag.isEmpty ? nil : userTag,
-                    autoTag: withTag && userTag.isEmpty,
+                    autoTag: false,
                     push: push,
                     submodule: includeSubmodule
                 )
@@ -599,7 +635,6 @@ struct GitQuickCommitView: View {
                 onFailed(error.localizedDescription)
             }
             committing = false
-            autoGenerating = false
         }
     }
 
