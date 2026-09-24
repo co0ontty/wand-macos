@@ -410,50 +410,30 @@ struct WorkspaceListView: View {
         let sessionTotal = group.tasks.reduce(0) { $0 + $1.listedSessionCount }
         return SidebarHoveringRow { hovering in
             HStack(spacing: 2) {
-                Button {
-                    guard collapsible else { return }
-                    toggleCollapsedTaskGroup(group.id)
-                } label: {
-                    HStack(spacing: 6) {
-                        treeDisclosureCaret(expanded: expanded)
-                        Image(systemName: group.isSynthetic ? "folder.badge.questionmark" : "folder.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(containsSelection ? Theme.wandAccent : Theme.textSecondary)
-                            .frame(width: 16, height: 16)
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 5) {
-                                Text(group.workspaceName)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(Theme.textPrimary)
-                                    .lineLimit(1)
-                                if group.isSynthetic {
-                                    Text("未归档")
-                                        .font(.system(size: 9, weight: .medium))
-                                        .foregroundColor(Theme.textTertiary)
-                                }
-                            }
-                            if let caption = TaskListPresentation.directoryPathCaption(name: group.workspaceName, cwd: group.workspaceCwd) {
-                                Text(caption)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(Theme.textMuted)
-                                    .lineLimit(1)
-                            }
-                        }
-                        Spacer(minLength: 4)
-                        if group.tasks.count > 0 {
-                            Text("\(group.tasks.count) 任务")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Theme.textMuted)
-                                .lineLimit(1)
-                                .help("\(group.tasks.count) 个任务，\(sessionTotal) 个会话")
-                                .accessibilityLabel("\(group.tasks.count) 个任务，\(sessionTotal) 个会话")
-                        }
-                    }
-                    .contentShape(Rectangle())
+                collapsibleControl(
+                    enabled: collapsible,
+                    help: collapsible ? (expanded ? "收起任务" : "展开任务") : "筛选时保持展开",
+                    accessibilityLabel: "\(group.workspaceName)，\(expanded ? "已展开" : "已收起")",
+                    accessibilityHint: collapsible ? (expanded ? "收起任务" : "展开任务") : "筛选时保持展开",
+                    action: { toggleCollapsedTaskGroup(group.id) }
+                ) {
+                    taskGroupHeaderLabel(
+                        group,
+                        expanded: expanded,
+                        containsSelection: containsSelection,
+                        sessionTotal: sessionTotal
+                    )
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(group.workspaceName)，\(expanded ? "已展开" : "已收起")")
-                .accessibilityHint(collapsible ? (expanded ? "收起任务" : "展开任务") : "筛选时保持展开")
+
+                if !collapsible {
+                    // 筛选期间标题不可折叠：用可见文字说明，别让用户对着没有反应的标题反复点击。
+                    Text("筛选时保持展开")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .accessibilityHidden(true)
+                }
 
                 Button {
                     requestNewTask(NewTaskSheetRequest(
@@ -465,10 +445,9 @@ struct WorkspaceListView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(Theme.textSecondary)
-                        .frame(width: 22, height: 22)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(WandIconButtonStyle())
                 .help("在此目录新建任务")
                 .accessibilityLabel("在「\(group.workspaceName)」中新建任务")
             }
@@ -476,6 +455,76 @@ struct WorkspaceListView: View {
             .padding(.trailing, 4)
             .padding(.vertical, 5)
             .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
+        }
+    }
+
+    private func taskGroupHeaderLabel(
+        _ group: TaskDirectoryGroup,
+        expanded: Bool,
+        containsSelection: Bool,
+        sessionTotal: Int
+    ) -> some View {
+        HStack(spacing: 6) {
+            treeDisclosureCaret(expanded: expanded)
+            Image(systemName: group.isSynthetic ? "folder.badge.questionmark" : "folder.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(containsSelection ? Theme.wandAccent : Theme.textSecondary)
+                .frame(width: 16, height: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(group.workspaceName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
+                    if group.isSynthetic {
+                        Text("未归档")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(Theme.textTertiary)
+                    }
+                }
+                if let caption = TaskListPresentation.directoryPathCaption(name: group.workspaceName, cwd: group.workspaceCwd) {
+                    Text(caption)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            if group.tasks.count > 0 {
+                Text("\(group.tasks.count) 任务")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Theme.textMuted)
+                    .lineLimit(1)
+                    .help("\(group.tasks.count) 个任务，\(sessionTotal) 个会话")
+                    .accessibilityLabel("\(group.tasks.count) 个任务，\(sessionTotal) 个会话")
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    /// 折叠控件不可用时渲染成静态标签：`.plain` 按钮被禁用后外观不变，
+    /// 留着按钮就会出现「看起来能点、点了没反应」的假可点区域。
+    @ViewBuilder
+    private func collapsibleControl<Label: View>(
+        enabled: Bool,
+        help: String,
+        accessibilityLabel: String,
+        accessibilityHint: String,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        if enabled {
+            Button(action: action, label: label)
+                .buttonStyle(.plain)
+                .help(help)
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityHint(accessibilityHint)
+        } else {
+            label()
+                .help(help)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityHint(accessibilityHint)
         }
     }
 
@@ -581,41 +630,40 @@ struct WorkspaceListView: View {
                     .accessibilityAddTraits(selected ? .isSelected : [])
 
                     if canCollapseSessions {
-                        Button {
-                            toggleCollapsedTask(summary.id)
-                        } label: {
+                        collapsibleControl(
+                            enabled: !isFiltering,
+                            help: isFiltering ? "筛选时显示匹配会话" : (expanded ? "收起终端" : "展开终端"),
+                            accessibilityLabel: "\(summary.listedSessionCount) 个会话",
+                            accessibilityHint: isFiltering ? "筛选时显示匹配会话" : (expanded ? "收起终端" : "展开终端"),
+                            action: { toggleCollapsedTask(summary.id) }
+                        ) {
                             HStack(spacing: 2) {
                                 Text("\(summary.listedSessionCount)")
                                     .font(.system(size: 10, weight: .medium))
                                     .foregroundColor(Theme.textMuted)
-                                    .accessibilityLabel("\(summary.listedSessionCount) 个会话")
                                 treeDisclosureCaret(expanded: expanded)
                             }
                             .padding(.horizontal, 2)
-                            .frame(height: 22)
+                            // 与 WandIconButtonStyle 一致的 30 pt 命中区（DESIGN.md）。
+                            .frame(minWidth: 30, minHeight: 30)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-                        .disabled(isFiltering)
-                        .help(isFiltering ? "筛选时显示匹配会话" : expanded ? "收起终端" : "展开终端")
                     }
 
-                    Button {
-                        collapsedTaskIds.remove(summary.id)
-                        onRequestNewSession?(workspace, task)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Theme.textSecondary)
-                            .frame(width: 22, height: 22)
-                            .contentShape(Rectangle())
+                    if !isSelecting {
+                        Button {
+                            collapsedTaskIds.remove(summary.id)
+                            onRequestNewSession?(workspace, task)
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(Theme.textSecondary)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(WandIconButtonStyle())
+                        .help("在「\(summary.name)」中新建会话")
+                        .accessibilityLabel("在「\(summary.name)」中新建会话")
                     }
-                    .buttonStyle(.plain)
-                    .opacity(hovering || selected ? 1 : 0)
-                    .allowsHitTesting(hovering || selected)
-                    .accessibilityHidden(!(hovering || selected))
-                    .help("在「\(summary.name)」中新建会话")
-                    .accessibilityLabel("在「\(summary.name)」中新建会话")
                 }
                 .padding(.trailing, 4)
                 .padding(.vertical, 3)
