@@ -2770,13 +2770,6 @@ private func tailInline(_ value: String, max: Int) -> String {
     return text.count > max ? "…" + String(text.suffix(max - 1)) : text
 }
 
-private func fileNameOf(_ path: String) -> String {
-    if let idx = path.lastIndex(of: "/") {
-        return String(path[path.index(after: idx)...])
-    }
-    return path
-}
-
 private func activityThinkingLabel(_ thinking: String) -> String {
     let text = tailInline(thinking, max: 240)
     return text.isEmpty ? "深度思考" : text

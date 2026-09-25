@@ -1041,34 +1041,6 @@ private struct ConnectionFailureView: View {
     }
 }
 
-struct EmptyMainColumn: View {
-    var title: String = "选择会话或新建一个"
-    var message: String = "从左侧打开最近的对话，或开始一个新的工作。"
-    var actionTitle: String = "新建会话"
-    var action: (() -> Void)?
-
-    var body: some View {
-        VStack(spacing: 10) {
-            WandBrandMark(size: 36)
-            Text(title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(Theme.textPrimary)
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundColor(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            if let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(WandPrimaryButtonStyle())
-                    .padding(.top, 6)
-            }
-        }
-        .padding(.bottom, 28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
 struct MainColumn: View {
     let api: WandAPI
     let sessionId: String
