@@ -579,7 +579,8 @@ struct WorkspaceListView: View {
         let expanded = TaskListPresentation.isTaskSessionsExpanded(
             userCollapsed: collapsedTaskIds.contains(summary.id),
             sessionCount: summary.listedSessionCount,
-            isSearching: isFiltering
+            isSearching: isFiltering,
+            isOnlyTask: group.tasks.count == 1
         )
         let workspace = workspace(from: group)
         let task = summary.asTask()

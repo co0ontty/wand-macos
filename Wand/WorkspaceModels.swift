@@ -587,8 +587,15 @@ enum TaskListPresentation {
         directoryCount > 0 && (isSearching || !userCollapsed)
     }
 
-    static func isTaskSessionsExpanded(userCollapsed: Bool, sessionCount: Int, isSearching: Bool = false) -> Bool {
-        isSearching || !showsTaskSessionDisclosure(sessionCount: sessionCount) || !userCollapsed
+    /// 无终端的任务默认折叠、不显示空提示；只有当它是目录里唯一任务（或搜索命中）时才展开引导创建首个会话。
+    static func isTaskSessionsExpanded(
+        userCollapsed: Bool,
+        sessionCount: Int,
+        isSearching: Bool = false,
+        isOnlyTask: Bool = false
+    ) -> Bool {
+        guard showsTaskSessionDisclosure(sessionCount: sessionCount) else { return isSearching || isOnlyTask }
+        return isSearching || !userCollapsed
     }
 
     struct ManageSelection: Equatable {

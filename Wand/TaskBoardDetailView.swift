@@ -10,6 +10,8 @@ struct WandBoardDetailView: View {
     let milestones: [WandBoardMilestone]
     let catalog: ModelsResponse?
     let busy: Bool
+    /// 非空时打开空的指派框。右键「派发」用它，避免把任务描述预填进去。
+    let composeToken: UUID?
     let onPatch: ([String: Any]) async -> Void
     let onRemember: (WandBoardTaskAgent) -> Void
     let onDispatch: (String, WandBoardTaskAgent) async -> Void
@@ -31,6 +33,7 @@ struct WandBoardDetailView: View {
         milestones: [WandBoardMilestone],
         catalog: ModelsResponse?,
         busy: Bool,
+        composeToken: UUID? = nil,
         onPatch: @escaping ([String: Any]) async -> Void,
         onRemember: @escaping (WandBoardTaskAgent) -> Void,
         onDispatch: @escaping (String, WandBoardTaskAgent) async -> Void,
@@ -43,6 +46,7 @@ struct WandBoardDetailView: View {
         self.milestones = milestones
         self.catalog = catalog
         self.busy = busy
+        self.composeToken = composeToken
         self.onPatch = onPatch
         self.onRemember = onRemember
         self.onDispatch = onDispatch
@@ -55,7 +59,7 @@ struct WandBoardDetailView: View {
         _agent = State(initialValue: task.agent ?? .default)
         let assigned = !task.sessions.isEmpty
         _composeOpen = State(initialValue: !assigned)
-        _composePrompt = State(initialValue: assigned ? "" : task.description)
+        _composePrompt = State(initialValue: "")
     }
 
     private var status: WandBoardStatus { WandBoardStatus(rawValue: task.status) ?? .todo }
@@ -101,7 +105,17 @@ struct WandBoardDetailView: View {
             agent = task.agent ?? .default
             let assigned = !task.sessions.isEmpty
             composeOpen = !assigned
-            composePrompt = assigned ? "" : task.description
+            composePrompt = ""
+        }
+        .onAppear {
+            guard composeToken != nil else { return }
+            composeOpen = true
+            composePrompt = ""
+        }
+        .onChange(of: composeToken) { token in
+            guard token != nil else { return }
+            composeOpen = true
+            composePrompt = ""
         }
         .onChange(of: task.sessions.count) { _ in
             // 派发成功后收起编辑器并清空提示词，避免误以为还能再发一次同一段话。
@@ -192,7 +206,7 @@ struct WandBoardDetailView: View {
                         )
                         .overlay(alignment: .topLeading) {
                             if composePrompt.isEmpty {
-                                Text("输入这次派给 Agent 的提示词…")
+                                Text("输入这次派给 Agent 的提示词。任务卡里的旧描述不会自动带上。")
                                     .font(.system(size: 13))
                                     .foregroundColor(Theme.textMuted)
                                     .padding(.horizontal, 13)

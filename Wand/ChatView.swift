@@ -2337,7 +2337,6 @@ private enum DisplayItem {
         input: [String: JSONValue], subagent: SubagentMeta?,
         result: ToolResultInfo?
     )
-    case explorationGroup([ExplorationToolItem])
 }
 
 private struct SubagentSegment {
@@ -2411,7 +2410,8 @@ private struct ActivityGroup: Identifiable {
     let meta: String
     let count: Int
     let items: [DisplayItem]
-    let running: Bool
+    /// 这条回复里最新的一段活动：默认展开，更早的段默认收起成状态条。
+    var newest = false
 }
 
 private enum SegmentRenderItem {
@@ -2472,8 +2472,6 @@ private func explorationToolsOnly(in turn: ConversationTurn) -> [ExplorationTool
     var tools: [ExplorationToolItem] = []
     for item in pairToolBlocks(turn.content) {
         switch item {
-        case .explorationGroup(let group):
-            tools.append(contentsOf: group)
         case .tool(let id, let name, let description, let input, let subagent, let result)
             where isExplorationTool(name) && !toolHasVisibleImage(input: input, result: result):
             tools.append(ExplorationToolItem(
@@ -2537,41 +2535,7 @@ private func pairToolBlocks(_ content: [ContentBlock]) -> [DisplayItem] {
             input: input, subagent: subagent, result: result
         ))
     }
-    return collapseConsecutiveExplorationTools(paired)
-}
-
-/// 连续读取、搜索、网页获取通常只是模型探索上下文，不需要逐张占满对话流。
-/// 至少连续两次才合并，单次操作仍保留完整工具卡。
-private func collapseConsecutiveExplorationTools(_ paired: [DisplayItem]) -> [DisplayItem] {
-    var items: [DisplayItem] = []
-    var exploration: [ExplorationToolItem] = []
-
-    func flushExploration() {
-        if exploration.count >= 2 {
-            items.append(.explorationGroup(exploration))
-        } else if let tool = exploration.first {
-            items.append(.tool(
-                id: tool.id, name: tool.name, description: tool.description,
-                input: tool.input, subagent: tool.subagent, result: tool.result
-            ))
-        }
-        exploration.removeAll(keepingCapacity: true)
-    }
-
-    for item in paired {
-        if case .tool(let id, let name, let description, let input, let subagent, let result) = item,
-           isExplorationTool(name) && !toolHasVisibleImage(input: input, result: result) {
-            exploration.append(ExplorationToolItem(
-                id: id, name: name, description: description,
-                input: input, subagent: subagent, result: result
-            ))
-        } else {
-            flushExploration()
-            items.append(item)
-        }
-    }
-    flushExploration()
-    return items
+    return paired
 }
 
 private func isExplorationTool(_ name: String) -> Bool {
@@ -2588,8 +2552,7 @@ private func isExplorationTool(_ name: String) -> Bool {
 
 private func collapseActivityItems(
     _ items: [DisplayItem],
-    isLastTurn: Bool,
-    isResponding: Bool
+    isLastTurn: Bool
 ) -> [SegmentRenderItem] {
     var renderItems: [SegmentRenderItem] = []
     var pending: [DisplayItem] = []
@@ -2605,8 +2568,7 @@ private func collapseActivityItems(
                 latest: summary.latest,
                 meta: summary.meta,
                 count: summary.count,
-                items: groupItems,
-                running: false
+                items: groupItems
             )))
         }
         pending.removeAll(keepingCapacity: true)
@@ -2624,15 +2586,15 @@ private func collapseActivityItems(
         }
     }
     flushPending()
-    if isLastTurn && isResponding,
-       case .activity(let group) = renderItems.last {
+    // 本轮最后一段活动标记成「最新」：默认展开；末尾还在跑时同时标记运行态。
+    if isLastTurn, case .activity(let group) = renderItems.last {
         renderItems[renderItems.count - 1] = .activity(ActivityGroup(
             id: group.id,
             latest: group.latest,
             meta: group.meta,
             count: group.count,
             items: group.items,
-            running: true
+            newest: true
         ))
     }
     return renderItems
@@ -2647,8 +2609,6 @@ private func displayItemStableKey(_ item: DisplayItem) -> String {
     switch item {
     case .tool(let id, let name, _, _, _, _):
         return "tool:\(id.isEmpty ? name : id)"
-    case .explorationGroup(let tools):
-        return "explore:\(tools.first?.id ?? "\(tools.count)")"
     case .plain(let block):
         switch block {
         case .thinking(let text, let subagent):
@@ -2681,8 +2641,6 @@ private func isCollapsibleActivityItem(_ item: DisplayItem) -> Bool {
         case .thinking: return true
         case .toolResult(_, _, _, _, let images, _): return images.isEmpty
         }
-    case .explorationGroup:
-        return true
     case .tool(_, let name, _, let input, _, let result):
         if name == "AskUserQuestion" { return false }
         if toolHasVisibleImage(input: input, result: result) { return false }
@@ -2736,8 +2694,6 @@ private func summarizeActivityItems(_ items: [DisplayItem]) -> ActivityRunSummar
             count += 1
         case .tool(_, let name, _, let input, _, _):
             addTool(name: name, input: input)
-        case .explorationGroup(let tools):
-            for tool in tools { addTool(name: tool.name, input: tool.input) }
         default:
             break
         }
@@ -2813,8 +2769,6 @@ private func isDisplayItemRunning(_ item: DisplayItem, isLastTurn: Bool, isRespo
     switch item {
     case .tool(_, _, _, _, _, let result):
         return result == nil
-    case .explorationGroup(let tools):
-        return tools.contains { $0.result == nil }
     case .plain(let block):
         if case .thinking = block { return true }
         return false
@@ -2829,8 +2783,6 @@ private func activityTools(_ items: [DisplayItem]) -> [ExplorationToolItem] {
                 id: id, name: name, description: description,
                 input: input, subagent: subagent, result: result
             )]
-        case .explorationGroup(let tools):
-            return tools
         case .plain:
             return []
         }
@@ -2992,82 +2944,232 @@ private extension EnvironmentValues {
     }
 }
 
+/// 活动滚动窗口的固定高度：活动再多也不撑爆对话流，内部自己滚。
+private let activityWindowHeight: CGFloat = 220
+
+/// 离底超过这个距离就算「在读历史」：新的活动不再把用户拽回尾部。
+private let activityTailPin: CGFloat = 24
+
+/// 活动窗口展开 / 收起：240ms 强调曲线（对齐 WandMotion.tweenNormal / Web 端）；
+/// 减弱动效时瞬切。
+private func activityWindowAnimation(_ reduceMotion: Bool) -> Animation? {
+    reduceMotion ? nil : .timingCurve(0.16, 1, 0.3, 1, duration: 0.24)
+}
+
+/// 活动窗口的滚动几何：顶/底哨兵在窗口坐标空间里的位置。
+/// macOS 12 起就能用（onScrollGeometryChange 要 macOS 15，所以走 PreferenceKey）。
+private struct ActivityTopEdgeKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = min(value, nextValue())
+    }
+}
+
+private struct ActivityBottomEdgeKey: PreferenceKey {
+    static var defaultValue: CGFloat = -.greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private let activityWindowSpace = "activityWindow"
+
+/// 滚动窗口内容两侧的哨兵：报告自己相对窗口可见区的位置。
+private struct ActivityEdgeProbe<K: PreferenceKey>: View where K.Value == CGFloat {
+    let edge: (CGRect) -> CGFloat
+
+    var body: some View {
+        Color.clear.frame(height: 1)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: K.self,
+                        value: edge(geo.frame(in: .named(activityWindowSpace)))
+                    )
+                }
+            )
+    }
+}
+
 private struct ActivityFoldCard<Content: View>: View {
     let group: ActivityGroup
-    @ViewBuilder let itemView: (DisplayItem) -> Content
+    /// item / 条目下标 / 窗口里「最新一条」的下标 —— 窗口按「只有最新一条展开」呈现。
+    @ViewBuilder let itemView: (DisplayItem, Int, Int) -> Content
 
-    @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 滚动窗口只开最新的一段：新的活动一出现，这一段就收回状态条。
+    @State private var expanded: Bool
+    /// 用户手动收放过就不再被自动状态覆盖。
+    @State private var userToggled = false
+    @State private var pinned = true
+    @State private var canScrollUp = false
+    @State private var canScrollDown = false
+    @State private var viewportHeight: CGFloat = 0
     private let tailAnchorID = "activity-fold-tail"
     private var refreshToken: String { "\(group.count):\(group.latest)" }
+
+    init(
+        group activityGroup: ActivityGroup,
+        @ViewBuilder itemView: @escaping (DisplayItem, Int, Int) -> Content
+    ) {
+        self.group = activityGroup
+        self.itemView = itemView
+        _expanded = State(initialValue: activityGroup.newest)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                expanded.toggle()
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        if !group.meta.isEmpty {
-                            Text(group.meta)
-                                .font(.system(size: 10))
-                                .foregroundColor(Theme.textMuted.opacity(0.85))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            Spacer(minLength: 0)
-                        }
-                        Text("\(group.count)")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Theme.brand)
-                            .padding(.horizontal, 5)
-                            .frame(minWidth: 18, minHeight: 18)
-                            .background(Capsule().fill(Theme.brand.opacity(0.12)))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(Theme.textMuted)
-                            .rotationEffect(.degrees(expanded ? 180 : 0))
-                            .wandMotion(value: expanded)
-                    }
-                    if group.running {
-                        Text(group.latest)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(Theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                userToggled = true
+                withAnimation(activityWindowAnimation(reduceMotion)) {
+                    expanded.toggle()
                 }
-                .padding(.horizontal, 2)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
+                if expanded { pinned = true }
+            } label: {
+                header
             }
             .buttonStyle(DesktopNavigationButtonStyle())
             .help(expanded ? "收起活动" : "展开活动")
 
             if expanded {
                 Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(group.items.enumerated()), id: \.offset) { _, item in
-                                itemView(item)
-                            }
-                            Color.clear.frame(height: 1).id(tailAnchorID)
+                window
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.surfaceElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(expanded ? Theme.brand.opacity(0.28) : Theme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .animation(activityWindowAnimation(reduceMotion), value: expanded)
+        .onChange(of: group.newest) { newest in
+            guard !userToggled else { return }
+            expanded = newest
+            if newest { pinned = true }
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if !group.meta.isEmpty {
+                    Text(group.meta)
+                        .font(.system(size: 10))
+                        .foregroundColor(Theme.textMuted.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Spacer(minLength: 0)
+                }
+                Text("\(group.count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.brand)
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Capsule().fill(Theme.brand.opacity(0.12)))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.textMuted)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+                    .wandMotion(value: expanded)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+    }
+
+    private var window: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ActivityEdgeProbe<ActivityTopEdgeKey> { $0.minY }
+                        ForEach(Array(group.items.enumerated()), id: \.offset) { index, item in
+                            itemView(item, index, group.items.count - 1)
                         }
-                        .padding(.horizontal, 2)
-                        .padding(.vertical, 6)
+                        Color.clear.frame(height: 1).id(tailAnchorID)
+                        ActivityEdgeProbe<ActivityBottomEdgeKey> { $0.maxY }
                     }
-                    .frame(height: 220)
-                    .environment(\.activityFoldCompact, true)
-                    .onAppear {
-                        proxy.scrollTo(tailAnchorID, anchor: .bottom)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                }
+                .frame(height: activityWindowHeight)
+                .environment(\.activityFoldCompact, true)
+                .coordinateSpace(name: activityWindowSpace)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { viewportHeight = geo.size.height }
+                            .onChange(of: geo.size.height) { height in viewportHeight = height }
                     }
-                    .onChange(of: refreshToken) { _ in
-                        proxy.scrollTo(tailAnchorID, anchor: .bottom)
+                )
+                .onPreferenceChange(ActivityTopEdgeKey.self) { top in
+                    canScrollUp = top < -2
+                }
+                .onPreferenceChange(ActivityBottomEdgeKey.self) { bottom in
+                    guard viewportHeight > 0 else { return }
+                    let distance = bottom - viewportHeight
+                    canScrollDown = distance > 2
+                    // 贴尾 = 还差不到一个阈值到内容底部；程序滚动到底同样算贴尾。
+                    pinned = distance <= activityTailPin
+                }
+                .onAppear {
+                    proxy.scrollTo(tailAnchorID, anchor: .bottom)
+                }
+                .onChange(of: refreshToken) { _ in
+                    guard pinned else { return }
+                    proxy.scrollTo(tailAnchorID, anchor: .bottom)
+                }
+                .overlay(alignment: .top) {
+                    if canScrollUp {
+                        windowFade(colors: [Theme.surfaceElevated, Theme.surfaceElevated.opacity(0)], height: 14)
                     }
+                }
+                .overlay(alignment: .bottom) {
+                    if canScrollDown {
+                        windowFade(colors: [Theme.surfaceElevated.opacity(0), Theme.surfaceElevated], height: 18)
+                    }
+                }
+
+                if !pinned {
+                    Button {
+                        pinned = true
+                        withAnimation(activityWindowAnimation(reduceMotion)) {
+                            proxy.scrollTo(tailAnchorID, anchor: .bottom)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .bold))
+                            Text("回到最新")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .foregroundColor(Theme.textSecondary)
+                        .padding(.leading, 7)
+                        .padding(.trailing, 9)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Theme.surfaceElevated))
+                        .overlay(Capsule().stroke(Theme.brand.opacity(0.24), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
                 }
             }
         }
+    }
+
+    private func windowFade(colors: [Color], height: CGFloat) -> some View {
+        LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
+            .frame(height: height)
+            .allowsHitTesting(false)
     }
 }
 
@@ -3186,13 +3288,6 @@ private func subagentTailRefreshToken(_ items: [DisplayItem]) -> Int {
             hasher.combine(result?.text)
             hasher.combine(result?.isError)
             hasher.combine(result?.truncated)
-        case .explorationGroup(let tools):
-            for tool in tools {
-                hasher.combine(tool.id)
-                hasher.combine(tool.result?.text)
-                hasher.combine(tool.result?.isError)
-                hasher.combine(tool.result?.truncated)
-            }
         case .plain(let block):
             switch block {
             case .text(let text, _), .thinking(let text, _):
@@ -3460,25 +3555,37 @@ private struct TurnView: View {
     @ViewBuilder private func parentBlocksView(_ blocks: [ContentBlock]) -> some View {
         let items = collapseActivityItems(
             pairToolBlocks(blocks),
-            isLastTurn: isLastTurn,
-            isResponding: isResponding
+            isLastTurn: isLastTurn
         )
         ForEach(Array(items.enumerated()), id: \.offset) { _, renderItem in
             switch renderItem {
             case .item(_, let item):
                 itemView(item)
             case .activity(let group):
-                ActivityFoldCard(group: group) { item in
-                    itemView(item)
+                ActivityFoldCard(group: group) { item, index, tailIndex in
+                    itemView(item, activityTailIndex: tailIndex, itemIndex: index)
                 }
             }
         }
     }
 
-    @ViewBuilder private func itemView(_ item: DisplayItem, showSubagentTags: Bool = true) -> some View {
+    @ViewBuilder private func itemView(
+        _ item: DisplayItem,
+        showSubagentTags: Bool = true,
+        activityTailIndex: Int? = nil,
+        itemIndex: Int = -1
+    ) -> some View {
+        // 窗口里只有最新一条默认展开，更早的条目退化成一行摘要；窗口外沿用原默认。
+        let expandDefault: (Bool) -> Bool = { configured in
+            guard let activityTailIndex else { return configured }
+            return itemIndex == activityTailIndex
+        }
         switch item {
         case .plain(let block):
-            BlockView(block: block, baseURL: baseURL, showSubagentTag: showSubagentTags)
+            BlockView(
+                block: block, baseURL: baseURL, showSubagentTag: showSubagentTags,
+                initiallyExpanded: expandDefault(false)
+            )
         case .tool(let id, let name, let description, let input, let subagent, let result):
             VStack(alignment: .leading, spacing: 4) {
                 if showSubagentTags {
@@ -3486,14 +3593,10 @@ private struct TurnView: View {
                 }
                 toolView(
                     id: id, name: name, description: description,
-                    input: input, result: result
+                    input: input, result: result,
+                    initiallyExpanded: expandDefault(false)
                 )
             }
-        case .explorationGroup(let tools):
-            ExplorationGroupCard(
-                tools: tools,
-                running: isLastTurn && isResponding && tools.contains { $0.result == nil }
-            )
         }
     }
 
@@ -3501,7 +3604,8 @@ private struct TurnView: View {
     /// AskUserQuestion → 交互卡；Edit/Write/MultiEdit → diff 卡；Bash → 终端卡；其余 → 通用卡。
     @ViewBuilder private func toolView(
         id: String, name: String, description: String?,
-        input: [String: JSONValue], result: ToolResultInfo?
+        input: [String: JSONValue], result: ToolResultInfo?,
+        initiallyExpanded: Bool = false
     ) -> some View {
         let questions = name == "AskUserQuestion" ? AskUserQuestion.parse(input: input) : []
         if !questions.isEmpty {
@@ -3515,16 +3619,26 @@ private struct TurnView: View {
             )
         } else if !(result?.images.isEmpty ?? true) {
             // 专用 diff / 终端卡不渲染图片；有图时使用可展示缩略图的通用卡。
-            ToolUseCard(name: name, description: description, input: input, result: result, baseURL: baseURL)
+            ToolUseCard(
+                name: name, description: description, input: input, result: result,
+                baseURL: baseURL, initiallyExpanded: initiallyExpanded
+            )
         } else if name == "Edit" || name == "Write" || name == "MultiEdit" {
-            DiffCard(toolName: name, input: input, result: result)
+            DiffCard(
+                toolName: name, input: input, result: result,
+                initiallyExpanded: initiallyExpanded
+            )
         } else if name == "Bash" {
-            TerminalCard(input: input, result: result, running: result == nil && isLastTurn && isResponding)
+            TerminalCard(
+                input: input, result: result,
+                running: result == nil && isLastTurn && isResponding,
+                initiallyExpanded: initiallyExpanded
+            )
         } else {
             ToolUseCard(
                 name: name, description: description, input: input,
                 result: result, running: result == nil && isLastTurn && isResponding,
-                baseURL: baseURL
+                baseURL: baseURL, initiallyExpanded: initiallyExpanded
             )
         }
     }
@@ -3549,6 +3663,8 @@ private struct BlockView: View {
     let block: ContentBlock
     var baseURL: URL?
     var showSubagentTag = true
+    /// 活动窗口里只有最新一条默认展开（其余退化成一行摘要）。
+    var initiallyExpanded = false
 
     var body: some View {
         switch block {
@@ -3566,7 +3682,8 @@ private struct BlockView: View {
                 CollapsibleSection(
                     icon: "brain",
                     title: "思考过程",
-                    tint: Theme.textSecondary
+                    tint: Theme.textSecondary,
+                    initiallyExpanded: initiallyExpanded
                 ) {
                     Text(thinking)
                         .font(.system(size: compact ? 11 : 13))
@@ -3595,7 +3712,8 @@ private struct BlockView: View {
                         CollapsibleSection(
                             icon: isError ? "xmark.octagon" : "doc.text",
                             title: isError ? "执行出错" : "执行结果",
-                            tint: isError ? Theme.danger : Theme.textSecondary
+                            tint: isError ? Theme.danger : Theme.textSecondary,
+                            initiallyExpanded: initiallyExpanded
                         ) {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 Text(text.count > 4000 ? String(text.prefix(4000)) + "\n…（已截断）" : text)
@@ -4145,7 +4263,25 @@ private struct ToolUseCard: View {
     var running = false
     var baseURL: URL?
 
-    @State private var expanded = false
+    @State private var expanded: Bool
+
+    init(
+        name: String,
+        description: String?,
+        input: [String: JSONValue],
+        result: ToolResultInfo? = nil,
+        running: Bool = false,
+        baseURL: URL? = nil,
+        initiallyExpanded: Bool = false
+    ) {
+        self.name = name
+        self.description = description
+        self.input = input
+        self.result = result
+        self.running = running
+        self.baseURL = baseURL
+        _expanded = State(initialValue: initiallyExpanded)
+    }
 
     private var isError: Bool { result?.isError == true }
     private var isSuccess: Bool { result != nil && !isError }
@@ -4319,7 +4455,21 @@ private struct CollapsibleSection<Content: View>: View {
     let tint: Color
     @ViewBuilder let content: () -> Content
 
-    @State private var expanded = false
+    @State private var expanded: Bool
+
+    init(
+        icon: String,
+        title: String,
+        tint: Color,
+        initiallyExpanded: Bool = false,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.icon = icon
+        self.title = title
+        self.tint = tint
+        self.content = content
+        _expanded = State(initialValue: initiallyExpanded)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -4667,8 +4817,20 @@ private struct DiffCard: View {
     let input: [String: JSONValue]
     let result: ToolResultInfo?
 
-    @State private var expanded = false
+    @State private var expanded: Bool
     @State private var initialized = false
+
+    init(
+        toolName: String,
+        input: [String: JSONValue],
+        result: ToolResultInfo?,
+        initiallyExpanded: Bool = false
+    ) {
+        self.toolName = toolName
+        self.input = input
+        self.result = result
+        _expanded = State(initialValue: initiallyExpanded)
+    }
 
     private var path: String {
         input["file_path"]?.stringValue ?? input["path"]?.stringValue ?? ""
@@ -4806,7 +4968,19 @@ private struct TerminalCard: View {
     let result: ToolResultInfo?
     var running = false
 
-    @State private var expanded = false
+    @State private var expanded: Bool
+
+    init(
+        input: [String: JSONValue],
+        result: ToolResultInfo?,
+        running: Bool = false,
+        initiallyExpanded: Bool = false
+    ) {
+        self.input = input
+        self.result = result
+        self.running = running
+        _expanded = State(initialValue: initiallyExpanded)
+    }
 
     private var command: String {
         input["command"]?.stringValue ?? input["cmd"]?.stringValue ?? ""

@@ -30,7 +30,13 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertTrue(TaskListPresentation.isDirectoryExpanded(userCollapsed: false, directoryCount: 1))
         XCTAssertFalse(TaskListPresentation.isDirectoryExpanded(userCollapsed: true, directoryCount: 2))
         XCTAssertFalse(TaskListPresentation.showsTaskSessionDisclosure(sessionCount: 0))
-        XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: true, sessionCount: 0))
+        XCTAssertFalse(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: false, sessionCount: 0))
+        XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(
+            userCollapsed: false, sessionCount: 0, isOnlyTask: true
+        ))
+        XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(
+            userCollapsed: true, sessionCount: 0, isSearching: true
+        ))
         XCTAssertFalse(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: true, sessionCount: 2))
         XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(userCollapsed: false, sessionCount: 2))
     }

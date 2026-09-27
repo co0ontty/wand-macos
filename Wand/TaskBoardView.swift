@@ -31,6 +31,8 @@ struct TaskBoardView: View {
     // 记「已收起」的状态：归档目录默认收起，其余默认展开。
     @State private var collapsedList: Set<String> = [WandBoardStatus.archived.rawValue]
     @State private var selectedId = ""
+    /// 右键「派发」只打开空的指派框，不把任务描述当成提示词发出去。
+    @State private var composeRequest: (id: String, token: UUID)?
     @State private var showCreate = false
     @State private var createStatus = WandBoardStatus.todo.rawValue
     @State private var busyId = ""
@@ -320,6 +322,7 @@ struct TaskBoardView: View {
                 milestones: milestones,
                 catalog: catalog,
                 busy: busyId == task.id,
+                composeToken: composeRequest?.id == task.id ? composeRequest?.token : nil,
                 onPatch: { body in await patchTask(task, body) },
                 onRemember: rememberAgent,
                 onDispatch: { prompt, agent in await dispatch(task, agent: agent, prompt: prompt) },
@@ -382,12 +385,8 @@ struct TaskBoardView: View {
                         Task { await patchTask(task, ["status": status]) }
                     },
                     onDispatchTask: { task in
-                        let agent = task.agent ?? lastAgent
-                        let prompt = wandBoardDropDispatchPrompt(
-                            title: task.title,
-                            description: task.description
-                        )
-                        Task { await dispatch(task, agent: agent, prompt: prompt) }
+                        selectedId = task.id
+                        composeRequest = (id: task.id, token: UUID())
                     },
                     onArchiveTask: { archiveConfirm = $0 },
                     onRestoreTask: { task in
