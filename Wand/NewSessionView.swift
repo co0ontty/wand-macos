@@ -627,9 +627,23 @@ struct NewSessionView: View {
         else { create() }
     }
 
+    /// 当前选择真正会用的模型名：`default` 哨兵换成服务端配置的默认模型，没配就是 CLI 自己的默认模型。
+    private var resolvedModelName: String {
+        wandModelDisplayName(
+            provider: draft.provider.rawValue,
+            model: draft.selectedModel,
+            models: providerModels,
+            configuredDefault: draft.serverDefaultModels.model(for: draft.provider.rawValue)
+        )
+    }
+
     private var defaultModelLabel: String {
-        let model = draft.serverDefaultModels.model(for: draft.provider.rawValue) ?? ""
-        let label = providerModels.first(where: { $0.id == model })?.label ?? model
+        let label = wandModelDisplayName(
+            provider: draft.provider.rawValue,
+            model: "",
+            models: providerModels,
+            configuredDefault: draft.serverDefaultModels.model(for: draft.provider.rawValue)
+        )
         return label.isEmpty ? "服务器默认" : "服务器默认 · \(label)"
     }
 
@@ -706,8 +720,7 @@ struct NewSessionView: View {
 
     private var selectedModelLabel: String {
         guard !draft.selectedModel.isEmpty, draft.selectedModel != "default" else {
-            let model = draft.serverDefaultModels.model(for: draft.provider.rawValue) ?? ""
-            let label = providerModels.first(where: { $0.id == model })?.label ?? model
+            let label = resolvedModelName
             return label.isEmpty ? "服务器默认" : "默认 · \(label)"
         }
         return providerModels.first(where: { $0.id == draft.selectedModel })?.label ?? draft.selectedModel
@@ -747,8 +760,8 @@ struct NewSessionView: View {
     }
 
     private var compactModelLabel: String {
-        let model = draft.selectedModel.isEmpty ? draft.serverDefaultModels.model(for: draft.provider.rawValue) ?? "" : draft.selectedModel
-        if model.isEmpty { return "默认模型" }
+        let model = resolvedModelName
+        if model.isEmpty { return "默认" }
         let label = providerModels.first(where: { $0.id == model })?.label ?? model
         return label.components(separatedBy: " · ").first?.components(separatedBy: "（").first ?? label
     }

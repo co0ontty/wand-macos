@@ -86,7 +86,8 @@ struct WandBoardDetailView: View {
                     WandBoardAgentSessionList(
                         sessions: task.sessions,
                         assigned: task.agent,
-                        onOpenSession: onOpenSession
+                        onOpenSession: onOpenSession,
+                        catalog: catalog
                     )
                     composeSection
                 }

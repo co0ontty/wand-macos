@@ -808,6 +808,46 @@ struct ModelsResponse: Decodable {
     }
 }
 
+/// 「跟随 X 默认」这种没写明模型的文案不算名字，其余去掉「（X 默认）」尾巴后就是 CLI 报出来的默认模型。
+private let wandGenericDefaultModelLabel = try! NSRegularExpression(pattern: "^跟随.*默认$")
+private let wandDefaultModelLabelTail = try! NSRegularExpression(pattern: "\\s*[（(][^（()）]*默认[^（()）]*[）)]\\s*$")
+
+/// 界面上要显示的模型名：`default` / 空值 / `nil` 是「跟随服务端默认」的哨兵值、不是模型名，
+/// 换成真正会用的那个模型：先看服务端为该 CLI 配置的默认模型，再看 CLI 自己报出来的默认项
+/// （Codex / Grok 的目录项里写了具体模型名）。三处都拿不到名字返回空串，由调用方决定兜底。
+/// 口径与 Web `wandModelDisplayName` 一致。
+func wandModelDisplayName(
+    provider: String,
+    model: String?,
+    models: [ModelInfo],
+    configuredDefault: String?
+) -> String {
+    let id = (model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    if !id.isEmpty && id != "default" { return id }
+    // 认不出的 provider（`session` / `shell` = 终端）不猜默认模型。
+    guard WandProvider(rawValue: provider) != nil else { return "" }
+    let configured = (configuredDefault ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    if !configured.isEmpty && configured != "default" { return configured }
+    let label = models.first { $0.id == "default" }?.label ?? ""
+    let range = NSRange(label.startIndex..<label.endIndex, in: label)
+    let stripped = wandDefaultModelLabelTail
+        .stringByReplacingMatches(in: label, range: range, withTemplate: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !stripped.isEmpty else { return "" }
+    let strippedRange = NSRange(stripped.startIndex..<stripped.endIndex, in: stripped)
+    return wandGenericDefaultModelLabel.firstMatch(in: stripped, range: strippedRange) == nil ? stripped : ""
+}
+
+/// 目录版：模型列表与服务端配置的默认模型都从同一个 `ModelsResponse` 取。
+func wandModelDisplayName(provider: String, model: String?, catalog: ModelsResponse?) -> String {
+    wandModelDisplayName(
+        provider: provider,
+        model: model,
+        models: catalog?.models(for: provider) ?? [],
+        configuredDefault: catalog?.defaultModelId(for: provider)
+    )
+}
+
 struct ProviderDefaultModels: Decodable {
     let claude: String?
     let codex: String?

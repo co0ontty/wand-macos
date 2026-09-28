@@ -413,6 +413,8 @@ struct WandBoardAgentSessionList: View {
     let sessions: [WandBoardTaskSession]
     let assigned: WandBoardTaskAgent?
     let onOpenSession: (String) -> Void
+    /// 模型目录：把 `default` 哨兵换成服务端默认模型的名字；没加载到就只省掉模型段。
+    var catalog: ModelsResponse?
 
     var body: some View {
         let groups = wandBoardSessionGroups(sessions: sessions, assigned: assigned)
@@ -433,7 +435,7 @@ struct WandBoardAgentSessionList: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundColor(Theme.textPrimary)
                             if let agent = group.agent {
-                                Text(wandBoardAgentSummary(agent))
+                                Text(wandBoardAgentSummary(agent, catalog))
                                     .font(.system(size: 11))
                                     .foregroundColor(Theme.textMuted)
                                     .lineLimit(1)
@@ -462,7 +464,7 @@ struct WandBoardAgentSessionList: View {
                                             .foregroundColor(Theme.textPrimary)
                                             .lineLimit(1)
                                         Spacer(minLength: 8)
-                                        Text(wandBoardSessionSummary(session))
+                                        Text(wandBoardSessionSummary(session, catalog))
                                             .font(.system(size: 11))
                                             .foregroundColor(Theme.textMuted)
                                             .lineLimit(1)
@@ -484,14 +486,20 @@ struct WandBoardAgentSessionList: View {
     }
 }
 
-func wandBoardAgentSummary(_ agent: WandBoardTaskAgent) -> String {
-    let model = agent.model == "default" || agent.model.isEmpty ? "默认模型" : agent.model
-    return "\(model) · \(wandBoardEffortLabel(agent.thinkingEffort)) · \(WandBoardAgentMode.label(forValue: agent.mode))"
+/// 组头的「模型 · 思考深度 · 工作模式」：`default` 哨兵换成服务端默认模型的名字。
+func wandBoardAgentSummary(_ agent: WandBoardTaskAgent, _ catalog: ModelsResponse? = nil) -> String {
+    let model = wandModelDisplayName(provider: agent.provider, model: agent.model, catalog: catalog)
+    return [model.isEmpty ? nil : model,
+            wandBoardEffortLabel(agent.thinkingEffort),
+            WandBoardAgentMode.label(forValue: agent.mode)].compactMap { $0 }.joined(separator: " · ")
 }
 
-func wandBoardSessionSummary(_ session: WandBoardTaskSession) -> String {
-    let model = session.model.isEmpty || session.model == "default" ? nil : session.model
-    return [model, wandBoardSessionStatusLabel(session.status)].compactMap { $0 }.joined(separator: " · ")
+/// 会话行的「模型 · 状态」：同上，拿不到模型名就只留状态，不写「默认模型」。
+func wandBoardSessionSummary(_ session: WandBoardTaskSession, _ catalog: ModelsResponse? = nil) -> String {
+    let model = wandModelDisplayName(provider: session.provider, model: session.model, catalog: catalog)
+    return [model.isEmpty ? nil : model, wandBoardSessionStatusLabel(session.status)]
+        .compactMap { $0 }
+        .joined(separator: " · ")
 }
 
 /// 列表 / 详情里成行的可点区域：hover 时给一层浅底。

@@ -729,9 +729,10 @@ struct ChatView: View {
     }
 
     private var shortModelLabel: String {
-        guard let selected = store.selectedModel, !selected.isEmpty, selected != "default" else {
-            return "默认"
-        }
+        // 哨兵解析出的具体模型名走下面同一套压缩，所以「默认 opus」和显式选 opus 长得一样。
+        let picked = store.selectedModel
+        let selected = (picked?.isEmpty == false && picked != "default") ? picked! : resolvedModelName
+        guard !selected.isEmpty else { return "默认" }
         let full = store.availableModels.first(where: { $0.id == selected })?.label ?? selected
         let base: String
         if let idx = full.firstIndex(where: { $0 == "（" || $0 == "(" }) {
@@ -782,14 +783,30 @@ struct ChatView: View {
         }
     }
 
+    /// 当前会话真正会用的模型名：`default` 哨兵换成服务端配置的默认模型（没配就是 CLI 自己的默认模型）。
+    private var resolvedModelName: String {
+        wandModelDisplayName(
+            provider: store.snapshot?.provider ?? "claude",
+            model: store.selectedModel,
+            models: store.availableModels,
+            configuredDefault: store.defaultModel
+        )
+    }
+
     private var filteredPanelModels: [ModelInfo] {
         store.availableModels.filter { model in
             model.id != "default" && matchesModelKeyword(modelQuery, id: model.id, label: model.label)
         }
     }
 
+    /// 模型菜单里「跟随默认」那一行：写具体模型名（目录里有完整标签就用标签），解析不到才退回「默认」。
+    private var defaultModelRowLabel: String {
+        guard !resolvedModelName.isEmpty else { return "默认" }
+        return store.availableModels.first { $0.id == resolvedModelName }?.label ?? resolvedModelName
+    }
+
     private var defaultModelMatchesQuery: Bool {
-        matchesModelKeyword(modelQuery, id: "", label: "默认")
+        matchesModelKeyword(modelQuery, id: "", label: defaultModelRowLabel)
     }
 
     private var modelThinkingPanel: some View {
@@ -801,7 +818,7 @@ struct ChatView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if defaultModelMatchesQuery {
-                        modelButton(id: nil, label: "默认")
+                        modelButton(id: nil, label: defaultModelRowLabel)
                     }
                     ForEach(filteredPanelModels) { model in
                         modelButton(id: model.id, label: model.label)
