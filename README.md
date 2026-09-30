@@ -50,7 +50,7 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 - 新建：`POST /api/structured-sessions` 或 `POST /api/commands`
 - 输入与权限：`POST /api/sessions/:id/input` 及 escalation / permission 端点
 - 实时更新：连接 `/ws`，订阅会话并合并 `init` / `output` / `status` / `ended`
-- PTY：SwiftTerm AppKit 原生终端直接发送 `pty_input` / `pty_resize` / `pty_ack`，不加载网页；详见 [原生终端](docs/native-terminal.md)
+- PTY：SwiftTerm AppKit 原生终端直接发送 `pty_input` / `pty_resize` / `pty_ack`，不加载网页
 - 终端快捷键：⌘L 聚焦、⌘F 查找回滚、⌘± 缩放、⌘0 重置、⌘K 仅清除本地回滚历史
 
 ## 本地构建（仅 macOS）
@@ -59,6 +59,9 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 ./build.sh 1.16.0
 # 产物：build/Wand.app + ZIP + DMG + wand-v1.16.0.update.json
 ```
+
+单测：`xcodebuild test` 在 testmanagerd 不可达的环境会失败，此时用
+`./scripts/run-tests.sh [测试名过滤]`（先 `build-for-testing`，再把测试 bundle 注入宿主 App 运行 XCTest）。
 
 要求：
 
@@ -183,7 +186,6 @@ macos/Wand/
 连接信息从 `~/.wand/acceptance-connection.json` 读取，遵循父仓库 `AGENTS.md`；
 连接码不得写入仓库、提交、日志或截图。独立环境仅用于单元测试和开发期检查，不能代替最终验收。
 此前的桌面和首页截图属于历史记录，不能作为当前连续侧栏的验收证据。
-此前连续侧栏验收时指定 HTTPS 入口拒绝连接；本轮原生终端已使用同一私密连接文件指定的服务完成接口与窗口验收，详见 [原生终端验收](docs/native-terminal-2026-09-22/verification.md)。系统剪贴板和完整中文候选交互仍待正常桌面手工复核。
+此前连续侧栏验收时指定 HTTPS 入口拒绝连接；原生终端已使用同一私密连接文件指定的服务完成接口与窗口验收。系统剪贴板和完整中文候选交互仍待正常桌面手工复核。
 
-附加功能清理见 [清理验收记录](docs/desktop-cleanup-2026-09-21/verification.md)；
-连续侧栏的构建与实际检查结果另记于 [连续侧栏验收记录](docs/desktop-continuous-sidebar-2026-09-21/verification.md)。
+历史验收记录（原生终端、桌面清理、连续侧栏）已随仓库文档整理一并移除；本节与源码是当前约定。
