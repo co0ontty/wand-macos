@@ -742,8 +742,7 @@ struct WorkspaceListView: View {
             title: session.title,
             providerLabel: session.providerLabel,
             cwd: session.cwd,
-            index: index,
-            parentNames: [groupName(workspace), summary.name]
+            index: index
         )
         let activity = treeSessionActivity(session)
         let emphasized = selected || activity != nil
@@ -1099,8 +1098,7 @@ struct WorkspaceListView: View {
             title: session.title,
             providerLabel: session.providerLabel,
             cwd: session.cwd,
-            index: 0,
-            parentNames: []
+            index: 0
         )
     }
 
