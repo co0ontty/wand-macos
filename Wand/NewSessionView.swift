@@ -39,8 +39,9 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     @Published var grokModels: [ModelInfo] = []
     @Published var qoderModels: [ModelInfo] = []
     @Published var piModels: [ModelInfo] = []
+    @Published var geminiModels: [ModelInfo] = []
     @Published var serverDefaultModels = ProviderDefaultModels(
-        claude: nil, codex: nil, opencode: nil, grok: nil, qoder: nil, pi: nil
+        claude: nil, codex: nil, opencode: nil, grok: nil, qoder: nil, pi: nil, gemini: nil
     )
     @Published var destination: String
     @Published var taskName = ""
@@ -179,40 +180,9 @@ struct NewSessionView: View {
 
     private enum NewSessionInput: Hashable { case cwd }
 
-    enum Provider: String, CaseIterable, Identifiable {
-        case claude, codex, opencode, grok, qoder, pi
-        var id: String { rawValue }
-        var label: String {
-            switch self {
-            case .claude: return "Claude"
-            case .codex: return "Codex"
-            case .opencode: return "OpenCode"
-            case .grok: return "Grok"
-            case .qoder: return "Qoder"
-            case .pi: return "Pi"
-            }
-        }
-        var desc: String {
-            switch self {
-            case .claude: return "完整 Claude 会话能力"
-            case .codex: return "结构化 JSONL 或 PTY 会话"
-            case .opencode: return "OpenCode 的流式或终端会话"
-            case .grok: return "Grok Build 的流式或终端会话"
-            case .qoder: return "Qoder CLI 的流式或终端会话"
-            case .pi: return "Pi 的 JSON 或终端会话"
-            }
-        }
-        var symbol: String {
-            switch self {
-            case .claude: return "sparkle"
-            case .codex: return "command"
-            case .opencode: return "chevron.left.forwardslash.chevron.right"
-            case .grok: return "g.circle"
-            case .qoder: return "q.circle"
-            case .pi: return "p.circle"
-            }
-        }
-    }
+    /// provider 名单只保留在 `WandProvider` 一处，这里仅做别名。
+    /// 旧版本文件另建过一份枚举，Gemini 因此整体漏掉、且会被 `title` 兜底成 Claude。
+    typealias Provider = WandProvider
 
     enum SessionType: String, CaseIterable, Identifiable, Hashable {
         case structured, pty
@@ -236,6 +206,8 @@ struct NewSessionView: View {
                 return "Qoder stream-json 结构化聊天界面，支持多轮续聊和工具调用展示。"
             case (.structured, .pi):
                 return "Pi JSON 结构化聊天界面，支持续聊、思考过程和工具调用展示。"
+            case (.structured, .gemini):
+                return "Gemini stream-json 结构化聊天界面，支持多轮续聊和工具调用展示。"
             case (.pty, .codex):
                 return "Codex PTY 终端会话；terminal 是原始输出，chat 是解析后的阅读视图。"
             case (.pty, .claude):
@@ -248,6 +220,8 @@ struct NewSessionView: View {
                 return "Qoder CLI 的原始 PTY 终端会话。"
             case (.pty, .pi):
                 return "Pi TUI 的原始 PTY 终端会话。"
+            case (.pty, .gemini):
+                return "Gemini CLI 的原始 PTY 终端会话。"
             }
         }
     }
@@ -303,7 +277,8 @@ struct NewSessionView: View {
             }
         }
 
-        /// 对齐 Web getSupportedModes：Codex 只支持全权限。
+        /// 对齐 Web `getSupportedModes` / iOS `WandProvider.supportedModeIDs` /
+        /// Android `ProviderRules`：三端同一份名单，不要只在一端收紧。
         static func supported(for tool: Provider) -> Set<Self> {
             if tool == .codex { return [.fullAccess] }
             if tool == .opencode || tool == .grok || tool == .pi {
@@ -342,6 +317,21 @@ struct NewSessionView: View {
                     ? "Pi 将自动批准工具调用；支持 TUI 与 JSON 结构化会话。"
                     : "Pi 使用自身权限确认；支持 TUI 与 JSON 结构化会话。"
             }
+            if tool == .gemini {
+                // Gemini CLI 只有 --approval-mode yolo/auto_edit/default，
+                // 没有对应 .native 的开关；这里如实说明它退化成什么，
+                // 不要给用户一个「原生输出」的错觉。
+                switch self {
+                case .managed, .fullAccess:
+                    return "Gemini 以 yolo 运行，会自动批准工具调用；支持 TUI 与 stream-json 结构化会话。"
+                case .autoEdit:
+                    return "Gemini 以 auto_edit 运行，自动确认文件修改，其他操作保持 CLI 的权限流程。"
+                case .native:
+                    return "Gemini 没有独立的原生输出开关，这一档与「标准」等价（--approval-mode default）。"
+                default:
+                    return "Gemini 使用自身权限确认；支持 TUI 与 stream-json 结构化会话。"
+                }
+            }
             switch self {
             case .fullAccess:
                 return "自动确认权限请求与高权限操作，适合你确认环境安全后的连续修改。"
@@ -365,6 +355,7 @@ struct NewSessionView: View {
         case .grok: draft.grokModels
         case .qoder: draft.qoderModels
         case .pi: draft.piModels
+        case .gemini: draft.geminiModels
         }
     }
 
@@ -509,12 +500,12 @@ struct NewSessionView: View {
         Button { showProviderPicker = true } label: {
             HStack(spacing: 6) {
                 BrandLogo(provider: draft.provider.rawValue, color: Theme.textPrimary).frame(width: 13, height: 13)
-                Text(draft.provider.label).font(.system(size: 12, weight: .medium))
+                Text(draft.provider.title).font(.system(size: 12, weight: .medium))
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
             }.foregroundColor(Theme.textSecondary).padding(.horizontal, 8).frame(height: 32)
         }
         .buttonStyle(DesktopNavigationButtonStyle()).help("选择工具")
-        .accessibilityLabel("工具：\(draft.provider.label)")
+        .accessibilityLabel("工具：\(draft.provider.title)")
         .popover(isPresented: $showProviderPicker, arrowEdge: .bottom) { providerPicker.padding(8).frame(width: 210) }
     }
 
@@ -685,7 +676,7 @@ struct NewSessionView: View {
                 } label: {
                     HStack(spacing: 10) {
                         BrandLogo(provider: tool.rawValue, color: Theme.textPrimary).frame(width: 16, height: 16)
-                        Text(tool.label).font(.system(size: 13))
+                        Text(tool.title).font(.system(size: 13))
                         Spacer()
                         if draft.provider == tool { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)) }
                     }.foregroundColor(Theme.textPrimary).padding(.horizontal, 10).frame(height: 34)
@@ -1004,7 +995,8 @@ struct NewSessionView: View {
             draft.serverDefaultModels = config.defaultModels ?? ProviderDefaultModels(
                 claude: config.defaultModel, codex: config.defaultCodexModel,
                 opencode: config.defaultOpenCodeModel, grok: config.defaultGrokModel,
-                qoder: config.defaultQoderModel, pi: config.defaultPiModel
+                qoder: config.defaultQoderModel, pi: config.defaultPiModel,
+                gemini: config.defaultGeminiModel
             )
             if let models {
                 draft.availableModels = models.models
@@ -1013,6 +1005,7 @@ struct NewSessionView: View {
                 draft.grokModels = models.grokModels ?? []
                 draft.qoderModels = models.qoderModels ?? []
                 draft.piModels = models.piModels ?? []
+                draft.geminiModels = models.geminiModels ?? []
                 if let defaults = models.defaultModels { draft.serverDefaultModels = defaults }
             }
             draft.recentPaths = recent ?? []

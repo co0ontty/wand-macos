@@ -37,6 +37,7 @@ struct GitQuickCommitView: View {
     @State private var prefillNotice: String?
 
     // 提交
+    @State private var archiveRelatedTasks = false
     @State private var committing = false
     @State private var submoduleIntent = false
     @State private var errorMessage: String?
@@ -284,6 +285,18 @@ struct GitQuickCommitView: View {
             .frame(height: 64)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.lg).fill(Theme.surface))
         } else {
+            Toggle(isOn: $archiveRelatedTasks) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("归档当前任务")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("提交成功后把这个会话的任务移出列表。其它进行中的任务不动。")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
+                }
+            }
+            .disabled(!hasChanges || committing)
+            .tint(Theme.brand)
+
             standardCommitActions
 
             DisclosureGroup(isExpanded: $showMagneticComposer) {
@@ -595,6 +608,7 @@ struct GitQuickCommitView: View {
     private func performCommit(action: String, includeSubmodule: Bool, message msg: String, tag userTag: String) {
         let push = action == "commit-push" || action == "commit-tag-push"
         let before = status
+        let archiveIntent = archiveRelatedTasks
 
         committing = true
         onRunning()
@@ -609,8 +623,13 @@ struct GitQuickCommitView: View {
                     tag: userTag.isEmpty ? nil : userTag,
                     autoTag: false,
                     push: push,
-                    submodule: includeSubmodule
+                    submodule: includeSubmodule,
+                    archiveRelatedTasks: archiveIntent
                 )
+                if !(r.archivedTaskIds ?? []).isEmpty {
+                    NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+                }
+                let archiveNote = archiveResultNote(requested: archiveIntent, result: r)
                 let o = CommitOutcome(
                     includeSubmodule: includeSubmodule,
                     pushed: r.pushed == true,
@@ -624,12 +643,12 @@ struct GitQuickCommitView: View {
                     submoduleCount: r.submoduleCommits?.count ?? 0
                 )
                 if o.pushError == nil {
-                    onCompleted(summaryText(o) + (push ? "，已推送" : ""))
+                    onCompleted(summaryText(o) + (push ? "，已推送" : "") + archiveNote)
                     // 请求继续在后台收尾；用户无需停在模态层等待网络往返。
                     dismiss()
                 } else {
                     outcome = o
-                    onFailed("推送失败：\(o.pushError ?? "未知错误")")
+                    onFailed("推送失败：\(o.pushError ?? "未知错误")" + archiveNote)
                     await loadStatus(force: true)
                 }
             } catch {
@@ -698,6 +717,13 @@ struct GitQuickCommitView: View {
             }
             pushing = false
         }
+    }
+
+    private func archiveResultNote(requested: Bool, result: QuickCommitResult) -> String {
+        guard requested else { return "" }
+        if let error = result.archiveError, !error.isEmpty { return "，归档失败：\(error)" }
+        let count = result.archivedTaskIds?.count ?? 0
+        return count > 0 ? "，已归档 \(count) 个关联任务" : "，没有可归档的关联任务"
     }
 
     private func summaryText(_ outcome: CommitOutcome) -> String {

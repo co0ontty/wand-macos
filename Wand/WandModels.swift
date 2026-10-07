@@ -73,6 +73,8 @@ enum JSONValue: Decodable {
 // MARK: - Provider
 
 /// Wand 支持的 CLI provider。工作区 / 任务窗口与 iOS 共用同一套归一规则。
+/// 名单与顺序对齐服务端 `src/provider-catalog.ts` 的 `SESSION_PROVIDERS`：
+/// 新增 provider 只改这一处，不要在视图里另建一份枚举。
 enum WandProvider: String, CaseIterable, Identifiable, Codable {
     case claude
     case codex
@@ -80,26 +82,44 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
     case grok
     case qoder
     case pi
+    case gemini
 
     var id: String { rawValue }
+
+    /// 历史别名 → 规范 id。与服务端 `src/provider-catalog.ts` 的别名表一致，
+    /// 归一与展示都从这里读，别在视图里另写一份 alias switch。
+    private static let aliases: [String: WandProvider] = [
+        "open-code": .opencode,
+        "open_code": .opencode,
+        "qodercli": .qoder,
+        "pi-cli": .pi,
+        "pi-cli-json": .pi,
+        "gemini-cli": .gemini,
+        "gemini-cli-json": .gemini,
+    ]
+
+    /// 归一后的规范 provider id；未知或空值返回 nil。
+    /// 需要区分「就是 Claude / Pi」和「不认识」时用这个，别用 `normalizing:`。
+    static func normalizedID(_ rawProvider: String?) -> String? {
+        let raw = rawProvider?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard !raw.isEmpty else { return nil }
+        if let known = allCases.first(where: { $0.rawValue == raw }) {
+            return known.rawValue
+        }
+        return aliases[raw]?.rawValue
+    }
 
     init(normalizing value: String?) {
         let raw = value?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
-        switch raw {
-        case Self.codex.rawValue:
-            self = .codex
-        case Self.opencode.rawValue, "open-code", "open_code":
-            self = .opencode
-        case Self.grok.rawValue:
-            self = .grok
-        case Self.qoder.rawValue, "qodercli":
-            self = .qoder
-        case Self.pi.rawValue, "pi-cli", "pi-cli-json":
-            self = .pi
-        default:
-            self = .claude
+        if let known = Self.allCases.first(where: { $0.rawValue == raw }) {
+            self = known
+        } else {
+            // 与服务端默认 provider 一致：认不出的历史值按 Claude 处理。
+            self = Self.aliases[raw] ?? .claude
         }
     }
 
@@ -111,6 +131,7 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
         case .grok: return "Grok"
         case .qoder: return "Qoder"
         case .pi: return "Pi"
+        case .gemini: return "Gemini"
         }
     }
 
@@ -122,7 +143,18 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
         case .grok: return "grok-cli-headless"
         case .qoder: return "qoder-cli-print"
         case .pi: return "pi-cli-json"
+        case .gemini: return "gemini-cli-json"
         }
+    }
+
+    /// 服务端 `defaultProvider` / 会话 `provider` 是裸字符串；这里只做展示，
+    /// 不把未知 provider 伪装成已知的一个（错标比回退更糟）。
+    static func title(for rawProvider: String?) -> String {
+        guard let id = normalizedID(rawProvider) else {
+            let raw = rawProvider?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return raw.isEmpty ? claude.title : raw
+        }
+        return WandProvider(rawValue: id)?.title ?? claude.title
     }
 }
 
@@ -409,6 +441,11 @@ struct SessionSnapshot: Decodable, Identifiable {
     let startedAt: String?
     let endedAt: String?
     let archived: Bool?
+    let archivedAt: String?
+    /// 完成代次：由 storage 持有，runner 的 checkpoint 不得回写。
+    /// 「刚完成」= 完成代次 > 已查看代次，是纯展示态，不改 idle/running/exited。
+    let completionRevision: Int?
+    let viewedCompletionRevision: Int?
     let title: String?
     let description: String?
     let titleGenerating: Bool?
@@ -570,6 +607,9 @@ struct WsData: Decodable {
     let startedAt: String?
     let endedAt: String?
     let archived: Bool?
+    let archivedAt: String?
+    let completionRevision: Int?
+    let viewedCompletionRevision: Int?
     let description: String?
     let titleGenerating: Bool?
     let workspaceId: String?
@@ -768,27 +808,30 @@ struct ThinkingEffortSlider: View {
 struct ModelsResponse: Decodable {
     let models: [ModelInfo]
     let codexModels: [ModelInfo]
-    /// OpenCode / Grok / Qoder / Pi 是服务端扩展字段；旧服务端没有时仍可创建会话，
+    /// OpenCode / Grok / Qoder / Pi / Gemini 是服务端扩展字段；旧服务端没有时仍可创建会话，
     /// 仅在模型菜单中回落到“默认”。
     let opencodeModels: [ModelInfo]?
     let grokModels: [ModelInfo]?
     let qoderModels: [ModelInfo]?
     let piModels: [ModelInfo]?
+    let geminiModels: [ModelInfo]?
     let defaultModel: String?
     let defaultCodexModel: String?
     let defaultOpenCodeModel: String?
     let defaultGrokModel: String?
     let defaultQoderModel: String?
     let defaultPiModel: String?
+    let defaultGeminiModel: String?
     let defaultModels: ProviderDefaultModels?
 
     func models(for provider: String) -> [ModelInfo] {
-        switch provider {
-        case "codex": return codexModels
-        case "opencode": return opencodeModels ?? []
-        case "grok": return grokModels ?? []
-        case "qoder": return qoderModels ?? []
-        case "pi": return piModels ?? []
+        switch WandProvider.normalizedID(provider) {
+        case WandProvider.codex.rawValue: return codexModels
+        case WandProvider.opencode.rawValue: return opencodeModels ?? []
+        case WandProvider.grok.rawValue: return grokModels ?? []
+        case WandProvider.qoder.rawValue: return qoderModels ?? []
+        case WandProvider.pi.rawValue: return piModels ?? []
+        case WandProvider.gemini.rawValue: return geminiModels ?? []
         default: return models
         }
     }
@@ -797,12 +840,13 @@ struct ModelsResponse: Decodable {
         if let configured = defaultModels?.model(for: provider), !configured.isEmpty {
             return configured
         }
-        switch provider {
-        case "codex": return defaultCodexModel ?? ""
-        case "opencode": return defaultOpenCodeModel ?? ""
-        case "grok": return defaultGrokModel ?? ""
-        case "qoder": return defaultQoderModel ?? ""
-        case "pi": return defaultPiModel ?? ""
+        switch WandProvider.normalizedID(provider) {
+        case WandProvider.codex.rawValue: return defaultCodexModel ?? ""
+        case WandProvider.opencode.rawValue: return defaultOpenCodeModel ?? ""
+        case WandProvider.grok.rawValue: return defaultGrokModel ?? ""
+        case WandProvider.qoder.rawValue: return defaultQoderModel ?? ""
+        case WandProvider.pi.rawValue: return defaultPiModel ?? ""
+        case WandProvider.gemini.rawValue: return defaultGeminiModel ?? ""
         default: return defaultModel ?? ""
         }
     }
@@ -855,14 +899,16 @@ struct ProviderDefaultModels: Decodable {
     let grok: String?
     let qoder: String?
     let pi: String?
+    let gemini: String?
 
     func model(for provider: String) -> String? {
-        switch provider {
-        case "codex": return codex
-        case "opencode": return opencode
-        case "grok": return grok
-        case "qoder": return qoder
-        case "pi": return pi
+        switch WandProvider.normalizedID(provider) {
+        case WandProvider.codex.rawValue: return codex
+        case WandProvider.opencode.rawValue: return opencode
+        case WandProvider.grok.rawValue: return grok
+        case WandProvider.qoder.rawValue: return qoder
+        case WandProvider.pi.rawValue: return pi
+        case WandProvider.gemini.rawValue: return gemini
         default: return claude
         }
     }
@@ -941,6 +987,7 @@ struct ServerConfigInfo: Decodable {
     let defaultGrokModel: String?
     let defaultQoderModel: String?
     let defaultPiModel: String?
+    let defaultGeminiModel: String?
     let defaultModels: ProviderDefaultModels?
     let defaultThinkingEffort: String?
     let currentVersion: String?
@@ -1030,6 +1077,8 @@ struct QuickCommitResult: Decodable {
     let pushed: Bool?
     let pushError: String?
     let submoduleCommits: [SubmoduleCommit]?
+    let archivedTaskIds: [String]?
+    let archiveError: String?
 }
 
 // MARK: - Session activity (align Web ptyTurnActive)

@@ -511,13 +511,15 @@ final class WandAPI {
         tag: String?,
         autoTag: Bool,
         push: Bool,
-        submodule: Bool
+        submodule: Bool,
+        archiveRelatedTasks: Bool = false
     ) async throws -> QuickCommitResult {
         var body: [String: Any] = [
             "autoMessage": customMessage == nil,
             "autoTag": autoTag,
             "push": push,
             "submodule": submodule,
+            "archiveRelatedTasks": archiveRelatedTasks,
         ]
         if let customMessage { body["customMessage"] = customMessage }
         if let tag, !tag.isEmpty { body["tag"] = tag }
@@ -759,6 +761,7 @@ final class WandAPI {
             case "grok": body["defaultGrokModel"] = model
             case "qoder": body["defaultQoderModel"] = model
             case "pi": body["defaultPiModel"] = model
+            case "gemini": body["defaultGeminiModel"] = model
             default: body["defaultModel"] = model
             }
         }

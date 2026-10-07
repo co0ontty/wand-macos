@@ -200,6 +200,43 @@ extension WandAPI {
         return response.deleted ?? ids.count
     }
 
+    /// 归档 / 恢复会话。归档是软标记：不杀进程、不删历史，也不改任务归属；
+    /// 服务端返回仍然失败的 ID，调用方据此保留原选择而不是谎报成功。
+    func batchArchiveWorkspaceSessions(sessionIds: [String], archived: Bool) async throws -> [String] {
+        let ids = Array(Set(sessionIds.filter { !$0.isEmpty }))
+        guard !ids.isEmpty else { return [] }
+        let response = try await request(
+            SessionBatchArchiveResponse.self,
+            method: "POST",
+            path: "/api/sessions/batch-archive",
+            body: ["sessionIds": ids, "archived": archived]
+        )
+        return response.failed ?? []
+    }
+
+    /// 确认「这一代完成结果已经在屏幕上」。只有用户明确打开的会话才调用；
+    /// 自动选中 / 列表刷新 / 重连都不算，否则未读提示会被后台轮询吃掉。
+    func markSessionCompletionViewed(
+        sessionId: String,
+        completionRevision: Int
+    ) async throws -> SessionCompletionResponse {
+        let id = percentEncodePathComponent(sessionId)
+        return try await request(
+            SessionCompletionResponse.self,
+            method: "POST",
+            path: "/api/sessions/\(id)/completion/view",
+            body: ["completionRevision": completionRevision]
+        )
+    }
+
+    func archiveWorkspaceSession(sessionId: String, archived: Bool) async throws {
+        let id = percentEncodePathComponent(sessionId)
+        _ = try await requestData(
+            method: "POST",
+            path: "/api/sessions/\(id)/\(archived ? "archive" : "unarchive")"
+        )
+    }
+
     func getWorkspaceTask(taskId: String) async throws -> WorkspaceTaskDetail {
         let id = percentEncodePathComponent(taskId)
         return try await request(

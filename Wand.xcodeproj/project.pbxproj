@@ -62,9 +62,11 @@
 		D7000000000000000000A002 /* DesktopWelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B002 /* DesktopWelcomeView.swift */; };
 		D7000000000000000000A101 /* DesktopConversationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B101 /* DesktopConversationTests.swift */; };
 		D7000000000000000000A102 /* DesktopHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B102 /* DesktopHistoryTests.swift */; };
+		D7000000000000000000A1D1 /* DesktopSubagentDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B1D1 /* DesktopSubagentDispatchTests.swift */; };
 		D7000000000000000000A005 /* SessionSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B005 /* SessionSidebarView.swift */; };
 		D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B103 /* DesktopLifecycleTests.swift */; };
 		D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B104 /* GitStatusPresentationTests.swift */; };
+		D7000000000000000000A105 /* ProviderCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B105 /* ProviderCatalogTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -136,9 +138,11 @@
 		D7000000000000000000B002 /* DesktopWelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWelcomeView.swift; sourceTree = "<group>"; };
 		D7000000000000000000B101 /* DesktopConversationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopConversationTests.swift; sourceTree = "<group>"; };
 		D7000000000000000000B102 /* DesktopHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopHistoryTests.swift; sourceTree = "<group>"; };
+		D7000000000000000000B1D1 /* DesktopSubagentDispatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopSubagentDispatchTests.swift; sourceTree = "<group>"; };
 		D7000000000000000000B005 /* SessionSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSidebarView.swift; sourceTree = "<group>"; };
 		D7000000000000000000B103 /* DesktopLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopLifecycleTests.swift; sourceTree = "<group>"; };
 		D7000000000000000000B104 /* GitStatusPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusPresentationTests.swift; sourceTree = "<group>"; };
+		D7000000000000000000B105 /* ProviderCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderCatalogTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -244,9 +248,11 @@
 				E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */,
 				E500000000000000000000B4 /* TaskBoardTests.swift */,
 				D7000000000000000000B102 /* DesktopHistoryTests.swift */,
+				D7000000000000000000B1D1 /* DesktopSubagentDispatchTests.swift */,
 				D7000000000000000000B101 /* DesktopConversationTests.swift */,
 				D7000000000000000000B103 /* DesktopLifecycleTests.swift */,
 				D7000000000000000000B104 /* GitStatusPresentationTests.swift */,
+				D7000000000000000000B105 /* ProviderCatalogTests.swift */,
 				D800000000000000000000B4 /* NativeTerminalTests.swift */,
 			);
 			path = WandTests;
@@ -416,9 +422,11 @@
 				E500000000000000000000A3 /* WorkspaceTaskContractTests.swift in Sources */,
 				E500000000000000000000A4 /* TaskBoardTests.swift in Sources */,
 				D7000000000000000000A102 /* DesktopHistoryTests.swift in Sources */,
+				D7000000000000000000A1D1 /* DesktopSubagentDispatchTests.swift in Sources */,
 				D7000000000000000000A101 /* DesktopConversationTests.swift in Sources */,
 				D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */,
 				D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */,
+				D7000000000000000000A105 /* ProviderCatalogTests.swift in Sources */,
 				D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

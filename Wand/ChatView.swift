@@ -2077,7 +2077,7 @@ final class ComposerNSTextView: NSTextView {
         guard string.isEmpty, !hasMarkedText(), !placeholder.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font ?? NSFont.systemFont(ofSize: 16),
-            .foregroundColor: NSColor.placeholderTextColor
+            .foregroundColor: Theme.textPlaceholder
         ]
         let origin = NSPoint(
             x: textContainerInset.width + 1,
@@ -2646,8 +2646,16 @@ private func shouldSkipActivityItem(_ item: DisplayItem) -> Bool {
     if case .plain(.thinking(let text, _)) = item {
         return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    guard case .tool(let id, let name, _, _, let subagent, _) = item else { return false }
-    return subagent?.taskId == id && (name == "Task" || name == "Agent")
+    guard case .tool(let id, _, _, _, let subagent, _) = item else { return false }
+    return isSubagentDispatchBlock(id: id, subagent: subagent)
+}
+
+/// 派发块判据：与 iOS 同一份语义——服务端 `__subagent` 盖章是唯一来源，
+/// pi 的 workflow 派发没有 Task/Agent 名字也必须认出来，否则同一块会既进正文
+/// 活动轨迹又进子 Agent 状态坞。子 Agent 内部的普通调用 id 与 taskId 不同，不受影响。
+func isSubagentDispatchBlock(id: String, subagent: SubagentMeta?) -> Bool {
+    guard let taskId = subagent?.taskId, !taskId.isEmpty else { return false }
+    return !id.isEmpty && taskId == id
 }
 
 private func isCollapsibleActivityItem(_ item: DisplayItem) -> Bool {

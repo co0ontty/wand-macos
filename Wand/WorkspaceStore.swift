@@ -41,6 +41,9 @@ protocol WorkspaceServing: AnyObject {
     func listTaskGroups() async throws -> [TaskDirectoryGroup]
     func listTaskGroupsPage(revision: String?) async throws -> TaskGroupsPage
     func deleteWorkspaceSessions(sessionIds: [String]) async throws -> Int
+    func batchArchiveWorkspaceSessions(sessionIds: [String], archived: Bool) async throws -> [String]
+    func markSessionCompletionViewed(sessionId: String, completionRevision: Int) async throws -> SessionCompletionResponse
+    func archiveWorkspaceSession(sessionId: String, archived: Bool) async throws
     func workspaceWorktreeOverview(workspaceId: String) async throws -> WorkspaceWorktreeOverview
     func startWorktreeMergeAgent(
         workspace: Workspace,
@@ -347,6 +350,12 @@ final class WorkspaceStore: ObservableObject {
         return (workspace, creation)
     }
 
+    /// 读取该目录下所有独立 worktree 的合并候选。审查面板在勾选前先取这份快照，
+    /// 不用侧栏列表的旧状态判断「有没有可合并项」。
+    func workspaceWorktreeOverview(workspaceId: String) async throws -> WorkspaceWorktreeOverview {
+        try await api.workspaceWorktreeOverview(workspaceId: workspaceId)
+    }
+
     /// Worktree 合并：用审查结果生成任务书并启动只绑定项目的托管 Agent 会话。
     /// provider 回退：项目默认 → 服务器默认 → Claude。
     func startWorktreeMergeAgent(
@@ -405,6 +414,34 @@ final class WorkspaceStore: ObservableObject {
         if let workspace = currentWorkspace, let task = currentTask {
             await openTask(workspace: workspace, task: task, preferredSessionId: visibleSessionID)
         }
+    }
+
+    /// 归档 / 恢复会话。返回仍然失败的 ID：调用方据此保留原选择，不谎报成功。
+    /// 归档不杀进程也不删历史，这里只刷新列表投影。
+    @discardableResult
+    func archiveSessions(_ sessionIds: [String], archived: Bool) async throws -> [String] {
+        let failed = try await api.batchArchiveWorkspaceSessions(sessionIds: sessionIds, archived: archived)
+        await loadTaskGroups(force: true)
+        if let workspace = currentWorkspace, let task = currentTask {
+            await openTask(workspace: workspace, task: task, preferredSessionId: visibleSessionID)
+        }
+        return failed
+    }
+
+    /// 确认完成代次。确认后重取一次任务分组，让未读提示立刻从服务端投影里消失；
+    /// 不在客户端手工改 `taskGroups` 里的只读字段，避免两套口径。
+    /// 失败不回滚：未读提示留在原样，下次明确打开还能重试。
+    func markSessionCompletionViewed(sessionId: String, completionRevision: Int) async throws {
+        _ = try await api.markSessionCompletionViewed(
+            sessionId: sessionId,
+            completionRevision: completionRevision
+        )
+        await loadTaskGroups(force: true)
+    }
+
+    func archiveSession(_ sessionId: String, archived: Bool) async throws {
+        try await api.archiveWorkspaceSession(sessionId: sessionId, archived: archived)
+        await loadTaskGroups(force: true)
     }
 
     func clearTaskSessions(taskId: String) async throws {

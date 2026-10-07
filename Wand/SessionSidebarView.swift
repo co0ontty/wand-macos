@@ -185,6 +185,9 @@ struct SidebarColumn: View {
     @State private var deleteInProgress = false
     @State private var deletionError: String?
     @State private var sessionListRevision = ""
+    @State private var archivedSessionsCollapsed = true
+    @State private var archiveError: String?
+    @State private var archiveInProgress = false
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -194,6 +197,11 @@ struct SidebarColumn: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color.clear)
+        .alert("归档失败", isPresented: archiveErrorPresented) {
+            Button("好", role: .cancel) { archiveError = nil }
+        } message: {
+            Text(archiveError ?? "")
+        }
         .onChange(of: query) { _ in
             selectedSessionIds.removeAll()
         }
@@ -380,8 +388,69 @@ struct SidebarColumn: View {
                     }
                 }
                 .padding(.horizontal, 8)
-                .padding(.bottom, 8)
+
+                archivedStandaloneFold
+
+                Spacer(minLength: 0)
             }
+        }
+    }
+
+    /// 直属会话自己的「已归档会话」折叠区。归档不杀进程也不删历史，
+    /// 收起只是不再占用活跃列表的视线；展开后每条仍可原位恢复。
+    @ViewBuilder
+    private var archivedStandaloneFold: some View {
+        if !archivedEntries.isEmpty {
+            let open = !archivedSessionsCollapsed
+            VStack(alignment: .leading, spacing: 3) {
+                Button {
+                    archivedSessionsCollapsed.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "archivebox").font(.system(size: 10))
+                        Text("已归档会话 \(archivedEntries.count)")
+                            .font(.system(size: 11, weight: .medium))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundColor(Theme.textMuted)
+                    .padding(.horizontal, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .help(open ? "收起已归档会话" : "展开已归档会话")
+                .accessibilityLabel("已归档会话 \(archivedEntries.count) 个，\(open ? "已展开" : "已收起")")
+
+                if open {
+                    ForEach(archivedEntries) { entry in
+                        if case .session(let session) = entry {
+                            managedSessionTile(session)
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 8)
+            .wandMotion(value: archivedSessionsCollapsed, layout: true)
+        }
+    }
+
+    /// 已归档的直属会话：与 `listEntries` 用同一套搜索与排序口径，
+    /// 免得折叠区里出现「搜不到但看得见」的行。
+    private var archivedEntries: [ListEntry] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let entries = visibleArchivedSessions
+            .map(ListEntry.session)
+            .sorted { $0.sortTimestamp > $1.sortTimestamp }
+        guard !needle.isEmpty else { return entries }
+        return entries.filter { entry in
+            guard case .session(let session) = entry else { return false }
+            return session.displayTitle.lowercased().contains(needle)
+                || (session.cwd?.lowercased().contains(needle) ?? false)
+                || (session.provider?.lowercased().contains(needle) ?? false)
         }
     }
 
@@ -426,6 +495,15 @@ struct SidebarColumn: View {
             } label: {
                 Label("多选", systemImage: "checkmark.circle")
             }
+            Button {
+                Task { await setArchived(!(session.archived == true), sessions: [session]) }
+            } label: {
+                Label(
+                    session.archived == true ? "恢复会话" : "归档会话",
+                    systemImage: session.archived == true ? "tray.and.arrow.up" : "archivebox"
+                )
+            }
+            .disabled(archiveInProgress)
             Button(role: .destructive) {
                 requestSessionDeletion(session)
             } label: {
@@ -459,12 +537,50 @@ struct SidebarColumn: View {
 
     // MARK: - 数据
 
-    private var visibleSessions: [SessionSnapshot] {
-        TaskListPresentation.standaloneSessions(
+    /// 直属会话按归档拆一次：归档项收进本层自己的折叠区，活动列表只留活跃会话。
+    private var standaloneSplit: (active: [SessionSnapshot], archived: [SessionSnapshot]) {
+        var active: [SessionSnapshot] = []
+        var archived: [SessionSnapshot] = []
+        for session in TaskListPresentation.standaloneSessions(
             sessions: sessions,
             groups: taskGroups,
             groupsAvailable: taskGroupsAvailable
+        ) {
+            if session.archived == true { archived.append(session) } else { active.append(session) }
+        }
+        return (active, archived)
+    }
+
+    private var archiveErrorPresented: Binding<Bool> {
+        Binding(
+            get: { archiveError != nil },
+            set: { presented in
+                if !presented { archiveError = nil }
+            }
         )
+    }
+
+    private var visibleSessions: [SessionSnapshot] { standaloneSplit.active }
+
+    private var visibleArchivedSessions: [SessionSnapshot] { standaloneSplit.archived }
+
+    /// 归档 / 恢复。归档是软标记：不杀进程、不删历史，也不改任务归属。
+    private func setArchived(_ archived: Bool, sessions targets: [SessionSnapshot]) async {
+        guard !targets.isEmpty, !archiveInProgress else { return }
+        archiveInProgress = true
+        defer { archiveInProgress = false }
+        do {
+            let failed = try await api.batchArchiveWorkspaceSessions(
+                sessionIds: targets.map(\.id),
+                archived: archived
+            )
+            if !failed.isEmpty {
+                archiveError = "有 \(failed.count) 个会话未能\(archived ? "归档" : "恢复")。"
+            }
+            await load(silent: true)
+        } catch {
+            archiveError = "无法\(archived ? "归档" : "恢复")会话：\(error.localizedDescription)"
+        }
     }
 
     private var listedSessions: [SessionSnapshot] {
@@ -733,6 +849,11 @@ struct SessionTile: View {
                 .contains(status)
     }
 
+    /// 「刚完成」时不再并排显示状态点与时间，只保留完成提示 + 目录。
+    private var showsStatusRow: Bool {
+        isJustCompleted || prominentStatus || !recentTime.isEmpty
+    }
+
     private var statusLabel: String {
         if session.hasPendingPermission { return "等待授权" }
         if session.isResponding { return "思考中" }
@@ -762,14 +883,24 @@ struct SessionTile: View {
 
     private var subtitle: String {
         if let folderName { return folderName }
-        switch provider {
-        case "codex": return "Codex"
-        case "grok": return "Grok"
-        case "opencode": return "OpenCode"
-        case "qoder": return "Qoder"
-        case "pi": return "Pi"
-        default: return "Claude"
-        }
+        // 不用 default→Claude 的兜底：认不出的 provider 显示原值，
+        // 把 Gemini 说成 Claude 比显示原始 id 更糟。
+        return WandProvider.title(for: session.provider)
+    }
+
+    /// 完成但还没被明确打开看过；纯展示态，不改 runner 生命周期。
+    private var isJustCompleted: Bool {
+        SessionCompletion.isJustCompleted(
+            completion: session.completionRevision,
+            viewed: session.viewedCompletionRevision,
+            status: session.status,
+            archived: session.archived,
+            ptyBusy: session.ptyBusy,
+            inFlight: session.structuredState?.inFlight,
+            permissionBlocked: session.permissionBlocked,
+            pendingEscalation: session.pendingEscalation != nil,
+            providerCliExitCode: session.providerCliExitCode
+        )
     }
 
     private var recentTime: String {
@@ -799,7 +930,16 @@ struct SessionTile: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 5) {
-                    if prominentStatus {
+                    if isJustCompleted {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(Theme.success)
+                        Text("刚完成")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Theme.success)
+                            .lineLimit(1)
+                            .help("已完成，还没查看")
+                    } else if prominentStatus {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                         Text(statusLabel)
                             .font(.system(size: 11, weight: .medium))
@@ -814,7 +954,7 @@ struct SessionTile: View {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                     }
                     if let folderName {
-                        if prominentStatus || !recentTime.isEmpty {
+                        if showsStatusRow {
                             Text("·")
                                 .foregroundColor(Theme.textMuted.opacity(0.7))
                         }
@@ -823,7 +963,7 @@ struct SessionTile: View {
                             .foregroundColor(Theme.textMuted)
                             .lineLimit(1)
                             .help(session.cwd ?? folderName)
-                    } else if !prominentStatus {
+                    } else if !prominentStatus && !isJustCompleted {
                         Text(statusLabel)
                             .font(.system(size: 11))
                             .foregroundColor(Theme.textMuted)

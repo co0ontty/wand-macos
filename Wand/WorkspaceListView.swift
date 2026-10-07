@@ -52,6 +52,21 @@ struct WorkspaceListView: View {
     @State private var selectedTaskIds = Set<String>()
     @State private var selectedSessionIds = Set<String>()
     @State private var pendingManagedDelete: TaskListPresentation.ManageSelection?
+    @State private var renameWorkspaceTarget: TaskDirectoryGroup?
+    @State private var renameWorkspaceDraft = ""
+    @State private var renameWorkspaceError: String?
+    @State private var renameWorkspaceBusy = false
+    @State private var deleteWorkspaceTarget: TaskDirectoryGroup?
+    @State private var deleteWorkspaceBusy = false
+    @State private var deleteWorkspaceError: String?
+    @State private var worktreeReviewTarget: TaskDirectoryGroup?
+    @State private var worktreeOverview: WorkspaceWorktreeOverview?
+    @State private var worktreeLoading = false
+    @State private var worktreeError: String?
+    @State private var worktreeSelectedTaskIds: Set<String> = []
+    @State private var worktreeMergeBusy = false
+    @State private var archiveError: String?
+    @State private var collapsedArchivedTaskIds = Set<String>()
 
     var body: some View {
         ZStack {
@@ -109,6 +124,32 @@ struct WorkspaceListView: View {
                 onCancel: { renameTarget = nil },
                 onSave: { Task { await saveTaskRename(task) } }
             )
+        }
+        .modifier(DirectoryManagementModifier(
+            renameWorkspaceTarget: renameWorkspaceSheetItem,
+            renameWorkspaceDraft: $renameWorkspaceDraft,
+            renameWorkspaceError: renameWorkspaceError,
+            renameWorkspaceBusy: renameWorkspaceBusy,
+            onSaveRename: { group in Task { await saveWorkspaceRename(group) } },
+            worktreeReviewTarget: $worktreeReviewTarget,
+            worktreeReviewContent: { AnyView(worktreeReviewSheet($0)) },
+            deleteWorkspacePresented: deleteWorkspacePresented,
+            deleteWorkspaceBusy: deleteWorkspaceBusy,
+            deleteWorkspaceErrorPresented: deleteWorkspaceErrorPresented,
+            deleteWorkspaceErrorMessage: deleteWorkspaceError ?? "",
+            deleteDescription: deleteWorkspaceTarget.map {
+                "目录「\($0.workspaceName)」下的 \($0.tasks.count) 个任务及其终端将被删除，此操作无法撤销。"
+            },
+            onDeleteWorkspace: {
+                guard let target = deleteWorkspaceTarget else { return }
+                Task { await confirmDeleteWorkspace(target) }
+            },
+            onClearDeleteError: { deleteWorkspaceError = nil }
+        ))
+        .alert("归档失败", isPresented: archiveErrorPresented) {
+            Button("好", role: .cancel) { archiveError = nil }
+        } message: {
+            Text(archiveError ?? "")
         }
         .confirmationDialog(
             "删除此任务？",
@@ -220,6 +261,23 @@ struct WorkspaceListView: View {
             .buttonStyle(WandIconButtonStyle())
             .help("新建任务")
             .accessibilityLabel("新建任务")
+            Menu {
+                Button {
+                    onCreateWorkspace?()
+                } label: {
+                    Label("新建工作空间", systemImage: "folder.badge.plus")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 26, height: 26)
+            .help("工作空间菜单")
+            .accessibilityLabel("工作空间菜单")
+            .accessibilityHint("新建工作空间")
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
@@ -250,7 +308,7 @@ struct WorkspaceListView: View {
             return TaskDirectoryGroup(
                 workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
-                tasks: group.tasks, standaloneSessions: []
+                tasks: group.tasks.filter { $0.status != "done" }, standaloneSessions: []
             )
         }
         let groupedWorkspaceIds = Set(groups.map(\.workspaceId))
@@ -455,6 +513,46 @@ struct WorkspaceListView: View {
             .padding(.trailing, 4)
             .padding(.vertical, 5)
             .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
+            .contextMenu {
+                if !group.isSynthetic {
+                    Button {
+                        requestNewTask(NewTaskSheetRequest(
+                            cwd: group.workspaceCwd,
+                            projectHint: group.workspaceName,
+                            workspaceId: group.workspaceId
+                        ))
+                    } label: {
+                        Label("新建任务", systemImage: "plus")
+                    }
+
+                    Button {
+                        openWorktreeReview(group)
+                    } label: {
+                        Label("审查并合并 Worktree", systemImage: "arrow.triangle.merge")
+                    }
+
+                    Button {
+                        renameWorkspaceDraft = group.workspaceName
+                        renameWorkspaceError = nil
+                        renameWorkspaceTarget = group
+                    } label: {
+                        Label("重命名目录", systemImage: "pencil")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        deleteWorkspaceError = nil
+                        deleteWorkspaceTarget = group
+                    } label: {
+                        Label("删除目录", systemImage: "trash")
+                    }
+                } else {
+                    // 未归档目录是按 cwd 聚合出来的视图，没有可改可删的目录实体。
+                    Text("未归档目录")
+                }
+            }
+            .modifier(DirectoryMenuHint(group: group))
         }
     }
 
@@ -612,12 +710,7 @@ struct WorkspaceListView: View {
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                                 .help(summary.name)
-                            if !isSelecting && summary.status == "done" {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(Theme.success)
-                                    .accessibilityLabel("已完成")
-                            } else if !isSelecting && summary.isIsolated {
+                            if !isSelecting && summary.isIsolated {
                                 Text("隔离")
                                     .font(.system(size: 9, weight: .medium))
                                     .foregroundColor(Theme.textTertiary)
@@ -707,7 +800,8 @@ struct WorkspaceListView: View {
             }
 
             if expanded {
-                if summary.sessions.isEmpty {
+                let split = WorkspaceSessionSummary.splitArchived(summary.sessions)
+                if split.active.isEmpty && split.archived.isEmpty {
                     Text("还没有终端。点右侧「＋」新建。")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textMuted)
@@ -715,7 +809,7 @@ struct WorkspaceListView: View {
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    ForEach(Array(summary.sessions.enumerated()), id: \.element.id) { index, session in
+                    ForEach(Array(split.active.enumerated()), id: \.element.id) { index, session in
                         taskOwnedSessionRow(session, summary: summary, workspace: workspace, index: index)
                     }
                     if summary.listedSessionCount > summary.sessions.count {
@@ -726,6 +820,7 @@ struct WorkspaceListView: View {
                             .padding(.vertical, 4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    archivedSessionsFold(split.archived, summary: summary, workspace: workspace)
                 }
             }
         }
@@ -780,6 +875,13 @@ struct WorkspaceListView: View {
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(Theme.textMuted)
                     }
+                    if session.isJustCompleted {
+                        Text("刚完成")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(Theme.success)
+                            .help("已完成，还没查看")
+                            .accessibilityLabel("刚完成，还没查看")
+                    }
                     Spacer(minLength: 0)
                     if let activity {
                         Circle()
@@ -799,11 +901,76 @@ struct WorkspaceListView: View {
             .padding(.leading, TreeIndent.session)
         }
         .contextMenu {
+            Button {
+                Task { await toggleArchive(session) }
+            } label: {
+                Label(
+                    session.archived == true ? "恢复会话" : "归档会话",
+                    systemImage: session.archived == true ? "tray.and.arrow.up" : "archivebox"
+                )
+            }
+            Divider()
             Button(role: .destructive) {
                 requestDeleteSession(session)
             } label: {
                 Label("删除终端", systemImage: "trash")
             }
+        }
+    }
+
+    /// 每层自己的「已归档会话」折叠区：归档不杀进程也不删历史，
+    /// 收起来只是不再占用活跃列表的视线，恢复入口始终在原位。
+    @ViewBuilder
+    private func archivedSessionsFold(
+        _ archived: [WorkspaceSessionSummary],
+        summary: WorkspaceTaskSummary,
+        workspace: Workspace
+    ) -> some View {
+        if !archived.isEmpty {
+            let open = !collapsedArchivedTaskIds.contains(summary.id)
+            VStack(alignment: .leading, spacing: 2) {
+                Button {
+                    if open { collapsedArchivedTaskIds.insert(summary.id) }
+                    else { collapsedArchivedTaskIds.remove(summary.id) }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 10))
+                        Text("已归档会话 \(archived.count)")
+                            .font(.system(size: 10, weight: .medium))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundColor(Theme.textMuted)
+                    .padding(.trailing, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, TreeIndent.session)
+                .padding(.vertical, 3)
+                .help(open ? "收起已归档会话" : "展开已归档会话")
+                .accessibilityLabel("已归档会话 \(archived.count) 个，\(open ? "已展开" : "已收起")")
+
+                if open {
+                    ForEach(Array(archived.enumerated()), id: \.element.id) { _, session in
+                        taskOwnedSessionRow(session, summary: summary, workspace: workspace, index: 0)
+                    }
+                }
+            }
+            .wandMotion(value: collapsedArchivedTaskIds, layout: true)
+        }
+    }
+
+    /// 归档是软标记：不杀进程、不删历史，也不改任务归属。
+    /// 失败只提示、不改本地状态，避免「界面显示已归档但服务端没改」。
+    private func toggleArchive(_ session: WorkspaceSessionSummary) async {
+        let target = !(session.archived == true)
+        do {
+            try await store.archiveSession(session.id, archived: target)
+        } catch {
+            archiveError = "无法\(target ? "归档" : "恢复")会话：\(error.localizedDescription)"
         }
     }
 
@@ -868,6 +1035,40 @@ struct WorkspaceListView: View {
         Binding(
             get: { renameTarget },
             set: { renameTarget = $0 }
+        )
+    }
+
+    private var renameWorkspaceSheetItem: Binding<TaskDirectoryGroup?> {
+        Binding(
+            get: { renameWorkspaceTarget },
+            set: { renameWorkspaceTarget = $0 }
+        )
+    }
+
+    private var archiveErrorPresented: Binding<Bool> {
+        Binding(
+            get: { archiveError != nil },
+            set: { presented in
+                if !presented { archiveError = nil }
+            }
+        )
+    }
+
+    private var deleteWorkspaceErrorPresented: Binding<Bool> {
+        Binding(
+            get: { deleteWorkspaceError != nil },
+            set: { presented in
+                if !presented { deleteWorkspaceError = nil }
+            }
+        )
+    }
+
+    private var deleteWorkspacePresented: Binding<Bool> {
+        Binding(
+            get: { deleteWorkspaceTarget != nil },
+            set: { presented in
+                if !presented && !deleteWorkspaceBusy { deleteWorkspaceTarget = nil }
+            }
         )
     }
 
@@ -1007,6 +1208,245 @@ struct WorkspaceListView: View {
         deleteSessionTarget = session
     }
 
+    // MARK: - 目录（工作空间）重命名 / 删除 / Worktree 合并
+
+    private func saveWorkspaceRename(_ group: TaskDirectoryGroup) async {
+        let trimmed = renameWorkspaceDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 80 else {
+            renameWorkspaceError = "名称不能为空且不超过 80 字符"
+            return
+        }
+        renameWorkspaceBusy = true
+        do {
+            _ = try await store.renameWorkspace(workspaceId: group.workspaceId, name: trimmed)
+            renameWorkspaceTarget = nil
+            renameWorkspaceBusy = false
+            await store.loadTaskGroups(force: true)
+        } catch {
+            renameWorkspaceError = error.localizedDescription
+            renameWorkspaceBusy = false
+        }
+    }
+
+    private func confirmDeleteWorkspace(_ group: TaskDirectoryGroup) async {
+        deleteWorkspaceBusy = true
+        do {
+            try await store.deleteWorkspace(workspaceId: group.workspaceId)
+            deleteWorkspaceTarget = nil
+            deleteWorkspaceBusy = false
+            onWorkspaceDeleted?(group.workspaceId)
+            await store.loadTaskGroups(force: true)
+        } catch {
+            deleteWorkspaceError = error.localizedDescription
+            deleteWorkspaceBusy = false
+        }
+    }
+
+    /// 打开 worktree 审查前先拉一次概览：worktree 状态在别处也会变，
+    /// 用侧栏列表的旧数据判断「有没有可合并项」会把用户带进空面板。
+    private func openWorktreeReview(_ group: TaskDirectoryGroup) {
+        worktreeReviewTarget = group
+        worktreeOverview = nil
+        worktreeError = nil
+        worktreeSelectedTaskIds = []
+        worktreeLoading = true
+        Task {
+            do {
+                let overview = try await store.workspaceWorktreeOverview(workspaceId: group.workspaceId)
+                guard worktreeReviewTarget?.workspaceId == group.workspaceId else { return }
+                worktreeOverview = overview
+                worktreeSelectedTaskIds = Set(overview.actionableWorktrees.map(\.taskId))
+            } catch {
+                guard worktreeReviewTarget?.workspaceId == group.workspaceId else { return }
+                worktreeError = error.localizedDescription
+            }
+            worktreeLoading = false
+        }
+    }
+
+    private func startWorktreeMerge(_ group: TaskDirectoryGroup) async {
+        guard let overview = worktreeOverview else { return }
+        let selected = worktreeSelectedTaskIds.intersection(
+            Set(overview.actionableWorktrees.map(\.taskId))
+        )
+        guard !selected.isEmpty else {
+            worktreeError = "没有可合并的 worktree"
+            return
+        }
+        worktreeMergeBusy = true
+        do {
+            // 用 store 已缓存的 Workspace：worktree 合并只需要名字/目录/默认 provider，
+            // 为此再拉一次详情没有收益，缓存未命中就重新加载索引。
+            var workspace = store.workspaces.first { $0.id == group.workspaceId }
+            if workspace == nil {
+                await store.loadWorkspaceIndex()
+                workspace = store.workspaces.first { $0.id == group.workspaceId }
+            }
+            guard let workspace else {
+                worktreeError = "找不到该目录，请刷新后重试。"
+                worktreeMergeBusy = false
+                return
+            }
+            let started = try await store.startWorktreeMergeAgent(
+                workspace: workspace,
+                overview: overview,
+                selectedTaskIds: selected
+            )
+            worktreeMergeBusy = false
+            worktreeReviewTarget = nil
+            onMergeAgentStarted?(workspace, started)
+        } catch {
+            worktreeError = error.localizedDescription
+            worktreeMergeBusy = false
+        }
+    }
+
+    // MARK: - Worktree 审查 / 合并
+
+    /// 合并交给一个真实的 CLI 会话去做（`onMergeAgentStarted`），
+    /// 这里只负责「选哪些 worktree」和把范围说清楚，不代替它执行。
+    private func worktreeReviewSheet(_ group: TaskDirectoryGroup) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("审查并合并 Worktree")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text(group.workspaceName)
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .windowDrag()
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+
+            VStack(alignment: .leading, spacing: 12) {
+                if worktreeLoading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("正在读取 worktree…")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                } else if let error = worktreeError, worktreeOverview == nil {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.danger)
+                } else if let overview = worktreeOverview {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.merge")
+                            .font(.system(size: 11))
+                        Text("合并到 \(overview.targetBranch)")
+                            .font(.system(size: 12, weight: .medium))
+                        Spacer(minLength: 0)
+                        Text("\(overview.actionableWorktrees.count) 个待合并")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textMuted)
+                    }
+                    .foregroundColor(Theme.textSecondary)
+
+                    if overview.worktrees.isEmpty {
+                        Text("这个目录还没有独立 worktree。")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textMuted)
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 4) {
+                                ForEach(overview.worktrees) { item in
+                                    worktreeRow(item)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 300)
+                    }
+
+                    if let error = worktreeError {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.danger)
+                    }
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+            HStack {
+                Text("合并会启动一个 CLI 会话处理选中的 worktree。")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textMuted)
+                Spacer()
+                Button("取消") { worktreeReviewTarget = nil }
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    .disabled(worktreeMergeBusy)
+                Button(worktreeMergeBusy ? "启动中…" : "启动合并") {
+                    Task { await startWorktreeMerge(group) }
+                }
+                .buttonStyle(WandPrimaryButtonStyle())
+                .disabled(worktreeMergeBusy || worktreeLoading || worktreeSelectedTaskIds.isEmpty)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+        }
+        .frame(width: 520)
+        .background(Theme.workspaceBackground)
+    }
+
+    private func worktreeRow(_ item: WorkspaceWorktreeReview) -> some View {
+        let selectable = item.actionable
+        return Button {
+            guard selectable else { return }
+            if worktreeSelectedTaskIds.contains(item.taskId) {
+                worktreeSelectedTaskIds.remove(item.taskId)
+            } else {
+                worktreeSelectedTaskIds.insert(item.taskId)
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: worktreeSelectedTaskIds.contains(item.taskId)
+                      ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 13))
+                    .foregroundColor(selectable ? Theme.wandAccent : Theme.textMuted)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.summary)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundColor(selectable ? Theme.textPrimary : Theme.textMuted)
+                        .lineLimit(1)
+                    Text(item.details)
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(2)
+                    Text(item.branch)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+                Text(item.stateLabel)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(worktreeStateColor(item))
+            }
+            .padding(10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!selectable)
+        .help(selectable ? item.details : "这个 worktree 现在不可合并：\(item.details)")
+    }
+
+    private func worktreeStateColor(_ item: WorkspaceWorktreeReview) -> Color {
+        switch item.state {
+        case "ready": return Theme.success
+        case "dirty": return Theme.warning
+        case "conflict": return Theme.danger
+        default: return Theme.textMuted
+        }
+    }
+
     @ViewBuilder
     private func manageBar(groups: [TaskDirectoryGroup]) -> some View {
         HStack(spacing: 8) {
@@ -1134,5 +1574,125 @@ struct WorkspaceListView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
             if toastMessage == message { toastMessage = nil }
         }
+    }
+}
+
+/// 未归档目录是按 cwd 聚合出来的视图，没有可改可删的目录实体：
+/// 这种行不提示「打开目录菜单」，否则 VoiceOver 会念出一个点不动的入口。
+private struct DirectoryMenuHint: ViewModifier {
+    let group: TaskDirectoryGroup
+
+    func body(content: Content) -> some View {
+        if group.isSynthetic {
+            content
+        } else {
+            content.accessibilityHint("打开目录菜单")
+        }
+    }
+}
+
+/// 目录（工作空间）的重命名 / Worktree 审查 / 删除这组弹层单独成一处：
+/// 全部挂在 WorkspaceListView 的 body 上会让类型推断超时。
+/// 每个闭包都带上了触发它的目录，sheet 不需要再反查是哪一行。
+private struct DirectoryManagementModifier: ViewModifier {
+    let renameWorkspaceTarget: Binding<TaskDirectoryGroup?>
+    let renameWorkspaceDraft: Binding<String>
+    let renameWorkspaceError: String?
+    let renameWorkspaceBusy: Bool
+    let onSaveRename: (TaskDirectoryGroup) -> Void
+
+    let worktreeReviewTarget: Binding<TaskDirectoryGroup?>
+    let worktreeReviewContent: (TaskDirectoryGroup) -> AnyView
+
+    let deleteWorkspacePresented: Binding<Bool>
+    let deleteWorkspaceBusy: Bool
+    let deleteWorkspaceErrorPresented: Binding<Bool>
+    let deleteWorkspaceErrorMessage: String
+    let deleteDescription: String?
+    let onDeleteWorkspace: () -> Void
+    let onClearDeleteError: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: renameWorkspaceTarget) { group in
+                WorkspaceRenameSheet(
+                    draft: renameWorkspaceDraft,
+                    error: renameWorkspaceError,
+                    busy: renameWorkspaceBusy,
+                    onCancel: { renameWorkspaceTarget.wrappedValue = nil },
+                    onSave: { onSaveRename(group) }
+                )
+            }
+            .sheet(item: worktreeReviewTarget) { group in
+                worktreeReviewContent(group)
+            }
+            .confirmationDialog(
+                "删除此目录？",
+                isPresented: deleteWorkspacePresented,
+                titleVisibility: .visible
+            ) {
+                Button(deleteWorkspaceBusy ? "删除中…" : "删除目录", role: .destructive) {
+                    onDeleteWorkspace()
+                }
+                .disabled(deleteWorkspaceBusy)
+                Button("取消", role: .cancel) {}
+            } message: {
+                if let deleteDescription {
+                    Text(deleteDescription)
+                }
+            }
+            .alert("操作未完成", isPresented: deleteWorkspaceErrorPresented) {
+                Button("好", role: .cancel) { onClearDeleteError() }
+            } message: {
+                Text(deleteWorkspaceErrorMessage)
+            }
+    }
+}
+
+private struct WorkspaceRenameSheet: View {
+    @Binding var draft: String
+    let error: String?
+    let busy: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("重命名目录").font(.system(size: 22, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .windowDrag()
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("名称", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .padding(12)
+                    .focused($focused)
+                    .wandInputSurface(focused: focused, invalid: error != nil,
+                                      cornerRadius: Theme.Radius.control)
+                if let error {
+                    Text(error).font(.footnote).foregroundColor(Theme.danger)
+                }
+            }
+            .padding(24)
+            HStack {
+                Spacer()
+                Button("取消", action: onCancel)
+                    .buttonStyle(WandSecondaryButtonStyle())
+                    .disabled(busy)
+                Button(busy ? "保存中…" : "保存", action: onSave)
+                    .buttonStyle(WandPrimaryButtonStyle())
+                    .disabled(busy || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+        }
+        .frame(width: 380)
     }
 }

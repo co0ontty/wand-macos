@@ -65,13 +65,20 @@ enum Theme {
         light: rgb(0.365, 0.455, 0.400),
         dark: rgb(0.529, 0.675, 0.576)
     )
+    /// Gemini 官方标是蓝紫粉渐变，单色 token 只能取代表色（与 Web 端的中性呈现有意不同，
+    /// Web 用 `--text-primary` 避免假装有品牌色）。这里取渐变里的蓝段，保证 7 个 provider 可区分。
+    static let gemini = dynamic(
+        light: rgb(0.231, 0.435, 0.831),
+        dark: rgb(0.498, 0.651, 0.941)
+    )
 
     static func providerColor(_ provider: String?) -> Color {
-        switch provider {
-        case "codex": return codex
-        case "opencode": return openCode
-        case "grok": return grok
-        case "qoder": return qoder
+        switch WandProvider.normalizedID(provider) {
+        case WandProvider.codex.rawValue: return codex
+        case WandProvider.opencode.rawValue: return openCode
+        case WandProvider.grok.rawValue: return grok
+        case WandProvider.qoder.rawValue: return qoder
+        case WandProvider.gemini.rawValue: return gemini
         default: return wandAccent
         }
     }
@@ -144,6 +151,12 @@ enum Theme {
     static let textMuted = dynamic(
         light: rgb(0.435, 0.400, 0.361),
         dark: rgb(0.690, 0.647, 0.592)
+    )
+    /// 输入框占位提示色。与 iOS `Theme.textPlaceholder` 是同一组字面值（#81756A / #958B81），
+    /// 两端都显式上色，不再各吃系统占位色——系统值在 macOS 与 iOS 上本来就不一样。
+    static let textPlaceholder = dynamicNS(
+        light: rgb(0.506, 0.459, 0.416),
+        dark: rgb(0.584, 0.545, 0.506)
     )
     // MARK: - 语义色(对齐 web --success/--warning/--danger/--info)
 

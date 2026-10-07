@@ -52,6 +52,10 @@ struct MainShellView: View {
     @State private var sidebarScrollRequest: SidebarScrollRequest?
     private let sidebarRefreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     @State private var showCreateWorkspace = false
+    /// 「用户明确打开了这个会话」。只有带 intent 的那次打开才允许确认完成代次：
+    /// 自动选中最近会话、后台轮询、重连、切任务都不算（对齐 Web completionViewIntent）。
+    @State private var completionViewIntentSessionId: String?
+    @State private var acknowledgedCompletionRevision: Int?
     @State private var creationDraft = SessionCreationDraft()
     @State private var creationDrafts: [CreationDraftKey: SessionCreationDraft] = [:]
     @State private var showCreation = true
@@ -195,6 +199,7 @@ struct MainShellView: View {
             }
             selectedSessionId = snapshot.id
             selectedSessionProvider = snapshot.provider ?? "claude"
+            acknowledgeCompletionIfViewed(snapshot)
             selectedSession = snapshot
             selectedSessionCwdHint = nil
         }
@@ -290,6 +295,7 @@ struct MainShellView: View {
                 selectedSessionProvider = session.provider ?? "claude"
                 selectedSession = session
                 connectionState = .connected
+                openCompletionIntent(session.id)
             } catch {
                 connectionState = .failure(error)
             }
@@ -305,6 +311,53 @@ struct MainShellView: View {
         selectedSessionProvider = session.provider ?? "claude"
         selectedSession = session
         connectionState = .connected
+        openCompletionIntent(session.id)
+    }
+
+    private func openCompletionIntent(_ sessionId: String) {
+        completionViewIntentSessionId = sessionId
+        acknowledgedCompletionRevision = nil
+    }
+
+    private func clearCompletionIntent() {
+        completionViewIntentSessionId = nil
+        acknowledgedCompletionRevision = nil
+    }
+
+    /// 只在「明确打开 + 这一代结果真的在屏幕上 + 没有任何弹层挡着」时确认完成代次。
+    /// 同一代次只发一次；失败保留未读提示，下一次明确打开还能重试。
+    private func acknowledgeCompletionIfViewed(_ session: SessionSnapshot) {
+        let isJustCompleted = SessionCompletion.isJustCompleted(
+            completion: session.completionRevision,
+            viewed: session.viewedCompletionRevision,
+            status: session.status,
+            archived: session.archived,
+            ptyBusy: session.ptyBusy,
+            inFlight: session.structuredState?.inFlight,
+            permissionBlocked: session.permissionBlocked,
+            pendingEscalation: session.pendingEscalation != nil,
+            providerCliExitCode: session.providerCliExitCode
+        )
+        guard SessionCompletion.shouldAcknowledge(
+            isJustCompleted: isJustCompleted,
+            explicitOpen: completionViewIntentSessionId == session.id,
+            isSelected: selectedSessionId == session.id,
+            modalVisible: anyModalSheetPresented
+        ) else { return }
+        let revision = session.completionRevision ?? 0
+        guard revision > 0, acknowledgedCompletionRevision != revision else { return }
+        acknowledgedCompletionRevision = revision
+        Task {
+            do {
+                try await workspaceStore.markSessionCompletionViewed(
+                    sessionId: session.id,
+                    completionRevision: revision
+                )
+            } catch {
+                // 保留未读提示，让下一次明确打开重试。
+                acknowledgedCompletionRevision = nil
+            }
+        }
     }
 
     private func beginCreation(
@@ -324,6 +377,7 @@ struct MainShellView: View {
         showTaskBoard = false
         filePanelOpen = false
         selectedWorkspaceTask = taskSelection
+        clearCompletionIntent()
         selectedSessionId = nil
         selectedSession = nil
         selectedSessionCwdHint = nil
@@ -513,6 +567,7 @@ struct MainShellView: View {
             onOpenTask: { workspace, task in
                 showTaskBoard = false
                 showCreation = false
+                clearCompletionIntent()
                 selectedSessionId = nil
                 selectedSession = nil
                 selectedSessionCwdHint = nil
@@ -547,6 +602,7 @@ struct MainShellView: View {
             onOpenTaskSession: { workspace, task, session in
                 showTaskBoard = false
                 showCreation = false
+                openCompletionIntent(session.id)
                 selectedSessionId = session.id
                 // 摘要里已带 cwd：先用它填右侧文件栏，避免空路径被当成服务器默认目录。
                 selectedSessionCwdHint = session.cwd
@@ -830,6 +886,13 @@ struct MainShellView: View {
         presentSettings || showCommandPalette || showTroubleshooting || showCreateWorkspace
     }
 
+    /// 任意模态弹层（含子视图挂的快捷提交、文件预览、重命名等）都挡住完成确认：
+    /// 用 keyWindow 的 sheetParent 全局判定，别只数根视图那几个。
+    /// 与 DesktopCommands.send() 用同一个事实源。
+    private var anyModalSheetPresented: Bool {
+        hasPresentedSheet || NSApp.keyWindow?.sheetParent != nil
+    }
+
     private func handle(_ command: DesktopCommand) {
         switch command {
         case .newSession:
@@ -1109,14 +1172,7 @@ struct SessionHeaderView: View {
     let workingDirectory: String?
 
     private var providerLabel: String {
-        switch provider {
-        case "codex": return "Codex"
-        case "opencode": return "OpenCode"
-        case "grok": return "Grok"
-        case "qoder": return "Qoder"
-        case "pi": return "Pi"
-        default: return "Claude"
-        }
+        WandProvider.title(for: provider)
     }
     private var providerColor: Color { Theme.providerColor(provider) }
     private var displayTitle: String { title?.isEmpty == false ? title! : "新会话" }
