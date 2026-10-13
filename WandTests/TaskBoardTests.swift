@@ -401,12 +401,9 @@ final class TaskBoardTests: XCTestCase {
     // MARK: 视图状态持久化
 
     func testViewStateAndDisplayRoundTrip() {
-        let previous = wandBoardReadViewState()
-        let previousDisplay = wandBoardReadDisplay()
-        defer {
-            wandBoardWriteViewState(previous)
-            wandBoardWriteDisplay(previousDisplay)
-        }
+        let suite = "WandBoardTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
 
         var state = WandBoardViewState.default
         state.view = .gantt
@@ -414,8 +411,8 @@ final class TaskBoardTests: XCTestCase {
         state.workspaceId = "ws-1"
         state.filters.statuses = ["doing"]
         state.filters.labels = ["缺陷"]
-        wandBoardWriteViewState(state)
-        let restored = wandBoardReadViewState()
+        wandBoardWriteViewState(state, defaults: defaults)
+        let restored = wandBoardReadViewState(defaults: defaults)
         XCTAssertEqual(restored.view, .gantt)
         XCTAssertEqual(restored.query, "登录")
         XCTAssertEqual(restored.workspaceId, "ws-1")
@@ -425,17 +422,17 @@ final class TaskBoardTests: XCTestCase {
         var display = WandBoardDisplay.default
         display.body = true
         display.mainStatuses = ["todo", "doing"]
-        wandBoardWriteDisplay(display)
-        let restoredDisplay = wandBoardReadDisplay()
+        wandBoardWriteDisplay(display, defaults: defaults)
+        let restoredDisplay = wandBoardReadDisplay(defaults: defaults)
         XCTAssertTrue(restoredDisplay.body)
         XCTAssertEqual(restoredDisplay.mainStatuses, ["todo", "doing"])
 
         // 主列全被清空是脏数据：读回来时必须回落到默认三列，看板不能变空。
-        UserDefaults.standard.set(
+        defaults.set(
             try? JSONSerialization.data(withJSONObject: ["body": false, "mainStatuses": []]),
             forKey: "wand.desktop.taskBoard.display"
         )
-        XCTAssertEqual(wandBoardReadDisplay().mainStatuses, Set(WandBoardStatus.columns.map(\.rawValue)))
+        XCTAssertEqual(wandBoardReadDisplay(defaults: defaults).mainStatuses, Set(WandBoardStatus.columns.map(\.rawValue)))
     }
 }
 

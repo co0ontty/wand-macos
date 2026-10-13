@@ -90,6 +90,13 @@ final class MacUpdateManager: ObservableObject {
         return false
     }
 
+    var isInstalling: Bool {
+        switch state {
+        case .downloading, .preparing: return true
+        default: return false
+        }
+    }
+
     var availableUpdate: Update? {
         switch state {
         case let .available(update),
@@ -133,12 +140,17 @@ final class MacUpdateManager: ObservableObject {
     private let betaDataLoader: DataLoader
     private let connectedServer: () -> URL?
     private let fileManager: FileManager
+    private let updatesRoot: URL
+    private let startInstallation: (Update, @escaping UpdateInstaller.ProgressHandler) -> Void
+    private let cancelInstallation: () -> Void
+    private var activeInstallID: UUID?
     private var activeCheck: Task<CheckResult, Never>?
     private var activeCheckID: UUID?
     private var activeCheckServerURL: URL?
 
     init(
         defaults: UserDefaults = .standard,
+        updatesDirectory: URL? = nil,
         now: @escaping () -> Date = Date.init,
         currentVersion: @escaping () -> String = { MacUpdateManager.currentVersion },
         fileManager: FileManager = .default,
@@ -148,15 +160,22 @@ final class MacUpdateManager: ObservableObject {
         betaDataLoader: @escaping DataLoader = { request in
             try await SelfSignedSession.shared.session.data(for: request)
         },
-        connectedServer: @escaping () -> URL? = { ServerStore.shared.serverURL }
+        connectedServer: @escaping () -> URL? = { ServerStore.shared.serverURL },
+        startInstallation: @escaping (Update, @escaping UpdateInstaller.ProgressHandler) -> Void = {
+            UpdateInstaller.shared.startUpdate($0, progress: $1)
+        },
+        cancelInstallation: @escaping () -> Void = { UpdateInstaller.shared.cancel() }
     ) {
         self.defaults = defaults
         self.now = now
         self.currentVersionProvider = currentVersion
         self.fileManager = fileManager
+        self.updatesRoot = updatesDirectory ?? Self.updatesDirectory(fileManager: fileManager)
         self.dataLoader = dataLoader
         self.betaDataLoader = betaDataLoader
         self.connectedServer = connectedServer
+        self.startInstallation = startInstallation
+        self.cancelInstallation = cancelInstallation
         self.channel = Channel(rawValue: defaults.string(forKey: Self.channelKey) ?? "") ?? .stable
 
         migrateLegacyKeysIfNeeded()
@@ -168,6 +187,14 @@ final class MacUpdateManager: ObservableObject {
     func check(_ trigger: CheckTrigger) async -> CheckResult? {
         // 已准备好的更新优先级最高；不要用一次网络检查覆盖可恢复的安装事务。
         if pendingInstall != nil { return nil }
+        if isInstalling {
+            // 同源检查不得覆盖下载；切服务器/断开则先撤销旧安装所有权。
+            if let update = availableUpdate, !isCurrentSource(update) {
+                cancelInstall()
+            } else {
+                return nil
+            }
+        }
         let checkedServer = channel == .beta ? connectedServer() : nil
         if trigger == .launch,
            let lastSuccessfulCheck,
@@ -186,7 +213,7 @@ final class MacUpdateManager: ObservableObject {
         }
 
         let checkedChannel = channel
-        let previousUpdate = availableUpdate.flatMap { isCurrentSource($0) ? $0 : nil }
+        let previousUpdate = availableUpdate.flatMap { $0.channel == channel && isCurrentSource($0) ? $0 : nil }
         state = .checking
         let checkID = UUID()
         let task = Task { [weak self] () -> CheckResult in
@@ -215,7 +242,9 @@ final class MacUpdateManager: ObservableObject {
 
     @discardableResult
     func setChannel(_ newChannel: Channel) async -> CheckResult? {
+        guard pendingInstall == nil else { return nil }
         guard newChannel != channel else { return await check(.manual) }
+        if isInstalling { cancelInstall() }
 
         activeCheck?.cancel()
         activeCheck = nil
@@ -232,21 +261,35 @@ final class MacUpdateManager: ObservableObject {
     @discardableResult
     func installAvailableUpdate() -> String? {
         if pendingInstall != nil { return nil }
-        guard let update = availableUpdate, isCurrentSource(update) else { return "请先连接服务器并重新检查更新。" }
+        if activeInstallID != nil || isInstalling { return "已有更新任务正在进行。" }
+        guard let update = availableUpdate, update.channel == channel, isCurrentSource(update) else { return "请先连接服务器并重新检查更新。" }
         guard update.preferredAsset != nil else { return "当前来源没有可用于自动更新的 ZIP 或 DMG。" }
         if let reason = UpdateInstaller.installBlockReason { return reason }
 
+        let installID = UUID()
+        activeInstallID = installID
         state = .downloading(update: update, received: 0, total: update.preferredAsset?.size ?? 0)
-        UpdateInstaller.shared.startUpdate(update) { [weak self] stage in
-            self?.handleInstallerStage(stage, update: update)
+        startInstallation(update) { [weak self] stage in
+            guard let self else { return }
+            guard self.activeInstallID == installID else {
+                if case let .readyToRelaunch(path) = stage { self.discardStagingDirectory(for: path) }
+                return
+            }
+            self.handleInstallerStage(stage, update: update)
         }
         return nil
     }
 
     func cancelInstall() {
-        guard let update = availableUpdate else { return }
-        UpdateInstaller.shared.cancel()
-        state = .available(update)
+        guard isInstalling else { return }
+        let update = availableUpdate
+        activeInstallID = nil
+        cancelInstallation()
+        if let update, update.channel == channel, isCurrentSource(update) {
+            state = .available(update)
+        } else {
+            restoreAvailability(for: channel)
+        }
     }
 
     func relaunchPendingUpdate() -> Result<Void, Error> {
@@ -294,12 +337,22 @@ final class MacUpdateManager: ObservableObject {
     // MARK: - Installer state
 
     func handleInstallerStage(_ stage: UpdateInstaller.Stage, update: Update) {
+        guard update.channel == channel, isCurrentSource(update) else {
+            if case let .readyToRelaunch(path) = stage { discardStagingDirectory(for: path) }
+            // 旧通道回调只清理自己的产物，不能覆盖新通道检查结果。
+            if isInstalling {
+                cancelInstall()
+                state = .failed(message: "更新来源已改变，请重新检查更新。", update: nil)
+            }
+            return
+        }
         switch stage {
         case let .downloading(received, total):
             state = .downloading(update: update, received: received, total: total)
         case .verifying, .extracting:
             state = .preparing(update)
         case let .readyToRelaunch(stagedAppPath):
+            activeInstallID = nil
             let pending = PendingInstall(
                 transactionID: UUID().uuidString,
                 version: update.latestVersion,
@@ -315,6 +368,7 @@ final class MacUpdateManager: ObservableObject {
                 state = .failed(message: "无法保存待安装更新：\(error.localizedDescription)", update: update)
             }
         case let .failed(message):
+            activeInstallID = nil
             state = .failed(message: message, update: update)
         }
     }
@@ -652,7 +706,7 @@ final class MacUpdateManager: ObservableObject {
     /// 的 pending staging，其余孤儿全部删除（与安卓端 APK 启动清扫同一类修复）。
     private func sweepOrphanedStaging(keepingStagedAppPath stagedAppPath: String?) {
         Self.sweepOrphanedStagingDirectories(
-            in: Self.updatesDirectory(fileManager: fileManager),
+            in: updatesRoot,
             keepingStagedAppPath: stagedAppPath,
             fileManager: fileManager
         )
@@ -706,11 +760,11 @@ final class MacUpdateManager: ObservableObject {
 
     private func persistPendingInstall(_ pending: PendingInstall) throws {
         let data = try JSONEncoder().encode(pending)
-        defaults.set(data, forKey: Self.pendingInstallKey)
         let transactionURL = URL(fileURLWithPath: pending.stagedAppPath)
             .deletingLastPathComponent()
             .appendingPathComponent("wand-update-transaction.json")
         try data.write(to: transactionURL, options: .atomic)
+        defaults.set(data, forKey: Self.pendingInstallKey)
     }
 
     private func loadPendingInstall() -> PendingInstall? {
@@ -756,13 +810,13 @@ final class MacUpdateManager: ObservableObject {
         let appURL = URL(fileURLWithPath: stagedAppPath).standardizedFileURL
         let staging = appURL.deletingLastPathComponent()
         guard staging.lastPathComponent.hasPrefix("staging-") else { return }
-        let updatesDirectory = Self.updatesDirectory(fileManager: fileManager).standardizedFileURL
+        let updatesDirectory = updatesRoot.standardizedFileURL
         guard staging.deletingLastPathComponent() == updatesDirectory else { return }
         try? fileManager.removeItem(at: staging)
     }
 
     private func consumeUpdateResultMarker() -> String? {
-        let marker = Self.updatesDirectory(fileManager: fileManager).appendingPathComponent("last-result.txt")
+        let marker = updatesRoot.appendingPathComponent("last-result.txt")
         guard let data = try? Data(contentsOf: marker),
               let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !message.isEmpty else {

@@ -125,6 +125,7 @@ final class WandAPI {
 
     /// 带 401 自动重登的请求入口。
     func requestData(method: String, path: String, body: [String: Any]? = nil, timeout: TimeInterval = 30) async throws -> Data {
+        guard NativeAcceptance.allows(method: method, path: path) else { throw APIError.server(status: 403, message: "当前真实界面验收只读：此操作不会提交到正式服务。") }
         let req = try makeRequest(method: method, path: path, body: body, timeout: timeout)
         return try await performAuthenticated(req)
     }
@@ -203,6 +204,11 @@ final class WandAPI {
             path: "/api/sessions/\(id)/model",
             body: ["model": model ?? NSNull()]
         )
+    }
+
+    @discardableResult
+    func setMode(id: String, mode: String) async throws -> SessionSnapshot {
+        try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions/\(percentEncodePathComponent(id))/mode", body: ["mode": mode])
     }
 
     @discardableResult
@@ -790,13 +796,6 @@ final class WandAPI {
     }
 
     private func structuredRunner(for provider: String) -> String {
-        switch provider {
-        case "codex": return "codex-cli-exec"
-        case "opencode": return "opencode-cli-run"
-        case "grok": return "grok-cli-headless"
-        case "qoder": return "qoder-cli-print"
-        case "pi": return "pi-cli-json"
-        default: return "claude-cli-print"
-        }
+        WandProvider(normalizing: provider).structuredRunner
     }
 }

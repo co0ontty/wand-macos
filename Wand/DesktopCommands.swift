@@ -4,7 +4,7 @@ import SwiftUI
 /// One catalog owns the menu bar, command palette and keyboard reference.
 enum DesktopCommand: String, CaseIterable, Identifiable {
     case newSession, newTask, search, toggleSidebar, toggleInspector
-    case workspaces, sessions, taskBoard, settings
+    case workspaces, sessions, taskBoard, settings, conversations, contacts
     case focusComposer, findConversation, reconnect
 
     var id: String { rawValue }
@@ -18,6 +18,8 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "工作空间"
         case .sessions: return "单独会话"
         case .taskBoard: return "任务看板"
+        case .conversations: return "对话"
+        case .contacts: return "通讯录"
         case .settings: return "设置"
         case .focusComposer: return "聚焦消息输入框"
         case .findConversation: return "查找当前对话"
@@ -34,6 +36,8 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "定位侧栏上方的工作空间与任务"
         case .sessions: return "定位侧栏下方的独立会话与历史记录"
         case .taskBoard: return "管理待办、进度、优先级与归档"
+        case .conversations: return "员工私聊、群聊与精确执行入口"
+        case .contacts: return "浏览员工职责与候选，发起独立私聊"
         case .settings: return "外观、输入、连接和客户端更新"
         case .focusComposer: return "继续当前对话；终端保持自己的按键语义"
         case .findConversation: return "在已加载的聊天内容中定位文字"
@@ -50,6 +54,8 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "folder"
         case .sessions: return "bubble.left.and.bubble.right"
         case .taskBoard: return "checklist"
+        case .conversations: return "bubble.left.and.bubble.right"
+        case .contacts: return "person.crop.rectangle"
         case .settings: return "gearshape"
         case .focusComposer: return "text.cursor"
         case .findConversation: return "text.magnifyingglass"
@@ -66,6 +72,8 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "⌘2"
         case .sessions: return "⌘1"
         case .taskBoard: return "⌘3"
+        case .conversations: return "⌘4"
+        case .contacts: return "⌘5"
         case .settings: return "⌘,"
         case .focusComposer: return "⌘L"
         case .findConversation: return "⌘F"
@@ -81,6 +89,8 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "2"
         case .sessions: return "1"
         case .taskBoard: return "3"
+        case .conversations: return "4"
+        case .contacts: return "5"
         case .settings: return ","
         case .focusComposer: return "l"
         case .findConversation: return "f"
@@ -110,18 +120,25 @@ extension Notification.Name {
 struct DesktopCommandMenuItem: View {
     let command: DesktopCommand
     @FocusedValue(\.wandDesktopCommandsEnabled) private var enabled
+    @FocusedValue(\.wandDesktopDisabledCommands) private var unavailable
     var body: some View {
         Button(command.title) { command.send() }
             .keyboardShortcut(command.key, modifiers: command.modifiers)
-            .disabled(enabled != true)
+            .disabled(enabled != true || unavailable?.contains(command) == true)
     }
 }
+
+private struct DesktopDisabledCommandsKey: FocusedValueKey { typealias Value = Set<DesktopCommand> }
 
 private struct DesktopCommandsEnabledKey: FocusedValueKey {
     typealias Value = Bool
 }
 
 extension FocusedValues {
+    var wandDesktopDisabledCommands: Set<DesktopCommand>? {
+        get { self[DesktopDisabledCommandsKey.self] }
+        set { self[DesktopDisabledCommandsKey.self] = newValue }
+    }
     var wandDesktopCommandsEnabled: Bool? {
         get { self[DesktopCommandsEnabledKey.self] }
         set { self[DesktopCommandsEnabledKey.self] = newValue }
@@ -134,6 +151,7 @@ struct DesktopCommandPalette: View {
     let onSession: (SessionSnapshot) -> Void
     let onWorkspace: (Workspace) -> Void
     let onDismiss: () -> Void
+    var unavailableCommands: Set<DesktopCommand> = []
     @State private var query = ""
     @State private var selection = 0
     @State private var sessions: [SessionSnapshot] = []
@@ -173,7 +191,7 @@ struct DesktopCommandPalette: View {
         }
     }
     private var results: [Result] {
-        let commands = DesktopCommand.allCases.filter { $0 != .search }.map(Result.command)
+        let commands = DesktopCommand.allCases.filter { $0 != .search && !unavailableCommands.contains($0) }.map(Result.command)
         let entries = query.isEmpty
             ? Array(sessions.prefix(6)).map(Result.session) + commands + workspaces.map(Result.workspace)
             : sessions.map(Result.session) + workspaces.map(Result.workspace) + commands

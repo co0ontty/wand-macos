@@ -347,7 +347,7 @@ struct SettingsView: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 150)
-                .disabled(updateManager.isChecking || updateManager.pendingInstall != nil)
+                .disabled(updateManager.isChecking || updateManager.isInstalling || updateManager.pendingInstall != nil)
             }
             if updateManager.isChecking {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在检查更新…") }
@@ -391,12 +391,13 @@ struct SettingsView: View {
                 } else {
                     Button("强制检查更新") { Task { _ = await updateManager.check(.manual) } }
                         .buttonStyle(WandPrimaryButtonStyle())
-                        .disabled(updateManager.isChecking)
+                        .disabled(updateManager.isChecking || updateManager.isInstalling)
                 }
                 if let update = updateManager.availableUpdate {
                     if update.preferredAsset != nil, UpdateInstaller.canInstallInPlace {
                         Button("立即更新") { installUpdate() }
                             .buttonStyle(WandSecondaryButtonStyle())
+                            .disabled(updateManager.isInstalling)
                     }
                     Button(update.channel == .beta ? "打开服务器" : "查看 Release") { NSWorkspace.shared.open(update.releaseURL) }
                         .buttonStyle(WandSecondaryButtonStyle())

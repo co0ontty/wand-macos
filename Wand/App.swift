@@ -6,17 +6,27 @@ struct WandApp: App {
     @NSApplicationDelegateAdaptor(WandAppDelegate.self) private var appDelegate
     @StateObject private var store = ServerStore.shared
 
+    static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
     var body: some Scene {
         WindowGroup("Wand") {
-            ContentView()
-                .environmentObject(store)
-                .extendContentUnderTitleBar()
-                .frame(
-                    minWidth: DesktopWindowGeometry.minimumSize.width,
-                    idealWidth: DesktopWindowGeometry.preferredSize.width, maxWidth: .infinity,
-                    minHeight: DesktopWindowGeometry.minimumSize.height,
-                    idealHeight: DesktopWindowGeometry.preferredSize.height, maxHeight: .infinity
-                )
+            if Self.isRunningTests {
+                Color.clear // 不挂载生产主壳、连接或会持久化用户窗口几何的 modifier。
+            } else {
+                ContentView()
+                    .environmentObject(store)
+                    .defaultAppStorage(NativeAcceptance.defaults)
+                    .extendContentUnderTitleBar()
+                    .frame(
+                        minWidth: DesktopWindowGeometry.minimumSize.width,
+                        idealWidth: DesktopWindowGeometry.preferredSize.width, maxWidth: .infinity,
+                        minHeight: DesktopWindowGeometry.minimumSize.height,
+                        idealHeight: DesktopWindowGeometry.preferredSize.height, maxHeight: .infinity
+                    )
+            }
         }
         .windowStyle(.hiddenTitleBar)
         // Menu bar, command palette and the shortcut guide share one catalog.
@@ -49,7 +59,7 @@ struct WandApp: App {
                 DesktopCommandMenuItem(command: .toggleInspector)
                 Divider()
                 Menu("前往") {
-                    ForEach([DesktopCommand.sessions, .workspaces, .taskBoard]) {
+                    ForEach([DesktopCommand.sessions, .workspaces, .taskBoard, .conversations, .contacts]) {
                         DesktopCommandMenuItem(command: $0)
                     }
                 }
@@ -62,15 +72,16 @@ struct WandApp: App {
 
 final class WandAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // helper 只有收到新版启动确认后才删除旧版备份；必须在其他启动任务前确认。
-        let launchedAfterUpdate = MacUpdateManager.shared.completeLaunchedUpdateIfNeeded()
-
-        // XCTest 会启动完整 App 宿主。测试期间不应弹本地网络权限或访问真实 GitHub API；
-        // 更新检查本身由注入 DataLoader 的测试覆盖。
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || NSClassFromString("XCTestCase") != nil {
+        // 测试宿主不得构造共享更新器：其启动恢复会清理真实用户的更新缓存。
+        // 更新检查和安装事务由隔离目录、偏好与注入依赖的 XCTest 覆盖。
+        if WandApp.isRunningTests { return }
+        if NativeAcceptance.enabled {
+            DispatchQueue.main.async { self.openAcceptanceWindowIfNeeded() }
             return
         }
+
+        // helper 只有收到新版启动确认后才删除旧版备份；必须在其他启动任务前确认。
+        let launchedAfterUpdate = MacUpdateManager.shared.completeLaunchedUpdateIfNeeded()
 
         // 等应用完成激活、主窗口可见后再触发；在 SwiftUI App.init 阶段访问网络时，
         // 系统权限 UI 还没有可靠的呈现上下文，新安装的 App 可能完全不弹框。
@@ -105,6 +116,20 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    private var acceptanceWindow: NSWindow?
+
+    private func openAcceptanceWindowIfNeeded() {
+        guard NSApp.windows.filter({ $0.styleMask.contains(.titled) }).isEmpty else { return }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.title = "Wand · 真实数据只读验收"
+        window.contentView = NSHostingView(rootView: ContentView().environmentObject(ServerStore.shared).defaultAppStorage(NativeAcceptance.defaults))
+        window.minSize = DesktopWindowGeometry.minimumSize
+        window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        acceptanceWindow = window
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { NativeAcceptance.cleanup() }
 
     func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {
         false

@@ -531,20 +531,14 @@ func wandBoardLabelColor(_ label: String) -> Color {
 
 // MARK: - Provider / 思考深度标签
 
-let wandBoardProviders = ["claude", "codex", "opencode", "grok", "qoder", "pi"]
+let wandBoardProviders = WandProvider.allCases.map(\.rawValue)
 let wandBoardEfforts = ["off", "standard", "deep", "max"]
 
 func wandBoardProviderLabel(_ provider: String) -> String {
     switch provider {
-    case "claude": return "Claude"
-    case "codex": return "Codex"
-    case "opencode": return "OpenCode"
-    case "grok": return "Grok"
-    case "qoder": return "Qoder"
-    case "pi": return "Pi"
     case "session", "shell": return "终端"
     case "": return "Agent"
-    default: return provider
+    default: return WandProvider.title(for: provider)
     }
 }
 
@@ -898,8 +892,8 @@ struct WandBoardViewState: Equatable {
     static let `default` = WandBoardViewState()
 }
 
-func wandBoardReadViewState() -> WandBoardViewState {
-    guard let data = UserDefaults.standard.data(forKey: wandBoardViewStateKey),
+func wandBoardReadViewState(defaults: UserDefaults = .standard) -> WandBoardViewState {
+    guard let data = defaults.data(forKey: wandBoardViewStateKey),
           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return .default }
     var state = WandBoardViewState.default
@@ -912,7 +906,7 @@ func wandBoardReadViewState() -> WandBoardViewState {
     return state
 }
 
-func wandBoardWriteViewState(_ state: WandBoardViewState) {
+func wandBoardWriteViewState(_ state: WandBoardViewState, defaults: UserDefaults = .standard) {
     let raw: [String: Any] = [
         "view": state.view.rawValue,
         "query": state.query,
@@ -922,11 +916,11 @@ func wandBoardWriteViewState(_ state: WandBoardViewState) {
         "labels": Array(state.filters.labels),
     ]
     guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
-    UserDefaults.standard.set(data, forKey: wandBoardViewStateKey)
+    defaults.set(data, forKey: wandBoardViewStateKey)
 }
 
-func wandBoardReadDisplay() -> WandBoardDisplay {
-    guard let data = UserDefaults.standard.data(forKey: wandBoardDisplayKey),
+func wandBoardReadDisplay(defaults: UserDefaults = .standard) -> WandBoardDisplay {
+    guard let data = defaults.data(forKey: wandBoardDisplayKey),
           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return .default }
     var display = WandBoardDisplay.default
@@ -939,8 +933,8 @@ func wandBoardReadDisplay() -> WandBoardDisplay {
     return display
 }
 
-func wandBoardWriteDisplay(_ display: WandBoardDisplay) {
+func wandBoardWriteDisplay(_ display: WandBoardDisplay, defaults: UserDefaults = .standard) {
     let raw: [String: Any] = ["body": display.body, "mainStatuses": Array(display.mainStatuses)]
     guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
-    UserDefaults.standard.set(data, forKey: wandBoardDisplayKey)
+    defaults.set(data, forKey: wandBoardDisplayKey)
 }

@@ -791,7 +791,7 @@ struct SidebarColumn: View {
 
 // MARK: - 会话 tile
 
-private enum SessionListDateLabel {
+enum SessionListDateLabel {
     private static let isoFormatter = ISO8601DateFormatter()
     private static let fractionalFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -882,10 +882,13 @@ struct SessionTile: View {
     }
 
     private var subtitle: String {
-        if let folderName { return folderName }
-        // 不用 default→Claude 的兜底：认不出的 provider 显示原值，
-        // 把 Gemini 说成 Claude 比显示原始 id 更糟。
-        return WandProvider.title(for: session.provider)
+        if let identity = session.identityCaption {
+            return [identity, folderName].compactMap { $0 }.joined(separator: " · ")
+        }
+        if session.providerLabel == "Wand Agent" {
+            return [session.providerLabel, folderName].compactMap { $0 }.joined(separator: " · ")
+        }
+        return folderName ?? session.providerLabel
     }
 
     /// 完成但还没被明确打开看过；纯展示态，不改 runner 生命周期。
@@ -915,11 +918,14 @@ struct SessionTile: View {
                         .font(.system(size: 15))
                         .foregroundColor(checked ? Theme.wandAccent : Theme.textSecondary)
                 } else {
-                    BrandLogo(provider: provider, color: Theme.textPrimary)
-                        .frame(width: 15, height: 15)
+                    if let employeeID = session.employeeId {
+                        ContactAvatar(id: employeeID, avatar: session.employeeAvatar ?? "", name: session.employeeName ?? "", provider: session.provider, size: 32)
+                    } else {
+                        BrandLogo(provider: provider, color: Theme.textPrimary).frame(width: 15, height: 15)
+                    }
                 }
             }
-            .frame(width: 18, height: 18)
+            .frame(width: session.employeeId == nil ? 18 : 32, height: session.employeeId == nil ? 18 : 32)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -953,16 +959,16 @@ struct SessionTile: View {
                     if !prominentStatus && recentTime.isEmpty {
                         Circle().fill(statusColor).frame(width: 5, height: 5)
                     }
-                    if let folderName {
+                    if folderName != nil || session.identityCaption != nil || session.providerLabel == "Wand Agent" {
                         if showsStatusRow {
                             Text("·")
                                 .foregroundColor(Theme.textMuted.opacity(0.7))
                         }
-                        Text(folderName)
+                        Text(subtitle)
                             .font(.system(size: 11))
                             .foregroundColor(Theme.textMuted)
                             .lineLimit(1)
-                            .help(session.cwd ?? folderName)
+                            .help([session.identityCaption ?? session.providerLabel, session.cwd].compactMap { $0 }.joined(separator: " · "))
                     } else if !prominentStatus && !isJustCompleted {
                         Text(statusLabel)
                             .font(.system(size: 11))

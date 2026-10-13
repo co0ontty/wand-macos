@@ -7,6 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C9000000000000000000A00A /* NativeAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B00A /* NativeAcceptance.swift */; };
+		C9000000000000000000A105 /* AvatarComposerParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B105 /* AvatarComposerParityTests.swift */; };
+		C9000000000000000000A006 /* ContactAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B006 /* ContactAvatar.swift */; };
+		C9000000000000000000A007 /* SharedPlushScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B007 /* SharedPlushScene.swift */; };
+		C9000000000000000000A008 /* FocusComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B008 /* FocusComposer.swift */; };
+		C9000000000000000000A009 /* PlushScene in Resources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B009 /* PlushScene */; };
+		C9000000000000000000A104 /* CommunicationsLiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B104 /* CommunicationsLiveTests.swift */; };
+		C9000000000000000000A103 /* CommunicationsVisualTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B103 /* CommunicationsVisualTests.swift */; };
+		C9000000000000000000A102 /* CommunicationsContractURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B102 /* CommunicationsContractURLProtocol.swift */; };
+		C9000000000000000000A005 /* CommunicationsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B005 /* CommunicationsViews.swift */; };
+		C9000000000000000000A001 /* CommunicationsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B001 /* CommunicationsModels.swift */; };
+		C9000000000000000000A002 /* CommunicationsRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B002 /* CommunicationsRepository.swift */; };
+		C9000000000000000000A003 /* CommunicationsComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B003 /* CommunicationsComposer.swift */; };
+		C9000000000000000000A004 /* CommunicationsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B004 /* CommunicationsStore.swift */; };
+		C9000000000000000000A101 /* CommunicationsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B101 /* CommunicationsTests.swift */; };
 		D800000000000000000000A5 /* THIRD-PARTY-NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B5 /* THIRD-PARTY-NOTICES.md */; };
 		D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B4 /* NativeTerminalTests.swift */; };
 		D800000000000000000000A1 /* NativeTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B1 /* NativeTerminalView.swift */; };
@@ -80,6 +95,21 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C9000000000000000000B00A /* NativeAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAcceptance.swift; sourceTree = "<group>"; };
+		C9000000000000000000B105 /* AvatarComposerParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarComposerParityTests.swift; sourceTree = "<group>"; };
+		C9000000000000000000B006 /* ContactAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAvatar.swift; sourceTree = "<group>"; };
+		C9000000000000000000B007 /* SharedPlushScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedPlushScene.swift; sourceTree = "<group>"; };
+		C9000000000000000000B008 /* FocusComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusComposer.swift; sourceTree = "<group>"; };
+		C9000000000000000000B009 /* PlushScene */ = {isa = PBXFileReference; lastKnownFileType = folder; path = PlushScene; sourceTree = "<group>"; };
+		C9000000000000000000B104 /* CommunicationsLiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsLiveTests.swift; sourceTree = "<group>"; };
+		C9000000000000000000B103 /* CommunicationsVisualTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsVisualTests.swift; sourceTree = "<group>"; };
+		C9000000000000000000B102 /* CommunicationsContractURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsContractURLProtocol.swift; sourceTree = "<group>"; };
+		C9000000000000000000B005 /* CommunicationsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsViews.swift; sourceTree = "<group>"; };
+		C9000000000000000000B001 /* CommunicationsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsModels.swift; sourceTree = "<group>"; };
+		C9000000000000000000B002 /* CommunicationsRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsRepository.swift; sourceTree = "<group>"; };
+		C9000000000000000000B003 /* CommunicationsComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsComposer.swift; sourceTree = "<group>"; };
+		C9000000000000000000B004 /* CommunicationsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsStore.swift; sourceTree = "<group>"; };
+		C9000000000000000000B101 /* CommunicationsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationsTests.swift; sourceTree = "<group>"; };
 		D800000000000000000000B5 /* THIRD-PARTY-NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = "THIRD-PARTY-NOTICES.md"; sourceTree = "<group>"; };
 		D800000000000000000000B4 /* NativeTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalTests.swift; sourceTree = "<group>"; };
 		D800000000000000000000B1 /* NativeTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalView.swift; sourceTree = "<group>"; };
@@ -190,6 +220,16 @@
 				A100000000000000000000BA /* WandAuth.swift */,
 				A100000000000000000000BB /* Theme.swift */,
 				A200000000000000000000B1 /* WandModels.swift */,
+				C9000000000000000000B001 /* CommunicationsModels.swift */,
+				C9000000000000000000B002 /* CommunicationsRepository.swift */,
+				C9000000000000000000B003 /* CommunicationsComposer.swift */,
+				C9000000000000000000B004 /* CommunicationsStore.swift */,
+				C9000000000000000000B005 /* CommunicationsViews.swift */,
+				C9000000000000000000B006 /* ContactAvatar.swift */,
+				C9000000000000000000B007 /* SharedPlushScene.swift */,
+				C9000000000000000000B008 /* FocusComposer.swift */,
+				C9000000000000000000B00A /* NativeAcceptance.swift */,
+				C9000000000000000000B009 /* PlushScene */,
 				A200000000000000000000B2 /* WandAPI.swift */,
 				A200000000000000000000B3 /* WandSocket.swift */,
 				D800000000000000000000B1 /* NativeTerminalView.swift */,
@@ -253,6 +293,11 @@
 				D7000000000000000000B103 /* DesktopLifecycleTests.swift */,
 				D7000000000000000000B104 /* GitStatusPresentationTests.swift */,
 				D7000000000000000000B105 /* ProviderCatalogTests.swift */,
+				C9000000000000000000B101 /* CommunicationsTests.swift */,
+				C9000000000000000000B102 /* CommunicationsContractURLProtocol.swift */,
+				C9000000000000000000B103 /* CommunicationsVisualTests.swift */,
+				C9000000000000000000B104 /* CommunicationsLiveTests.swift */,
+				C9000000000000000000B105 /* AvatarComposerParityTests.swift */,
 				D800000000000000000000B4 /* NativeTerminalTests.swift */,
 			);
 			path = WandTests;
@@ -347,6 +392,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A100000000000000000000C1 /* Assets.xcassets in Resources */,
+				C9000000000000000000A009 /* PlushScene in Resources */,
 				D800000000000000000000A5 /* THIRD-PARTY-NOTICES.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -376,6 +422,15 @@
 				A100000000000000000000AA /* WandAuth.swift in Sources */,
 				A100000000000000000000AB /* Theme.swift in Sources */,
 				A200000000000000000000A1 /* WandModels.swift in Sources */,
+				C9000000000000000000A001 /* CommunicationsModels.swift in Sources */,
+				C9000000000000000000A002 /* CommunicationsRepository.swift in Sources */,
+				C9000000000000000000A003 /* CommunicationsComposer.swift in Sources */,
+				C9000000000000000000A004 /* CommunicationsStore.swift in Sources */,
+				C9000000000000000000A005 /* CommunicationsViews.swift in Sources */,
+				C9000000000000000000A006 /* ContactAvatar.swift in Sources */,
+				C9000000000000000000A007 /* SharedPlushScene.swift in Sources */,
+				C9000000000000000000A008 /* FocusComposer.swift in Sources */,
+				C9000000000000000000A00A /* NativeAcceptance.swift in Sources */,
 				A200000000000000000000A2 /* WandAPI.swift in Sources */,
 				A200000000000000000000A3 /* WandSocket.swift in Sources */,
 				D800000000000000000000A1 /* NativeTerminalView.swift in Sources */,
@@ -427,6 +482,11 @@
 				D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */,
 				D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */,
 				D7000000000000000000A105 /* ProviderCatalogTests.swift in Sources */,
+				C9000000000000000000A101 /* CommunicationsTests.swift in Sources */,
+				C9000000000000000000A102 /* CommunicationsContractURLProtocol.swift in Sources */,
+				C9000000000000000000A103 /* CommunicationsVisualTests.swift in Sources */,
+				C9000000000000000000A104 /* CommunicationsLiveTests.swift in Sources */,
+				C9000000000000000000A105 /* AvatarComposerParityTests.swift in Sources */,
 				D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

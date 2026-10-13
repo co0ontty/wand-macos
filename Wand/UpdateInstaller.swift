@@ -168,7 +168,9 @@ final class UpdateInstaller {
         destinationAppPath: String,
         transactionID: String,
         expectedVersion: String,
-        logPath: String
+        logPath: String,
+        launchCommandPath: String = "/usr/bin/open",
+        acknowledgementAttempts: Int = 150
     ) throws -> String {
         try writeHelperScript(
             parentPID: parentPID,
@@ -176,7 +178,9 @@ final class UpdateInstaller {
             destinationAppPath: destinationAppPath,
             transactionID: transactionID,
             expectedVersion: expectedVersion,
-            logPathOverride: logPath
+            logPathOverride: logPath,
+            launchCommandPath: launchCommandPath,
+            acknowledgementAttempts: acknowledgementAttempts
         )
     }
 #endif
@@ -428,7 +432,9 @@ final class UpdateInstaller {
         destinationAppPath: String,
         transactionID: String,
         expectedVersion: String,
-        logPathOverride: String? = nil
+        logPathOverride: String? = nil,
+        launchCommandPath: String = "/usr/bin/open",
+        acknowledgementAttempts: Int = 150
     ) throws -> String {
         let identifier = UUID().uuidString
         let scriptURL = FileManager.default.temporaryDirectory
@@ -466,6 +472,7 @@ final class UpdateInstaller {
         VERSION=\(shellQuote(expectedVersion))
         LOG=\(shellQuote(logPath))
         PARENT_PID=\(parentPID)
+        OPEN_COMMAND=\(shellQuote(launchCommandPath))
 
         exec >>"$LOG" 2>&1
         echo "$(date '+%Y-%m-%d %H:%M:%S') starting Wand update to $VERSION"
@@ -520,15 +527,15 @@ final class UpdateInstaller {
         fi
 
         /usr/bin/xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
-        if ! /usr/bin/open -n "$DEST" --args --wand-update-token "$TRANSACTION_ID" --wand-update-ack "$ACK"; then
+        if ! "$OPEN_COMMAND" -n "$DEST" --args --wand-update-token "$TRANSACTION_ID" --wand-update-ack "$ACK"; then
             rollback
             mark_failure "新版 Wand 无法启动，已恢复旧版。"
-            /usr/bin/open "$DEST" >/dev/null 2>&1 || true
+            "$OPEN_COMMAND" "$DEST" >/dev/null 2>&1 || true
             cleanup
             exit 14
         fi
 
-        for _ in $(/usr/bin/seq 1 150); do
+        for _ in $(/usr/bin/seq 1 \(max(1, acknowledgementAttempts))); do
             if [ -f "$ACK" ]; then break; fi
             /bin/sleep 0.2
         done
@@ -552,7 +559,7 @@ final class UpdateInstaller {
             done
             rollback
             mark_failure "新版 Wand 未能完成启动，已自动恢复旧版。"
-            /usr/bin/open "$DEST" >/dev/null 2>&1 || true
+            "$OPEN_COMMAND" "$DEST" >/dev/null 2>&1 || true
             cleanup
             exit 15
         fi

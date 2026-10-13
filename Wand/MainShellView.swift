@@ -63,12 +63,17 @@ struct MainShellView: View {
     @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
     @State private var showTaskBoard = false
+    @State private var showCommunications = false
+    @StateObject private var communicationsStore: CommunicationsStore
     @StateObject private var gitStatusStore = GitStatusStore()
     @StateObject private var workspaceStore: WorkspaceStore
 
     init(serverURL: URL, token: String?) {
         self.serverURL = serverURL
         self.token = token
+        _communicationsStore = StateObject(wrappedValue: CommunicationsStore(
+            api: WandAPI(baseURL: serverURL, token: token), serverURL: serverURL
+        ))
         _workspaceStore = StateObject(wrappedValue: WorkspaceStore(
             api: WandAPI(baseURL: serverURL, token: token),
             serverID: serverURL.absoluteString
@@ -135,6 +140,7 @@ struct MainShellView: View {
     var body: some View {
         nativeShell
         .focusedSceneValue(\.wandDesktopCommandsEnabled, !hasPresentedSheet)
+        .focusedSceneValue(\.wandDesktopDisabledCommands, unavailableCommands)
         .sheet(isPresented: $presentSettings) {
             SettingsView(serverURL: serverURL, token: token)
                 .environmentObject(ServerStore.shared)
@@ -147,11 +153,12 @@ struct MainShellView: View {
                 showCommandPalette = false
                 presentSession(session)
             }, onWorkspace: { workspace in
+                showCommunications = false
                 showCommandPalette = false
                 sidebarVisible = true
                 sidebarQuery = workspace.name
                 sidebarScrollRequest = SidebarScrollRequest(section: .workspaces)
-            }, onDismiss: { showCommandPalette = false })
+            }, onDismiss: { showCommandPalette = false }, unavailableCommands: unavailableCommands)
         }
         .sheet(isPresented: $showTroubleshooting) {
             TroubleshootingView(
@@ -186,7 +193,7 @@ struct MainShellView: View {
             }
         }
         .onChange(of: workspaceStore.visibleSnapshot?.id) { _ in
-            guard !showCreation, let selection = selectedWorkspaceTask,
+            guard !showCreation, !showCommunications, let selection = selectedWorkspaceTask,
                   selection.task.id == workspaceStore.currentTask?.id else { return }
             guard let snapshot = workspaceStore.visibleSnapshot else {
                 // 会话快照正在重读（store 先清空再写回）属于过程态，不是「用户没有会话」。
@@ -284,6 +291,7 @@ struct MainShellView: View {
     }
 
     private func openSessionFromMissions(_ sessionId: String) {
+        showCommunications = false
         selectedWorkspaceTask = nil
         selectedSessionCwdHint = nil
         showTaskBoard = false
@@ -303,6 +311,7 @@ struct MainShellView: View {
     }
 
     private func presentSession(_ session: SessionSnapshot) {
+        showCommunications = false
         showTaskBoard = false
         showCreation = false
         selectedWorkspaceTask = nil
@@ -374,6 +383,7 @@ struct MainShellView: View {
             creationDraft = newDraft
         }
         showCreation = true
+        showCommunications = false
         showTaskBoard = false
         filePanelOpen = false
         selectedWorkspaceTask = taskSelection
@@ -478,7 +488,7 @@ struct MainShellView: View {
                 }
                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     .background(Theme.workspaceBackground)
-                if filePanelOpen && usesPersistentRightPanel {
+                if filePanelOpen && !showCommunications && usesPersistentRightPanel {
                     Rectangle()
                         .fill(Color(nsColor: Theme.borderSubtle))
                         .frame(width: 0.5)
@@ -489,7 +499,7 @@ struct MainShellView: View {
                 }
             }
 
-            if filePanelOpen && !usesPersistentRightPanel {
+            if filePanelOpen && !showCommunications && !usesPersistentRightPanel {
                 rightColumn
                     .frame(width: compactPanelWidth)
                     .background(Theme.surfaceElevated)
@@ -514,6 +524,9 @@ struct MainShellView: View {
             sidebarTitleBar
             sidebarBrand
             sidebarChrome
+            if showCommunications {
+                CommunicationsSidebar(store: communicationsStore)
+            } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
@@ -523,7 +536,7 @@ struct MainShellView: View {
                             api: api,
                             selectedSessionId: Binding(
                                 get: {
-                                    showTaskBoard || showCreation || selectedWorkspaceTask != nil
+                                    showTaskBoard || showCreation || showCommunications || selectedWorkspaceTask != nil
                                         ? nil : selectedSessionId
                                 },
                                 set: { selectedSessionId = $0 }
@@ -553,6 +566,7 @@ struct MainShellView: View {
                     }
                 }
             }
+            }
             sidebarFooter
         }
     }
@@ -565,6 +579,7 @@ struct MainShellView: View {
             selectedSessionId: selectedSessionId,
             query: sidebarQuery,
             onOpenTask: { workspace, task in
+                showCommunications = false
                 showTaskBoard = false
                 showCreation = false
                 clearCompletionIntent()
@@ -600,6 +615,7 @@ struct MainShellView: View {
                 }
             },
             onOpenTaskSession: { workspace, task, session in
+                showCommunications = false
                 showTaskBoard = false
                 showCreation = false
                 openCompletionIntent(session.id)
@@ -783,9 +799,12 @@ struct MainShellView: View {
 
     private var sidebarChrome: some View {
         VStack(spacing: 3) {
-            navigationRow(.newSession, active: showCreation && selectedWorkspaceTask == nil)
+            navigationRow(.newSession, active: showCreation && !showCommunications && selectedWorkspaceTask == nil)
             navigationRow(.search)
             navigationRow(.taskBoard, active: showTaskBoard)
+            navigationRow(.conversations, active: showCommunications && communicationsStore.section == .conversations)
+            navigationRow(.contacts, active: showCommunications && communicationsStore.section == .contacts)
+            if !showCommunications {
             HStack(spacing: 6) {
                 Image(systemName: "line.3.horizontal.decrease").foregroundColor(Theme.textSecondary)
                 TextField("筛选工作空间与会话…", text: $sidebarQuery)
@@ -799,6 +818,7 @@ struct MainShellView: View {
             .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 32)
             .wandInputSurface(focused: sidebarSearchFocused, cornerRadius: Theme.Radius.control)
             .padding(.top, 12)
+            }
         }.padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
     }
 
@@ -847,13 +867,18 @@ struct MainShellView: View {
                 }.buttonStyle(WandIconButtonStyle()).help("显示侧栏 · ⌃⌘S")
                     .accessibilityLabel("显示侧栏")
             }
-            if showCreation {
+            if showCommunications {
+                Text(communicationsStore.section == .contacts ? "通讯录" : "对话")
+                    .font(.system(size: 15, weight: .medium))
+            } else if showCreation {
                 SessionCreationToolbarTitle(draft: creationDraft)
             } else if showTaskBoard {
                 Text("任务看板").font(.system(size: 15, weight: .medium))
             } else if selectedWorkspaceTask == nil, let session = selectedSession {
                 BrandLogo(provider: selectedSessionProvider, color: Theme.textSecondary)
                     .frame(width: 16, height: 16)
+                    .help(session.providerLabel)
+                    .accessibilityLabel(session.providerLabel)
                 Text(session.displayTitle).font(.system(size: 15, weight: .medium))
                     .lineLimit(1).help(session.displayTitle)
             } else {
@@ -861,7 +886,7 @@ struct MainShellView: View {
                     .font(.system(size: 15, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
             }
             WindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 52)
-            if !showCreation, !showTaskBoard, selectedSessionId != nil || selectedWorkspaceTask != nil {
+            if !showCreation, !showTaskBoard, !showCommunications, selectedSessionId != nil || selectedWorkspaceTask != nil {
                 filePanelToggleButton
             }
         }
@@ -893,7 +918,16 @@ struct MainShellView: View {
         hasPresentedSheet || NSApp.keyWindow?.sheetParent != nil
     }
 
+    private var unavailableCommands: Set<DesktopCommand> {
+        guard showCommunications else { return [] }
+        if communicationsStore.section == .contacts || communicationsStore.selectedID == nil {
+            return [.toggleInspector, .findConversation, .focusComposer]
+        }
+        return [.toggleInspector]
+    }
+
     private func handle(_ command: DesktopCommand) {
+        guard !unavailableCommands.contains(command) else { return }
         switch command {
         case .newSession:
             beginCreation()
@@ -903,12 +937,17 @@ struct MainShellView: View {
         case .toggleSidebar: withAnimation(structuralAnimation) { sidebarVisible.toggle() }
         case .toggleInspector: withAnimation(structuralAnimation) { filePanelOpen.toggle() }
         case .workspaces, .sessions:
+            showCommunications = false
             sidebarVisible = true
             sidebarQuery = ""
             sidebarScrollRequest = SidebarScrollRequest(
                 section: command == .workspaces ? .workspaces : .sessions
             )
-        case .taskBoard: showCreation = false; showTaskBoard = true; filePanelOpen = false
+        case .taskBoard: showCommunications = false; showCreation = false; showTaskBoard = true; filePanelOpen = false
+        case .conversations, .contacts:
+            showCommunications = true; showCreation = false; showTaskBoard = false
+            communicationsStore.section = command == .contacts ? .contacts : .conversations
+            sidebarVisible = true
         case .settings: presentSettings = true
         case .reconnect: recoverConnection()
         case .focusComposer, .findConversation: break
@@ -917,7 +956,9 @@ struct MainShellView: View {
 
     @ViewBuilder
     private var mainColumn: some View {
-        if case .disconnected(let message, _) = connectionState, selectedSessionId == nil, selectedWorkspaceTask == nil {
+        if showCommunications {
+            CommunicationsContent(store: communicationsStore, baseURL: serverURL, onOpenSession: openSessionFromMissions)
+        } else if case .disconnected(let message, _) = connectionState, selectedSessionId == nil, selectedWorkspaceTask == nil {
             ConnectionFailureView(
                 message: message,
                 requiresAuthentication: connectionState.requiresAuthentication,
@@ -1120,7 +1161,8 @@ struct MainColumn: View {
                     SessionHeaderView(
                         provider: provider,
                         title: session?.displayTitle,
-                        workingDirectory: session?.cwd
+                        workingDirectory: session?.cwd,
+                        engine: session?.engine ?? session?.structuredState?.engine
                     )
                 }
                 PtySessionView(sessionId: sessionId, api: api)
@@ -1134,7 +1176,8 @@ struct MainColumn: View {
                     SessionHeaderView(
                         provider: provider,
                         title: session?.displayTitle,
-                        workingDirectory: session?.cwd
+                        workingDirectory: session?.cwd,
+                        engine: session?.engine ?? session?.structuredState?.engine
                     )
                 }
                 // 必须按 sessionId 绑定身份:MainShellView 在 if let selectedSessionId 分支内
@@ -1170,9 +1213,10 @@ struct SessionHeaderView: View {
     let provider: String
     let title: String?
     let workingDirectory: String?
+    var engine: String? = nil
 
     private var providerLabel: String {
-        WandProvider.title(for: provider)
+        WandProvider.title(for: provider, engine: engine)
     }
     private var providerColor: Color { Theme.providerColor(provider) }
     private var displayTitle: String { title?.isEmpty == false ? title! : "新会话" }

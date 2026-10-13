@@ -1,0 +1,220 @@
+import AppKit
+import SwiftUI
+import WebKit
+import XCTest
+@testable import Wand
+
+@MainActor
+final class AvatarComposerParityTests: XCTestCase {
+    func testLatestAndroidIdentityPriorityAndTokens() {
+        XCTAssertEqual(PlushAvatarIdentity.asset(id: "e_wand_default", name: "改名", avatar: "data:image/png;base64,eA=="), "plush_cat_silver")
+        XCTAssertEqual(PlushAvatarIdentity.asset(id: "e_wand_ops", avatar: "cat:7"), "plush_cat_orange")
+        XCTAssertEqual(PlushAvatarIdentity.asset(id: "e_hr", avatar: "plush-dog:v1:shiba:red-scarf"), "plush_dog_shiba_red")
+        XCTAssertEqual(PlushAvatarIdentity.asset(id: "e1", avatar: ""), "plush_round_lavender_ink_beret")
+        XCTAssertEqual(PlushAvatarIdentity.asset(id: "😀员工", avatar: ""), "plush_round_blue_none_beret")
+        XCTAssertNil(PlushAvatarIdentity.asset(id: "", avatar: ""))
+        XCTAssertNil(PlushAvatarIdentity.asset(id: "e1", avatar: "cat:7"))
+        XCTAssertNil(PlushAvatarIdentity.asset(id: "e1", avatar: "data:image/png;base64,eA=="))
+        XCTAssertEqual(ContactCatAvatar.coatIndex(id: "any", avatar: "cat:9"), 1)
+        XCTAssertEqual(ContactCatAvatar.grid(coat: 0)[2][1], 0xF0923A)
+        XCTAssertEqual(plushSceneConfig("plush_dog_shiba_red")?["kind"] as? String, "dog")
+    }
+
+    func testEveryConfiguredPortraitIsPresentAndStable() {
+        for shape in PlushAvatarIdentity.shapes { for color in PlushAvatarIdentity.colors {
+            for glasses in PlushAvatarIdentity.glasses { for hat in PlushAvatarIdentity.hats {
+                let token = "plush:v1:\(shape):\(color):\(glasses):\(hat)"
+                let asset = "plush_\(shape)_\(color)_\(glasses)_\(hat)"
+                XCTAssertEqual(PlushAvatarIdentity.asset(id: "e", avatar: token), asset)
+                XCTAssertNotNil(NSImage(named: asset), asset)
+            } }
+        } }
+        for asset in ["plush_cat_silver", "plush_cat_orange", "plush_dog_shiba_red"] { XCTAssertNotNil(NSImage(named: asset)) }
+        XCTAssertNotNil(Bundle.main.url(forResource: "scene", withExtension: "html", subdirectory: "PlushScene"))
+    }
+
+    func testFocusBorrowingExplicitDismissAckAndRecoveryMatchAndroid() {
+        let focus = ComposerFocusController()
+        XCTAssertFalse(focus.editing)
+        focus.focus(); focus.borrow("model", open: true); focus.borrow("files", open: true)
+        XCTAssertTrue(focus.editing); XCTAssertFalse(focus.focused)
+        focus.resume("model"); XCTAssertFalse(focus.focused)
+        focus.resume("files"); XCTAssertTrue(focus.focused)
+        focus.borrow("model"); focus.collapse(); focus.resume("model")
+        XCTAssertFalse(focus.editing); XCTAssertFalse(focus.focused)
+        focus.focus(); focus.submit(); focus.collapse()
+        XCTAssertTrue(focus.editing, "pending ack cannot hide the submission feedback")
+        focus.accepted(hasPendingContent: true); XCTAssertTrue(focus.editing)
+        focus.submit(); focus.accepted(hasPendingContent: false); XCTAssertFalse(focus.editing)
+        focus.focus(); focus.failed(); focus.collapse()
+        XCTAssertTrue(focus.editing, "failed/unknown recovery is sticky")
+        focus.resetPresentation(); XCTAssertFalse(focus.editing)
+        focus.accepted(hasPendingContent: false); XCTAssertFalse(focus.editing)
+    }
+
+    func testIMECommitInsertTextReleasesSendGate() {
+        let editor = ComposerNSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 80))
+        var composing = false
+        editor.onMarkedTextChange = { composing = $0 }
+        editor.setMarkedText("zhongwen", selectedRange: NSRange(location: 8, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(composing)
+        editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertFalse(composing, "IME normally commits through insertText, not an explicit unmarkText call; send must enable after confirmation")
+    }
+
+    func testMouseSendAfterIMECommitUsesTheSameNativeEditor() async throws {
+        let focus = ComposerFocusController(); focus.focus()
+        let probe = NativeProbe()
+        let host = NSHostingView(rootView: MouseSendProbe(focus: focus, probe: probe))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 180)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); await Task.yield()
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let editor = try XCTUnwrap(descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        func clickSend() throws {
+            let region = try XCTUnwrap(descendants(host).compactMap { $0 as? MouseSendRegion }.first)
+            let point = region.convert(NSPoint(x: region.bounds.midX, y: region.bounds.midY), to: nil)
+            let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: 0.01, windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0))
+            NSApp.postEvent(up, atStart: false); window.sendEvent(down)
+        }
+        try clickSend(); await Task.yield()
+        XCTAssertEqual(probe.submissions, 0, "empty input cannot dispatch")
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.setMarkedText("ceshi", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(probe.composing)
+        try clickSend(); await Task.yield()
+        XCTAssertEqual(probe.submissions, 0, "active marked text cannot dispatch")
+        editor.insertText("仅本地鼠标验证", replacementRange: NSRange(location: NSNotFound, length: 0))
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertFalse(probe.composing); XCTAssertFalse(probe.text.isEmpty)
+        try clickSend(); await Task.yield()
+        XCTAssertEqual(probe.submissions, 1, "actual native mouse dispatch reaches enabled send action after IME commit")
+        XCTAssertTrue(descendants(host).contains { $0 === editor })
+    }
+
+    func testAvatarUsesOnlyCurrentUnfinishedSemanticCallsNotNames() throws {
+        func turn(_ body: String) throws -> ConversationTurn { try JSONDecoder().decode(ConversationTurn.self, from: Data(body.utf8)) }
+        let user = ConversationTurn(role: "user", content: [.text(text: "任务", subagent: nil)])
+        let read = try turn(#"{"role":"assistant","content":[{"type":"tool_use","id":"r","name":"anything","input":{"__wandToolActivity":{"kind":"read_file"}}}]}"#)
+        let write = try turn(#"{"role":"assistant","content":[{"type":"tool_use","id":"w","name":"anything","input":{"__wandToolActivity":{"kind":"edit_file"}}}]}"#)
+        let done = try turn(#"{"role":"assistant","content":[{"type":"tool_result","tool_use_id":"w","content":"done","is_error":true}]}"#)
+        let fakeName = try turn(#"{"role":"assistant","content":[{"type":"tool_use","id":"fake","name":"Read","input":{}}]}"#)
+        XCTAssertEqual(avatarFileActivity(messages: [user, read], executing: true), .reading)
+        XCTAssertEqual(avatarFileActivity(messages: [user, read, write], executing: true), .writing)
+        XCTAssertEqual(avatarFileActivity(messages: [user, read, write, done], executing: true), .reading)
+        XCTAssertEqual(avatarFileActivity(messages: [user, fakeName], executing: true), .idle)
+        XCTAssertEqual(avatarFileActivity(messages: [user, read], executing: false), .idle)
+        let retired = try turn(#"{"role":"assistant","completedAt":"2026","content":[{"type":"tool_use","id":"r","name":"Read","input":{"__wandToolActivity":{"kind":"read_file"}}}]}"#)
+        XCTAssertEqual(avatarFileActivity(messages: [user, retired], executing: true), .idle)
+        let thinking = try turn(#"{"role":"assistant","content":[{"type":"thinking","text":"reason"}]}"#)
+        XCTAssertTrue(avatarIsThinking(messages: [user, thinking], executing: true))
+        XCTAssertFalse(avatarIsThinking(messages: [user, thinking], executing: false))
+        XCTAssertFalse(avatarIsThinking(messages: [read, user], executing: true))
+    }
+
+    func testOneNativeEditorSurvivesCollapseAndRestoresExplicitFocus() async throws {
+        let focus = ComposerFocusController(); focus.focus()
+        let probe = NativeProbe()
+        let host = NSHostingView(rootView: FocusProbe(focus: focus, probe: probe))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 230)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); await Task.yield()
+        func find(_ view: NSView) -> ComposerNSTextView? { if let edit = view as? ComposerNSTextView { return edit }; return view.subviews.compactMap(find).first }
+        let editor = try XCTUnwrap(find(host))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.insertText("保留文字", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(probe.text, "保留文字")
+        editor.setSelectedRange(NSRange(location: 1, length: 2))
+        focus.collapse(); host.layoutSubtreeIfNeeded(); await Task.yield()
+        XCTAssertTrue(editor === find(host)); XCTAssertEqual(editor.string, "保留文字")
+        focus.focus(); host.layoutSubtreeIfNeeded(); await Task.yield()
+        XCTAssertTrue(editor === find(host)); XCTAssertEqual(editor.selectedRange(), NSRange(location: 1, length: 2))
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        _ = editor.delegate?.textView?(editor, doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertEqual(probe.submissions, 0)
+        _ = editor.delegate?.textView?(editor, doCommandBy: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(focus.editing)
+    }
+
+    func testOfflineAndroidSceneRendersActualFramesAndReadWriteProps() async throws {
+        let config = WKWebViewConfiguration(); config.websiteDataStore = .nonPersistent()
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 96, height: 96), configuration: config)
+        view.setValue(false, forKey: "drawsBackground"); view.underPageBackgroundColor = .clear
+        let observer = SceneObserver(); view.navigationDelegate = observer
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = view; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        defer { view.evaluateJavaScript("window.disposeScene?.()"); view.stopLoading(); window.orderOut(nil); window.contentView = nil }
+        let url = try XCTUnwrap(Bundle.main.url(forResource: "scene", withExtension: "html", subdirectory: "PlushScene"))
+        view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        await fulfillment(of: [observer.loaded], timeout: 10)
+        let payload: [String: Any] = ["config": try XCTUnwrap(plushSceneConfig("plush_cat_silver")), "size": 96,
+            "interactive": false, "fileActivity": "reading", "thinking": false, "speaking": false, "reducedMotion": false]
+        let json = String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
+        _ = try await view.evaluateJavaScript("window.setScene(\(json));true")
+        let documentHidden = try await view.evaluateJavaScript("document.hidden") as? Bool ?? true
+        if documentHidden { throw XCTSkip("This native test host document remains hidden; lifecycle correctly pauses renderer. Foreground native motion needs a visible active app context, not a mocked visibility flag.") }
+        var result: [String: Any] = [:]
+        for _ in 0..<100 {
+            result = (try await view.evaluateJavaScript("(()=>{let c=document.querySelector('canvas');return {...c.dataset,title:document.title,hidden:document.hidden,rect:c.getBoundingClientRect().toJSON(),diagnostics:window.__wandPlushDiagnostics?.()}})()")) as? [String: Any] ?? [:]
+            if result["title"] as? String == "scene-fallback" { throw XCTSkip("Native WebKit GPU unavailable; same-identity static fallback is tested separately") }
+            if Int(result["frame"] as? String ?? "0") ?? 0 > 2 { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        print("nativeAvatarDiagnostics", result)
+        XCTAssertEqual(result["title"] as? String, "scene-ready")
+        XCTAssertEqual(result["fileActivity"] as? String, "reading")
+        let before = Int(result["frame"] as? String ?? "0") ?? 0
+        _ = try await view.evaluateJavaScript("window.setScene({...\(json),fileActivity:'writing'});true")
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let after = try await view.evaluateJavaScript("(()=>{let c=document.querySelector('canvas');return {...c.dataset}})()") as! [String: Any]
+        XCTAssertEqual(after["fileActivity"] as? String, "writing")
+        XCTAssertGreaterThan(Int(after["frame"] as? String ?? "0") ?? 0, before)
+        if let directory = ProcessInfo.processInfo.environment["WAND_AVATAR_NATIVE_OUTPUT"] {
+            let output = URL(fileURLWithPath: directory, isDirectory: true); try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: ["before": result, "after": after], options: [.sortedKeys]).write(to: output.appendingPathComponent("scene-frames.json"))
+            let image = try await view.takeSnapshot(configuration: nil)
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("native-scene-writing.png"))
+        }
+    }
+    private final class SceneObserver: NSObject, WKNavigationDelegate {
+        let loaded = XCTestExpectation(description: "offline avatar loaded")
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded.fulfill() }
+    }
+
+    private final class NativeProbe: ObservableObject { @Published var text = ""; @Published var composing = false; var submissions = 0 }
+    private final class MouseSendRegion: NSView { override func hitTest(_ point: NSPoint) -> NSView? { nil } }
+    private struct MouseSendMarker: NSViewRepresentable {
+        func makeNSView(context: Context) -> MouseSendRegion { MouseSendRegion() }
+        func updateNSView(_ view: MouseSendRegion, context: Context) {}
+    }
+    private struct MouseSendProbe: View {
+        @ObservedObject var focus: ComposerFocusController
+        @ObservedObject var probe: NativeProbe
+        var body: some View {
+            FocusComposerSurface(expanded: focus.editing, hasDraft: !probe.text.isEmpty, onFocus: focus.focus, editor: {
+                IMEAwareComposerTextView(text: $probe.text, placeholder: "本地测试", isFocused: focus.focused, sendWithCommandEnter: false,
+                    onFocusChange: { focus.focused = $0 }, onCompositionChange: { probe.composing = $0 }, onSubmit: { probe.submissions += 1 }, onHeightChange: { _ in }, onEscape: focus.collapse).frame(height: 48)
+            }, add: { Color.clear }, send: {
+                NativeComposerActionButton(phase: .idle, hasDraft: !probe.text.isEmpty, canSubmit: !probe.composing && !probe.text.isEmpty,
+                    onSend: { probe.submissions += 1 }).background(MouseSendMarker())
+            }, settings: { Color.clear.frame(height: 44) })
+        }
+    }
+    private struct FocusProbe: View {
+        @ObservedObject var focus: ComposerFocusController
+        @ObservedObject var probe: NativeProbe
+        var body: some View {
+            FocusComposerSurface(expanded: focus.editing, hasDraft: !probe.text.isEmpty, onFocus: focus.focus, editor: {
+                IMEAwareComposerTextView(text: $probe.text, placeholder: "发消息…", isFocused: focus.focused, sendWithCommandEnter: false,
+                    onFocusChange: { if $0 { focus.focus() } }, onCompositionChange: { _ in }, onSubmit: { probe.submissions += 1 }, onHeightChange: { _ in }, onEscape: focus.collapse).frame(height: 48)
+            }, add: { Text("+").frame(width: 48, height: 48) }, send: { Text("发送") }, settings: { Text("模型 · 权限 · 思考").frame(height: 44) })
+        }
+    }
+}

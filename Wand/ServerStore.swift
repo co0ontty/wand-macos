@@ -3,7 +3,7 @@ import Combine
 
 /// 包装 UserDefaults，存连接的服务器、token 和最近连接记录。
 final class ServerStore: ObservableObject {
-    static let shared = ServerStore()
+    static let shared = ServerStore(defaults: NativeAcceptance.defaults)
 
     private let defaults: UserDefaults
     private let serverURLKey = "wand.serverURL"

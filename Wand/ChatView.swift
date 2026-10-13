@@ -49,6 +49,12 @@ struct ChatView: View {
     @State private var composerIsComposing = false
     // AppKit owns first responder; an unattached SwiftUI FocusState resets to false.
     @State private var inputFocused = false
+    @StateObject private var composerFocus = ComposerFocusController()
+    @State private var sendPresentationPhase: NativeComposerPhase = .idle
+    @State private var showThinkingPanel = false
+    @State private var showModePanel = false
+    @State private var proposedMode: String?
+    @State private var confirmModeChange = false
 
     init(sessionId: String, api: WandAPI, gitStatusStore: GitStatusStore) {
         self.sessionId = sessionId
@@ -61,6 +67,11 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             sessionActionBar
+            WorkingAvatar(id: store.snapshot?.employeeId ?? sessionId, name: store.displayEmployeeName, avatar: store.displayEmployeeAvatar,
+                activity: avatarFileActivity(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked),
+                thinking: avatarIsThinking(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked), size: 88)
+                .frame(height: FocusComposerMetrics.normalCompanionClearance)
+                .overlay { Color.clear.contentShape(Rectangle()).frame(width: 88, height: 88).onTapGesture { composerFocus.focus(); inputFocused = true } }
             if showingFind { conversationFindBar }
             if !store.connected && !store.loading { reconnectBanner }
             ZStack {
@@ -88,7 +99,7 @@ struct ChatView: View {
                 } else if store.messages.isEmpty && !store.isResponding {
                     sessionLaunchPanel
                 } else {
-                    messageList
+                    messageList.clipped().simultaneousGesture(TapGesture().onEnded { composerFocus.collapseFromContent(); inputFocused = false })
                 }
             }
         }
@@ -140,12 +151,13 @@ struct ChatView: View {
         .onChange(of: showQuickCommit) { showing in
             if !showing { refreshGitStatus() }
         }
-        .onChange(of: draft) { _ in saveDraft() }
+        .onChange(of: draft) { _ in saveDraft(); if sendPresentationPhase == .sent { sendPresentationPhase = .idle } }
         .onReceive(attachments.$attachments.dropFirst()) { files in
             saveDraft(files: files)
         }
         .onReceive(ConversationDraftCache.shared.recoveries) { recovery in
             guard recovery.serverURL == api.baseURL, recovery.sessionID == sessionId else { return }
+            composerFocus.failed(); sendPresentationPhase = .failed
             draft = recovery.draft.text
             attachments.attachments = recovery.draft.attachments
             store.toast = "上一条消息发送失败，已恢复到输入框。"
@@ -155,7 +167,7 @@ struct ChatView: View {
             switch command {
             case .focusComposer:
                 closeFind()
-                inputFocused = true
+                composerFocus.focus(); inputFocused = true
             case .findConversation:
                 showingFind = true
                 inputFocused = false
@@ -597,41 +609,61 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        // macOS 有稳定的桌面空间：输入区始终保持“正文 + 工具栏”两层，
-        // 鼠标或键盘聚焦只改变描边颜色，不再触发布局放大/缩小。
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .bottom, spacing: ComposerMetrics.actionSpacing) {
-                composerInputContent
-            }
-            HStack(spacing: ComposerMetrics.actionSpacing) {
-                composerActionsMenu
-                if store.isStructured {
-                    modelThinkingChip
-                }
-                Spacer(minLength: 0)
-                if inputFocused {
-                    Text(sendWithCommandEnter ? "⌘ Return 发送" : "⇧ Return 换行")
-                        .font(.system(size: 10))
-                        .foregroundColor(Theme.textMuted)
-                        .lineLimit(1)
-                }
-                trailingButtons
-            }
+        VStack(spacing: 0) {
+            FocusComposerSurface(expanded: composerFocus.editing || composerFocus.recovery || store.sending || attachments.isUploading,
+                hasDraft: !draft.isEmpty || !attachments.attachments.isEmpty,
+                summary: attachments.attachments.isEmpty ? (draft.isEmpty ? "发消息…" : "草稿 · \(draft.count) 字") : "草稿 · \(attachments.attachments.count) 附件",
+                onFocus: { composerFocus.focus(); inputFocused = true }, editor: { composerInputContent },
+                add: { composerActionsMenu }, send: { trailingButtons }, settings: {
+                    HStack(spacing: 2) {
+                        modelThinkingChip
+                        Button { composerFocus.borrow("mode", open: true); inputFocused = false; showModePanel = true } label: {
+                            ComposerSettingLabel(title: "权限：\(store.mode)")
+                        }.buttonStyle(.plain).popover(isPresented: $showModePanel, arrowEdge: .bottom) { modePanel }
+                        Button { composerFocus.borrow("thinking", open: true); inputFocused = false; showThinkingPanel = true } label: {
+                            ComposerSettingLabel(title: "思考：\(thinkingShortLabel(store.thinkingEffort))")
+                        }.buttonStyle(.plain).popover(isPresented: $showThinkingPanel, arrowEdge: .bottom) {
+                            ThinkingEffortSlider(options: thinkingLevels, selection: store.thinkingEffort, accent: thinkingTint, onSelect: store.setThinkingEffort)
+                                .padding(16).frame(width: 300)
+                        }
+                    }
+                })
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .wandInputSurface(focused: inputFocused, cornerRadius: Theme.Radius.lg)
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
-        .confirmationDialog(
-            "确定要停止当前正在运行的任务吗？",
-            isPresented: $showStopConfirm,
-            titleVisibility: .visible
-        ) {
+        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 6)
+        .onChange(of: composerFocus.focused) { inputFocused = $0 }
+        .onChange(of: showThinkingPanel) { if !$0 { composerFocus.resume("thinking") } }
+        .onChange(of: showModePanel) { if !$0 && proposedMode == nil { composerFocus.resume("mode") } }
+        .onChange(of: showModelThinkingPanel) { if !$0 { composerFocus.resume("model") } }
+        .onChange(of: attachments.showFileImporter) { value in
+            if value { composerFocus.borrow("files", open: true); inputFocused = false }
+            else { composerFocus.resume("files") }
+        }
+        .confirmationDialog("更改当前会话权限", isPresented: $confirmModeChange) {
+            Button("应用到当前会话", role: .destructive) {
+                if let proposedMode { store.setMode(proposedMode) }; proposedMode = nil; composerFocus.resume("mode")
+            }
+            Button("取消", role: .cancel) { proposedMode = nil; composerFocus.resume("mode") }
+        } message: { Text("只作用于当前会话，扩大访问仍须由你明确确认。") }
+        .confirmationDialog("确定要停止当前正在运行的任务吗？", isPresented: $showStopConfirm) {
             Button("停止", role: .destructive) { store.stopResponding() }
             Button("取消", role: .cancel) {}
         }
+    }
+
+    private var modePanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if store.snapshot?.provider == "codex" {
+                Text("Codex 当前权限固定为 \(store.mode)，此处不会提升权限。")
+            } else {
+                ForEach(["default", "auto-edit", "full-access", "managed", "native"], id: \.self) { mode in
+                    Button(mode) {
+                        if ["auto-edit", "full-access", "managed"].contains(mode), mode != store.mode {
+                            proposedMode = mode; showModePanel = false; confirmModeChange = true
+                        } else { store.setMode(mode); showModePanel = false }
+                    }.buttonStyle(WandSecondaryButtonStyle())
+                }
+            }
+        }.padding(16).frame(width: 300)
     }
 
     private var composerInputContent: some View {
@@ -662,39 +694,15 @@ struct ChatView: View {
         )
     }
 
-    @ViewBuilder private var trailingButtons: some View {
-        if store.isResponding {
-            Button(action: { showStopConfirm = true }) {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(Theme.workspaceBackground)
-                    .frame(
-                        width: ComposerMetrics.actionVisualSize,
-                        height: ComposerMetrics.actionVisualSize
-                    )
-                    .background(Circle().fill(Theme.danger))
-            }
-            .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
-            .buttonStyle(.plain)
-            .accessibilityLabel("停止任务")
-        }
-        Button(action: sendDraft) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 16, weight: .bold))
-                .frame(
-                    width: ComposerMetrics.actionVisualSize,
-                    height: ComposerMetrics.actionVisualSize
-                )
-        }
-        .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
-        .buttonStyle(WandSendButtonStyle())
-        .disabled(!canSend)
-        .accessibilityLabel(store.isResponding ? "加入发送队列" : "发送消息")
-        .help(store.isResponding ? "在当前回复完成后发送" : (sendWithCommandEnter ? "发送消息（⌘ Return）" : "发送消息（Return）"))
+    private var trailingButtons: some View {
+        NativeComposerActionButton(phase: sendPresentationPhase, turnRunning: store.isResponding,
+            hasDraft: !draft.isEmpty || !attachments.attachments.isEmpty, canSubmit: canSend,
+            onSend: sendDraft, onStop: { showStopConfirm = true })
     }
 
     private var modelThinkingChip: some View {
         Button {
+            composerFocus.borrow("model", open: true); inputFocused = false
             showModelThinkingPanel = true
         } label: {
             HStack(spacing: 4) {
@@ -725,7 +733,7 @@ struct ChatView: View {
     }
 
     private var modelThinkingText: String {
-        "\(shortModelLabel) · \(thinkingShortLabel(store.thinkingEffort))"
+        shortModelLabel
     }
 
     private var shortModelLabel: String {
@@ -833,13 +841,7 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 220)
-            Divider()
-            ThinkingEffortSlider(
-                options: thinkingLevels,
-                selection: store.thinkingEffort,
-                accent: thinkingTint,
-                onSelect: store.setThinkingEffort
-            )
+
         }
         .padding(14)
         .frame(width: 300)
@@ -949,10 +951,11 @@ struct ChatView: View {
             placeholder: composerPlaceholder,
             isFocused: inputFocused,
             sendWithCommandEnter: sendWithCommandEnter,
-            onFocusChange: { inputFocused = $0 },
+            onFocusChange: { value in inputFocused = value; composerFocus.focused = value; if value { composerFocus.editing = true } },
             onCompositionChange: { composerIsComposing = $0 },
             onSubmit: handleReturnKey,
-            onHeightChange: { composerInputHeight = $0 }
+            onHeightChange: { composerInputHeight = $0 },
+            onEscape: { composerFocus.collapse(); inputFocused = false }
         )
         .frame(height: composerInputHeight)
     }
@@ -979,6 +982,7 @@ struct ChatView: View {
         // 提交落进 draft),trim 一下避免发出去的消息带尾换行。
         let text = buildAttachmentPrompt(attachments.attachments, body: draft)
         guard !text.isEmpty else { return }
+        composerFocus.submit(); sendPresentationPhase = .sending
         let submittedDraft = draft
         let submittedAttachments = attachments.attachments
         draft = ""
@@ -988,7 +992,11 @@ struct ChatView: View {
         expandedCurrentReplyAbsoluteIndex = -1
         let serverURL = api.baseURL
         let submittedSessionID = sessionId
-        store.send(text: text) {
+        store.send(text: text, onAccepted: {
+            sendPresentationPhase = .sent
+            composerFocus.accepted(hasPendingContent: !draft.isEmpty || !attachments.attachments.isEmpty || composerIsComposing)
+            inputFocused = composerFocus.focused
+        }) {
             ConversationDraftCache.shared.recover(
                 submitted: ConversationDraft(text: submittedDraft, attachments: submittedAttachments),
                 serverURL: serverURL,
@@ -1516,7 +1524,7 @@ struct PtySessionView: View {
 /// 与网页 / iOS 端一致：服务端保存附件后，客户端只在发送当前消息时把路径协议前缀
 /// 拼入 prompt。这样图片、文本和任意一般文件都能被当前会话访问，而不会把绝对路径
 /// 直接展示在输入框中。
-private func buildAttachmentPrompt(_ attachments: [UploadedFile], body: String) -> String {
+func buildAttachmentPrompt(_ attachments: [UploadedFile], body: String) -> String {
     let message = body.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !attachments.isEmpty else { return message }
     let paths = attachments.map(\.savedPath).joined(separator: "\n")
@@ -1825,6 +1833,7 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
     let onSubmit: () -> Void
     let onHeightChange: (CGFloat) -> Void
     var submitActionName = "发送"
+    var onEscape: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -1977,6 +1986,9 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)), !textView.hasMarkedText(), let close = parent.onEscape {
+                close(); return true
+            }
             guard commandSelector == #selector(NSResponder.insertNewline(_:)) else {
                 return false
             }
@@ -2062,6 +2074,14 @@ final class ComposerNSTextView: NSTextView {
             selectedRange: selectedRange,
             replacementRange: replacementRange
         )
+        onMarkedTextChange?(hasMarkedText())
+        needsDisplay = true
+    }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        super.insertText(insertString, replacementRange: replacementRange)
+        // IMEs commit candidates via insertText without calling our unmarkText override.
+        // Publish AppKit's resulting state so every composer releases its send gate.
         onMarkedTextChange?(hasMarkedText())
         needsDisplay = true
     }
@@ -3333,7 +3353,8 @@ private func subagentTailRefreshToken(_ items: [DisplayItem]) -> Int {
     return hasher.finalize()
 }
 
-private struct TurnView: View {
+/// Canonical native message/Markdown/tool renderer, shared by session chat and employee conversations.
+struct TurnView: View {
     let turn: ConversationTurn
     var baseURL: URL?
     var isLastTurn: Bool
@@ -3349,6 +3370,7 @@ private struct TurnView: View {
     var askSelections: [String: AskUserSelectionState]
     var onAskToggle: (String, Int, Int, Bool) -> Void
     var onAskSubmit: (String, String) -> Void
+    var interactiveTools: Bool
 
     @State private var localCollapsed: Bool
 
@@ -3367,7 +3389,8 @@ private struct TurnView: View {
         onCurrentReplyExpandToBottom: @escaping () -> Void = {},
         askSelections: [String: AskUserSelectionState] = [:],
         onAskToggle: @escaping (String, Int, Int, Bool) -> Void = { _, _, _, _ in },
-        onAskSubmit: @escaping (String, String) -> Void = { _, _ in }
+        onAskSubmit: @escaping (String, String) -> Void = { _, _ in },
+        interactiveTools: Bool = true
     ) {
         self.turn = turn
         self.baseURL = baseURL
@@ -3384,6 +3407,7 @@ private struct TurnView: View {
         self.askSelections = askSelections
         self.onAskToggle = onAskToggle
         self.onAskSubmit = onAskSubmit
+        self.interactiveTools = interactiveTools
         _localCollapsed = State(initialValue: false)
     }
 
@@ -3642,6 +3666,7 @@ private struct TurnView: View {
                 onToggle: { qIdx, optIdx, multi in onAskToggle(id, qIdx, optIdx, multi) },
                 onSubmit: { answerText in onAskSubmit(id, answerText) }
             )
+            .disabled(!interactiveTools)
         } else if !(result?.images.isEmpty ?? true) {
             // 专用 diff / 终端卡不渲染图片；有图时使用可展示缩略图的通用卡。
             ToolUseCard(

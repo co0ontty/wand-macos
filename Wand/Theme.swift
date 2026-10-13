@@ -27,144 +27,54 @@ enum Theme {
         }
     }
 
-    // MARK: - 品牌色(对齐 web --accent #C5653D)
-
-    /// 新品牌主色,对齐 web --accent。暖珊瑚,深一档更接近 web。
-    static let wandAccent = dynamic(
-        light: rgb(0.663, 0.310, 0.169),
-        dark: rgb(0.878, 0.608, 0.471)
-    ) // #A94F2B / #E09B78; foreground contrast on paper and charcoal.
-    /// Solid actions retain enough contrast for white labels in both appearances.
-    static let accentSolid = Color(red: 0.722, green: 0.337, blue: 0.184)
-    static let accentSolidHover = Color(red: 0.616, green: 0.275, blue: 0.137)
-    /// 加深版:active / pressed 状态。
-    static let wandAccentStrong = Color(red: 0.686, green: 0.325, blue: 0.188)  // #AF5330
-    /// 0.12 透明,卡片背景用。
-    static let wandAccentMuted = rgbA(0.773, 0.396, 0.239, 0.12)
-    /// 0.25 透明,glow 阴影用。
-    static let wandAccentGlow = rgbA(0.773, 0.396, 0.239, 0.25)
-
-    // 旧 brand(供老引用方继续工作,iOS 端同步保留,后续统一)
+    // MARK: - iOS-aligned semantic colors (desktop window geometry remains native)
+    private static func hex(_ value: Int) -> NSColor {
+        rgb(Double((value >> 16) & 255) / 255, Double((value >> 8) & 255) / 255, Double(value & 255) / 255)
+    }
+    static let wandAccent = dynamic(light: hex(0x0076D6), dark: hex(0x63B4FF))
+    static let accentSolid = Color(nsColor: hex(0x0076D6))
+    static let accentSolidHover = Color(nsColor: hex(0x0068BE))
+    static let wandAccentStrong = wandAccent
+    static let wandAccentMuted = hex(0x0076D6).withAlphaComponent(0.08)
+    static let wandAccentGlow = hex(0x0076D6).withAlphaComponent(0.18)
     static let brand = wandAccent
     static let brandStrong = wandAccentStrong
-
-    /// Codex provider 徽标色(对齐 web --info #4A6FA5)。
-    static let codex = dynamic(
-        light: rgb(0.290, 0.435, 0.647),
-        dark: rgb(0.494, 0.612, 0.769)
-    ) // #4A6FA5 / #7E9CC4
-    static let openCode = dynamic(
-        light: rgb(0.333, 0.408, 0.655),
-        dark: rgb(0.518, 0.584, 0.824)
-    )
-    static let grok = dynamic(
-        light: rgb(0.318, 0.337, 0.365),
-        dark: rgb(0.722, 0.737, 0.757)
-    )
-    static let qoder = dynamic(
-        light: rgb(0.365, 0.455, 0.400),
-        dark: rgb(0.529, 0.675, 0.576)
-    )
-    /// Gemini 官方标是蓝紫粉渐变，单色 token 只能取代表色（与 Web 端的中性呈现有意不同，
-    /// Web 用 `--text-primary` 避免假装有品牌色）。这里取渐变里的蓝段，保证 7 个 provider 可区分。
-    static let gemini = dynamic(
-        light: rgb(0.231, 0.435, 0.831),
-        dark: rgb(0.498, 0.651, 0.941)
-    )
-
+    static let codex = dynamic(light: hex(0x4A6FA5), dark: hex(0x7E9CC4))
+    static let openCode = dynamic(light: hex(0x5568A7), dark: hex(0x8495D2))
+    static let grok = dynamic(light: hex(0x51565D), dark: hex(0xB8BCC2))
+    static let qoder = dynamic(light: hex(0x5D7466), dark: hex(0x87AC94))
+    static let gemini = dynamic(light: hex(0x3B6FD4), dark: hex(0x7FA6F0))
     static func providerColor(_ provider: String?) -> Color {
         switch WandProvider.normalizedID(provider) {
-        case WandProvider.codex.rawValue: return codex
-        case WandProvider.opencode.rawValue: return openCode
-        case WandProvider.grok.rawValue: return grok
-        case WandProvider.qoder.rawValue: return qoder
-        case WandProvider.gemini.rawValue: return gemini
+        case "codex": return codex
+        case "opencode": return openCode
+        case "grok": return grok
+        case "qoder": return qoder
+        case "gemini": return gemini
         default: return wandAccent
         }
     }
-
-    // MARK: - 背景层(对齐 web --bg-*)
-
-    /// 与 Web 登录页同源的暖纸底色。
-    static let background = dynamic(
-        light: rgb(0.980, 0.969, 0.949),  // #FAF7F2
-        dark: rgb(0.102, 0.094, 0.086)    // #1A1816
-    )
-
-    /// 侧栏只比正文深一档，靠留白和细线区分结构。
-    static let sidebarBackground = dynamic(
-        light: rgb(0.949, 0.929, 0.898),  // #F2EDE5
-        dark: rgb(0.125, 0.114, 0.102)    // #201D1A
-    )
-
-    /// 聊天、终端和空状态所在的主工作区。
-    static let workspaceBackground = dynamic(
-        light: rgb(0.980, 0.969, 0.949),
-        dark: rgb(0.102, 0.094, 0.086)
-    )
-
-    /// 二级背景：输入栏、静态控件和轻量卡片。
-    static let surface = dynamic(
-        light: rgb(0.949, 0.929, 0.898),
-        dark: rgb(0.149, 0.137, 0.125)
-    )
-
-    /// 浮起层背景。
-    static let surfaceElevated = dynamic(
-        light: rgb(1.0, 0.992, 0.980),
-        dark: rgb(0.165, 0.153, 0.141)
-    )
-
-    // MARK: - 边框(对齐 web --border-*)
-
-    static let borderSubtle = dynamicNS(
-        light: rgb(0.898, 0.871, 0.827), dark: rgb(0.239, 0.220, 0.196)
-    )
-    static let borderDefault = dynamicNS(
-        light: rgb(0.812, 0.776, 0.722), dark: rgb(0.341, 0.310, 0.275)
-    )
-    static let border = dynamic(
-        light: rgb(0.898, 0.871, 0.827),
-        dark: rgb(0.275, 0.251, 0.224)
-    )
-    static let borderFocus = rgbA(0.773, 0.396, 0.239, 0.50)    // rgba(197,101,61,0.5)
-    /// 玻璃表面的受光边缘。只用于结构性面板，避免每个控件都抢视觉注意力。
-    static let glassHighlight = dynamic(
-        light: rgbA(1.0, 1.0, 1.0, 0.72),
-        dark: rgbA(1.0, 0.960, 0.910, 0.17)
-    )
-
-    // MARK: - 文本(对齐 web --text-*)
-
-    static let textPrimary = dynamic(
-        light: rgb(0.122, 0.106, 0.094),
-        dark: rgb(0.953, 0.925, 0.886)
-    )
-    static let textSecondary = dynamic(
-        light: rgb(0.341, 0.314, 0.290),
-        dark: rgb(0.769, 0.729, 0.678)
-    )
-    static let textTertiary = dynamic(
-        light: rgb(0.435, 0.400, 0.361),
-        dark: rgb(0.690, 0.647, 0.592)
-    )
-    static let textMuted = dynamic(
-        light: rgb(0.435, 0.400, 0.361),
-        dark: rgb(0.690, 0.647, 0.592)
-    )
-    /// 输入框占位提示色。与 iOS `Theme.textPlaceholder` 是同一组字面值（#81756A / #958B81），
-    /// 两端都显式上色，不再各吃系统占位色——系统值在 macOS 与 iOS 上本来就不一样。
-    static let textPlaceholder = dynamicNS(
-        light: rgb(0.506, 0.459, 0.416),
-        dark: rgb(0.584, 0.545, 0.506)
-    )
-    // MARK: - 语义色(对齐 web --success/--warning/--danger/--info)
-
-    static let success = dynamic(light: rgb(0.290, 0.455, 0.325), dark: rgb(0.580, 0.749, 0.600))
-    static let warning = dynamic(light: rgb(0.584, 0.365, 0.153), dark: rgb(0.871, 0.694, 0.439))
-    static let danger = dynamic(light: rgb(0.678, 0.290, 0.255), dark: rgb(0.890, 0.565, 0.525))
-    static let info = dynamic(light: rgb(0.275, 0.416, 0.624), dark: rgb(0.580, 0.706, 0.863))
-    static let infoMuted = rgbA(0.290, 0.435, 0.647, 0.14)
+    static let background = dynamic(light: hex(0xF2F3F7), dark: hex(0x101114))
+    static let sidebarBackground = dynamic(light: hex(0xEDEEF2), dark: hex(0x17181C))
+    static let workspaceBackground = background
+    static let surface = dynamic(light: hex(0xFFFFFF), dark: hex(0x1C1D21))
+    static let surfaceSoft = dynamic(light: hex(0xEDEEF2), dark: hex(0x27282D))
+    static let surfaceElevated = dynamic(light: hex(0xFFFFFF), dark: hex(0x17181C))
+    static let borderSubtle = dynamicNS(light: hex(0xE3E5EB), dark: hex(0x34363D))
+    static let borderDefault = dynamicNS(light: hex(0xC4C7CF), dark: hex(0x50535D))
+    static let border = dynamic(light: hex(0xE3E5EB), dark: hex(0x34363D))
+    static let borderFocus = hex(0x0076D6).withAlphaComponent(0.5)
+    static let glassHighlight = dynamic(light: NSColor.white.withAlphaComponent(0.72), dark: NSColor.white.withAlphaComponent(0.17))
+    static let textPrimary = dynamic(light: hex(0x1C1D21), dark: hex(0xF4F5F7))
+    static let textSecondary = dynamic(light: hex(0x60636B), dark: hex(0xC4C7CF))
+    static let textTertiary = textSecondary
+    static let textMuted = textSecondary
+    static let textPlaceholder = dynamicNS(light: hex(0x60636B), dark: hex(0xC4C7CF))
+    static let success = dynamic(light: hex(0x4F7A58), dark: hex(0x8BBA94))
+    static let warning = dynamic(light: hex(0x95652F), dark: hex(0xDEB16F))
+    static let danger = dynamic(light: hex(0xB24F45), dark: hex(0xE4887E))
+    static let info = dynamic(light: hex(0x4A6FA5), dark: hex(0x94B4DC))
+    static let infoMuted = hex(0x4A6FA5).withAlphaComponent(0.14)
 
     // MARK: - 圆角(对齐 web --radius-*)
 

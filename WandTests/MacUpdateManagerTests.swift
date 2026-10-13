@@ -5,6 +5,13 @@ import XCTest
 
 @MainActor
 final class MacUpdateManagerTests: XCTestCase {
+    private let testUpdatesDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("Wand-update-tests-\(UUID().uuidString)", isDirectory: true)
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: testUpdatesDirectory)
+        super.tearDown()
+    }
 
     func testPermissionRecoveryChecksDomainsButNeverLoopback() {
         XCTAssertFalse(LocalNetworkPermission.shouldCheckForServer("localhost"))
@@ -60,7 +67,7 @@ final class MacUpdateManagerTests: XCTestCase {
         }
         """
         let manager = MacUpdateManager(
-            defaults: defaults,
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
             currentVersion: { "1.0.0" },
             dataLoader: { request in
                 requestedPaths.append(request.url?.absoluteString ?? "")
@@ -98,7 +105,7 @@ final class MacUpdateManagerTests: XCTestCase {
         }
         """
         let manager = MacUpdateManager(
-            defaults: defaults,
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
             currentVersion: { "4.38.0" },
             dataLoader: { _ in XCTFail("Beta must not request GitHub"); throw URLError(.badURL) },
             betaDataLoader: { request in
@@ -137,7 +144,7 @@ final class MacUpdateManagerTests: XCTestCase {
         let server = URL(string: "http://127.0.0.1:8443")!
         var link = "https://evil.example.test/macos/update-download?fileName=wand-v2.0.0.zip"
         let manager = MacUpdateManager(
-            defaults: defaults,
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
             currentVersion: { "1.0.0" },
             betaDataLoader: { request in
                 let body = """
@@ -158,7 +165,7 @@ final class MacUpdateManagerTests: XCTestCase {
         defer { clear(defaults) }
         var requests = 0
         let manager = MacUpdateManager(
-            defaults: defaults,
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
             currentVersion: { "1.0.0" },
             dataLoader: { _ in
                 requests += 1
@@ -188,7 +195,7 @@ final class MacUpdateManagerTests: XCTestCase {
         }
         """
         let manager = MacUpdateManager(
-            defaults: defaults,
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
             currentVersion: { "1.0.0" },
             dataLoader: { request in
                 requests += 1
@@ -203,12 +210,55 @@ final class MacUpdateManagerTests: XCTestCase {
         XCTAssertEqual(requests, 2)
     }
 
+    func testManualCheckCannotOverwriteDownloadProgress() async {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        var requests = 0
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            dataLoader: { _ in requests += 1; throw URLError(.notConnectedToInternet) }
+        )
+        let update = makeUpdate(version: "2.0.0")
+        manager.handleInstallerStage(.downloading(received: 10, total: 42), update: update)
+        let before = manager.state
+        let result = await manager.check(.manual)
+        XCTAssertNil(result)
+        XCTAssertEqual(manager.state, before)
+        XCTAssertEqual(requests, 0)
+    }
+
+    func testOldChannelInstallerStageCannotCreatePendingInstall() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let server = URL(string: "http://127.0.0.1:8181")!
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            betaDataLoader: { request in
+                Self.response(for: request, body: """
+                {"updateAvailable":false,"latestVersion":"1.0.0","source":"local","channel":"beta"}
+                """)
+            },
+            connectedServer: { server }
+        )
+        let oldUpdate = makeUpdate(version: "2.0.0")
+        manager.handleInstallerStage(.downloading(received: 10, total: 42), update: oldUpdate)
+        _ = await manager.setChannel(.beta)
+        let stagedApp = testUpdatesDirectory.appendingPathComponent("staging-late/Wand.app")
+        try FileManager.default.createDirectory(at: stagedApp, withIntermediateDirectories: true)
+        manager.handleInstallerStage(.readyToRelaunch(stagedAppPath: stagedApp.path), update: oldUpdate)
+        XCTAssertNil(manager.pendingInstall)
+        XCTAssertNil(defaults.data(forKey: "wand.macUpdate.pendingInstall"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagedApp.path))
+    }
+
     func testReminderDeferralIsScopedToVersion() {
         let defaults = makeDefaults()
         defer { clear(defaults) }
         var currentDate = Date(timeIntervalSince1970: 1_000)
         let manager = MacUpdateManager(
-            defaults: defaults,
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
             now: { currentDate },
             currentVersion: { "1.0.0" }
         )
@@ -231,7 +281,7 @@ final class MacUpdateManagerTests: XCTestCase {
         try FileManager.default.createDirectory(at: stagedApp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let manager = MacUpdateManager(defaults: defaults, currentVersion: { "1.0.0" })
+        let manager = MacUpdateManager(defaults: defaults, updatesDirectory: testUpdatesDirectory, currentVersion: { "1.0.0" })
         let ready = expectation(description: "ready notification after state commit")
         let observation = manager.committedStates.sink { state in
             guard case let .readyToRelaunch(pending) = state else { return }
@@ -266,7 +316,7 @@ final class MacUpdateManagerTests: XCTestCase {
             preparedAt: Date()
         )
         defaults.set(try JSONEncoder().encode(pending), forKey: "wand.macUpdate.pendingInstall")
-        let manager = MacUpdateManager(defaults: defaults, currentVersion: { "2.0.0" })
+        let manager = MacUpdateManager(defaults: defaults, updatesDirectory: testUpdatesDirectory, currentVersion: { "2.0.0" })
         let ack = staging.appendingPathComponent(".wand-update-ack")
 
         XCTAssertFalse(manager.completeLaunchedUpdateIfNeeded(arguments: ["Wand"]))
@@ -305,7 +355,8 @@ final class MacUpdateManagerTests: XCTestCase {
         )
         let helper = try String(contentsOfFile: scriptPath, encoding: .utf8)
         XCTAssertFalse(helper.contains("/usr/bin/pkill"), "回滚不能误杀其他路径运行的 Wand")
-        XCTAssertTrue(helper.contains("/usr/bin/open -n \"$DEST\""))
+        XCTAssertTrue(helper.contains("OPEN_COMMAND='/usr/bin/open'"))
+        XCTAssertTrue(helper.contains("\"$OPEN_COMMAND\" -n \"$DEST\""))
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [scriptPath]
@@ -319,6 +370,168 @@ final class MacUpdateManagerTests: XCTestCase {
         let result = try String(contentsOf: root.appendingPathComponent("last-result.txt"), encoding: .utf8)
         XCTAssertTrue(result.contains("已恢复旧版"))
     }
+
+    func testCancelAndRestartRejectCallbacksFromThePreviousInstall() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        var callbacks: [UpdateInstaller.ProgressHandler] = []
+        var cancellations = 0
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            dataLoader: { request in Self.response(for: request, body: Self.installableRelease) },
+            startInstallation: { _, callback in callbacks.append(callback) },
+            cancelInstallation: { cancellations += 1 }
+        )
+        _ = await manager.check(.manual)
+        XCTAssertNil(manager.installAvailableUpdate())
+        XCTAssertNotNil(manager.installAvailableUpdate(), "同一事务不能重复启动")
+        XCTAssertEqual(callbacks.count, 1)
+        manager.cancelInstall()
+        XCTAssertEqual(cancellations, 1)
+        let cancelledState = manager.state
+        callbacks[0](.downloading(received: 20, total: 42))
+        XCTAssertEqual(manager.state, cancelledState)
+        let lateApp = testUpdatesDirectory.appendingPathComponent("staging-cancelled/Wand.app")
+        try FileManager.default.createDirectory(at: lateApp, withIntermediateDirectories: true)
+        callbacks[0](.readyToRelaunch(stagedAppPath: lateApp.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lateApp.path))
+        XCTAssertNil(manager.pendingInstall)
+
+        XCTAssertNil(manager.installAvailableUpdate())
+        XCTAssertEqual(callbacks.count, 2)
+        callbacks[0](.failed("迟到失败"))
+        XCTAssertTrue(manager.isInstalling)
+        let app = testUpdatesDirectory.appendingPathComponent("staging-current/Wand.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        callbacks[1](.readyToRelaunch(stagedAppPath: app.path))
+        let pending = try XCTUnwrap(manager.pendingInstall)
+        XCTAssertEqual(pending.stagedAppPath, app.path)
+        let result = await manager.setChannel(.beta)
+        XCTAssertNil(result, "已校验的待重启事务不能被通道切换覆盖")
+        XCTAssertEqual(manager.pendingInstall, pending)
+        XCTAssertEqual(manager.channel, .stable)
+    }
+
+    func testServerSwitchAndDisconnectRevokeTheDownloadingTransaction() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set("beta", forKey: "wand.macUpdate.channel")
+        var connected: URL? = URL(string: "http://first.example.test:8181")!
+        let second = URL(string: "http://second.example.test:8181")!
+        var callbacks: [UpdateInstaller.ProgressHandler] = []
+        var cancellations = 0
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            dataLoader: { _ in XCTFail("Beta 不允许切到 GitHub"); throw URLError(.badURL) },
+            betaDataLoader: { request in Self.response(for: request, body: """
+            {"updateAvailable":true,"latestVersion":"2.0.0","source":"local","channel":"beta",
+             "fileName":"wand-v2.0.0.zip","downloadUrl":"/macos/update-download?fileName=wand-v2.0.0.zip",
+             "size":42,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+            """) },
+            connectedServer: { connected },
+            startInstallation: { _, callback in callbacks.append(callback) },
+            cancelInstallation: { cancellations += 1 }
+        )
+        _ = await manager.check(.manual)
+        XCTAssertNil(manager.installAvailableUpdate())
+        connected = second
+        _ = await manager.check(.channelChanged)
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(manager.availableUpdate?.preferredAsset?.downloadURL.host, second.host)
+        let currentState = manager.state
+        let lateApp = testUpdatesDirectory.appendingPathComponent("staging-old-server/Wand.app")
+        try FileManager.default.createDirectory(at: lateApp, withIntermediateDirectories: true)
+        callbacks[0](.readyToRelaunch(stagedAppPath: lateApp.path))
+        XCTAssertEqual(manager.state, currentState)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lateApp.path))
+        XCTAssertNil(manager.pendingInstall)
+
+        XCTAssertNil(manager.installAvailableUpdate())
+        connected = nil
+        _ = await manager.check(.channelChanged)
+        XCTAssertEqual(cancellations, 2)
+        XCTAssertFalse(manager.isInstalling)
+        XCTAssertNil(manager.availableUpdate)
+        XCTAssertNotNil(manager.lastError)
+        callbacks[1](.failed("已断开的服务器"))
+        XCTAssertNil(manager.availableUpdate)
+    }
+
+    func testFailedTransactionWriteDoesNotPersistAGhostPendingInstall() {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let manager = MacUpdateManager(defaults: defaults, updatesDirectory: testUpdatesDirectory)
+        manager.handleInstallerStage(
+            .readyToRelaunch(stagedAppPath: testUpdatesDirectory.appendingPathComponent("staging-missing/Wand.app").path),
+            update: makeUpdate(version: "2.0.0")
+        )
+        XCTAssertNil(manager.pendingInstall)
+        XCTAssertNil(defaults.data(forKey: "wand.macUpdate.pendingInstall"))
+        XCTAssertNotNil(manager.lastError)
+    }
+
+    func testHelperCompletesReplacementOnlyAfterAcknowledgement() throws {
+        try assertHelperTransaction(acknowledges: true, expectedStatus: 0)
+    }
+
+    func testHelperRollsBackWhenLaunchedAppDoesNotAcknowledge() throws {
+        try assertHelperTransaction(acknowledges: false, expectedStatus: 15)
+    }
+
+    private func assertHelperTransaction(acknowledges: Bool, expectedStatus: Int32) throws {
+        let root = testUpdatesDirectory.appendingPathComponent("quote's helper \(UUID().uuidString)")
+        let staging = root.appendingPathComponent("staging-test")
+        let staged = staging.appendingPathComponent("Wand.app")
+        let installed = root.appendingPathComponent("Installed")
+        let destination = installed.appendingPathComponent("Wand.app")
+        try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try "new".write(to: staged.appendingPathComponent("new-marker"), atomically: true, encoding: .utf8)
+        try "old".write(to: destination.appendingPathComponent("old-marker"), atomically: true, encoding: .utf8)
+        let launcher = root.appendingPathComponent("isolated-launcher.sh")
+        let script = """
+        #!/bin/bash
+        set -eu
+        if [ "$1" != '-n' ]; then exit 0; fi
+        /usr/bin/printf '%s\\n' "$@" > "$2.launch-args"
+        shift 3
+        [ "$1" = '--wand-update-token' ]
+        [ "$2" = 'test-transaction' ]
+        [ "$3" = '--wand-update-ack' ]
+        \(acknowledges ? "/usr/bin/printf 'ok\\n' > \"$4\"" : "true")
+        """
+        try script.write(to: launcher, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: launcher.path)
+        let helper = try UpdateInstaller.shared.makeHelperScriptForTesting(
+            parentPID: Int32.max, stagedAppPath: staged.path, destinationAppPath: destination.path,
+            transactionID: "test-transaction", expectedVersion: "2.0.0",
+            logPath: root.appendingPathComponent("helper.log").path,
+            launchCommandPath: launcher.path, acknowledgementAttempts: 2
+        )
+        defer { try? FileManager.default.removeItem(atPath: helper) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [helper]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, expectedStatus)
+        XCTAssertEqual(FileManager.default.fileExists(atPath: destination.appendingPathComponent("new-marker").path), acknowledges)
+        XCTAssertEqual(FileManager.default.fileExists(atPath: destination.appendingPathComponent("old-marker").path), !acknowledges)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staging.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: helper))
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: installed.path)
+        XCTAssertEqual(siblings.filter { $0.contains("wand-update-backup") }, [])
+        let arguments = try String(contentsOfFile: destination.path + ".launch-args", encoding: .utf8)
+        XCTAssertTrue(arguments.contains("--wand-update-token\ntest-transaction\n--wand-update-ack\n"))
+        XCTAssertEqual(FileManager.default.fileExists(atPath: root.appendingPathComponent("last-result.txt").path), !acknowledges)
+    }
+
+    nonisolated private static let installableRelease = """
+    {"tag_name":"v2.0.0","html_url":"https://example.test/release","draft":false,"prerelease":false,
+     "assets":[{"name":"wand-v2.0.0.zip","browser_download_url":"https://example.test/wand.zip","size":42}]}
+    """
 
     func testSweepRemovesOrphanedStagingButKeepsPendingAndUnrelatedEntries() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -826,6 +826,14 @@ struct WorkspaceListView: View {
         }
     }
 
+    #if DEBUG
+    func sessionRowForTesting(
+        _ session: WorkspaceSessionSummary, summary: WorkspaceTaskSummary, workspace: Workspace, index: Int
+    ) -> some View {
+        taskOwnedSessionRow(session, summary: summary, workspace: workspace, index: index)
+    }
+    #endif
+
     private func taskOwnedSessionRow(
         _ session: WorkspaceSessionSummary,
         summary: WorkspaceTaskSummary,
@@ -860,16 +868,26 @@ struct WorkspaceListView: View {
                             .foregroundColor(selectedSessionIds.contains(session.id) ? Theme.brand : Theme.textMuted)
                             .frame(width: 14, height: 14)
                     }
-                    BrandLogo(
-                        provider: session.provider ?? "terminal",
-                        color: selected ? Theme.wandAccent : Theme.textSecondary
-                    )
-                    .frame(width: 12, height: 12)
-                    .frame(width: 16, height: 16)
+                    if let employeeID = session.employeeId {
+                        ContactAvatar(id: employeeID, avatar: session.employeeAvatar ?? "", name: session.employeeName ?? "", provider: session.provider, size: 28)
+                    } else {
+                        BrandLogo(provider: session.provider ?? "terminal", color: selected ? Theme.wandAccent : Theme.textSecondary)
+                            .frame(width: 12, height: 12).frame(width: 16, height: 16)
+                    }
                     Text(label)
                         .font(.system(size: 12, weight: selected ? .semibold : (emphasized ? .medium : .regular)))
                         .foregroundColor(emphasized ? Theme.textPrimary : Theme.textSecondary)
                         .lineLimit(1)
+                    if let badge = session.identityBadge {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(Theme.textSecondary)
+                            .help(session.identityCaption ?? badge)
+                    } else if session.providerLabel == "Wand Agent", label != session.providerLabel {
+                        Text(session.providerLabel)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(Theme.textSecondary)
+                    }
                     if session.sessionKind == "pty" {
                         Text("终端")
                             .font(.system(size: 9, weight: .medium))

@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
-# 在无法使用 `xcodebuild test` 的环境（testmanagerd 不可达）里跑 WandTests。
-#
-# 做法：先 `build-for-testing`，再把测试 bundle 注入宿主 App 进程里跑 XCTest，
-# 参数与 Xcode 自己的 test runner 一致，结果同样进 stdout。
-#
-# 用法：./scripts/run-tests.sh [测试名过滤，可选]
+# 构建并运行本次 macOS XCTest 宿主，不依赖 testmanagerd，不寻找或复用旧测试产物。
+# 用法：DERIVED_DATA=/tmp/wand-macos-tests ./scripts/run-tests.sh [测试名过滤]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-
 if ! xcodebuild -version >/dev/null 2>&1; then
-  for candidate in /Applications/Xcode-beta.app /Applications/Xcode.app; do
+  for candidate in /Applications/Xcode.app /Applications/Xcode-beta.app; do
     if [[ -x "$candidate/Contents/Developer/usr/bin/xcodebuild" ]]; then
       export DEVELOPER_DIR="$candidate/Contents/Developer"
       break
@@ -18,44 +13,55 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   done
 fi
 xcodebuild -version >/dev/null
-
-DERIVED_DATA="${DERIVED_DATA:-$HOME/Library/Developer/Xcode/DerivedData}"
+DEVELOPER_DIR_PATH="${DEVELOPER_DIR:-$(xcode-select -p)}"
+DERIVED_DATA="${DERIVED_DATA:-$PWD/.debug-derived-data}"
+mkdir -p "$DERIVED_DATA"
+DERIVED_DATA="$(cd "$DERIVED_DATA" && pwd)"
 FILTER="${1:-All}"
+BUILD_LOG="$DERIVED_DATA/build-for-testing.log"
+TEST_LOG="$DERIVED_DATA/xctest.log"
 
-echo "==> build-for-testing"
-xcodebuild \
+bash scripts/ensure-metal-toolchain.sh
+echo "==> build-for-testing（日志：${BUILD_LOG}）"
+if xcodebuild \
   -project Wand.xcodeproj \
   -scheme Wand \
   -configuration Debug \
+  -derivedDataPath "$DERIVED_DATA" \
   -destination 'platform=macOS,arch=arm64' \
-  build-for-testing \
-  | grep -E "error:|warning: .*Wand/(.*)\.swift|TEST BUILD (SUCCEEDED|FAILED)" || true
-
-PRODUCTS=$(find "$DERIVED_DATA" -maxdepth 4 -type d -path "*Wand-*/Build/Products/Debug" 2>/dev/null | head -1)
-if [[ -z "$PRODUCTS" ]]; then
-  echo "找不到构建产物，请先跑一次 xcodebuild" >&2
-  exit 1
+  build-for-testing >"$BUILD_LOG" 2>&1; then
+  grep -E 'warning: .*Wand/.*\.swift|TEST BUILD SUCCEEDED' "$BUILD_LOG" || true
+else
+  STATUS=$?
+  grep -E 'error:|TEST BUILD FAILED' "$BUILD_LOG" || true
+  echo "构建失败（退出码 ${STATUS}），未运行任何旧测试产物：${BUILD_LOG}" >&2
+  exit "$STATUS"
 fi
 
-APP="$PRODUCTS/Wand.app"
+APP="$DERIVED_DATA/Build/Products/Debug/Wand.app"
 BUNDLE="$APP/Contents/PlugIns/WandTests.xctest"
-DEVELOPER_DIR_PATH=$(xcode-select -p)
-
-echo "==> xctest（注入 $BUNDLE）"
-LOG=$(mktemp)
+[[ -d "$BUNDLE" && -x "$APP/Contents/MacOS/Wand" ]] || {
+  echo "本次构建缺少 XCTest 宿主或 bundle：$APP" >&2
+  exit 1
+}
+echo "==> xctest（日志：${TEST_LOG}）"
 set +e
+# App 的 XCTest guard 不挂载生产主壳；不通过 Argument-domain 覆盖干扰隔离 suite。
 DYLD_INSERT_LIBRARIES="$DEVELOPER_DIR_PATH/Platforms/MacOSX.platform/Developer/usr/lib/libXCTestBundleInject.dylib" \
 DYLD_FRAMEWORK_PATH="$DEVELOPER_DIR_PATH/Platforms/MacOSX.platform/Developer/Library/Frameworks" \
 DYLD_LIBRARY_PATH="$DEVELOPER_DIR_PATH/Platforms/MacOSX.platform/Developer/usr/lib" \
 XCTestBundlePath="$BUNDLE" \
-  "$APP/Contents/MacOS/Wand" -XCTest "$FILTER" >"$LOG" 2>&1
+  "$APP/Contents/MacOS/Wand" -XCTest "$FILTER" >"$TEST_LOG" 2>&1
 STATUS=$?
 set -e
-
-grep -E "error:|XCTAssert|Executed [0-9]+ tests" "$LOG" | tail -30
+grep -E 'error:|XCTAssert|Executed [0-9]+ tests' "$TEST_LOG" | tail -30 || true
 if [[ $STATUS -ne 0 ]]; then
-  echo "==> 失败。完整日志：$LOG" >&2
-  exit $STATUS
+  echo "测试失败（退出码 ${STATUS}）：${TEST_LOG}" >&2
+  exit "$STATUS"
 fi
+# 注入失败可能以 0 退出；必须有 XCTest 完成证据，不能只依赖宿主退出码。
+grep -Eq 'Executed [1-9][0-9]* tests?, with ([0-9]+ tests? skipped and )?0 failures' "$TEST_LOG" || {
+  echo "未发现通过的 XCTest 汇总：$TEST_LOG" >&2
+  exit 1
+}
 echo "==> 全部通过"
-rm -f "$LOG"

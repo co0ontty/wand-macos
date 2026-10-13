@@ -59,8 +59,14 @@ VERSION_CODE=$(echo "$VERSION" | awk -F. '{patch=$3; sub(/[-+].*/, "", patch); p
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(pwd)"
 bash "$PROJECT_ROOT/scripts/ensure-metal-toolchain.sh"
-BUILD_DIR="$PROJECT_ROOT/build"
-DIST_DIR="$PROJECT_ROOT/dist"
+BUILD_DIR="${WAND_BUILD_DIR:-$PROJECT_ROOT/build}"
+DIST_DIR="${WAND_DIST_DIR:-$PROJECT_ROOT/dist}"
+# 续接/验收可用全新的隔离输出目录；不清空用户指定的已有目录。
+if [[ -n "${WAND_BUILD_DIR:-}" && ( "$BUILD_DIR" != /* || -e "$BUILD_DIR" ) ]] \
+  || [[ -n "${WAND_DIST_DIR:-}" && ( "$DIST_DIR" != /* || -e "$DIST_DIR" ) ]]; then
+  echo "❌ WAND_BUILD_DIR / WAND_DIST_DIR 必须是尚不存在的绝对路径。" >&2
+  exit 1
+fi
 ICONSET_DIR="$PROJECT_ROOT/Wand/Assets.xcassets/AppIcon.appiconset"
 
 rm -rf "$BUILD_DIR" "$DIST_DIR"

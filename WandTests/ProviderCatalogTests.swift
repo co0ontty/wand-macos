@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Wand
 
@@ -56,6 +58,152 @@ final class ProviderCatalogTests: XCTestCase {
         XCTAssertEqual(ids(.gemini), ids(.claude))
     }
 
+    func testBoardCatalogCannotLoseGeminiAndSnapshotLabelsKeepUnknownProviders() throws {
+        XCTAssertEqual(wandBoardProviders, WandProvider.allCases.map(\.rawValue))
+        XCTAssertEqual(wandBoardProviderLabel("gemini"), "Gemini")
+        for (provider, expected) in [("gemini", "Gemini"), ("future-cli", "future-cli")] {
+            let data = Data("{\"id\":\"test\",\"provider\":\"\(provider)\"}".utf8)
+            let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: data)
+            let summary = try JSONDecoder().decode(WorkspaceSessionSummary.self, from: data)
+            XCTAssertEqual(snapshot.providerLabel, expected)
+            XCTAssertEqual(summary.providerLabel, expected)
+        }
+    }
+
+    func testSharedServerFixturePreservesExecutionAndOwnershipIdentity() throws {
+        struct Expected: Decodable { let providerLabel: String; let badge: String?; let caption: String? }
+        struct Entry: Decodable { let name: String; let payload: WorkspaceJSONValue; let expected: Expected }
+        struct Fixture: Decodable { let providers: [String]; let cases: [Entry] }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/session-identity.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixture.providers, WandProvider.allCases.map(\.rawValue))
+        for entry in fixture.cases {
+            let data = try JSONEncoder().encode(entry.payload)
+            let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: data)
+            let summary = try JSONDecoder().decode(WorkspaceSessionSummary.self, from: data)
+            for projection in [summary, WorkspaceSessionSummary(snapshot: snapshot)] {
+                XCTAssertEqual(projection.providerLabel, entry.expected.providerLabel, entry.name)
+                XCTAssertEqual(projection.identityBadge, entry.expected.badge, entry.name)
+                XCTAssertEqual(projection.identityCaption, entry.expected.caption, entry.name)
+                XCTAssertEqual(projection.employeeId, snapshot.employeeId)
+                XCTAssertEqual(projection.employeeAvatar, snapshot.employeeAvatar)
+                XCTAssertEqual(projection.teamChat, snapshot.teamChat)
+                XCTAssertEqual(projection.teamStep, snapshot.teamStep)
+                XCTAssertEqual(projection.workspaceTaskId, snapshot.workspaceTaskId)
+            }
+            XCTAssertEqual(snapshot.providerLabel, entry.expected.providerLabel, entry.name)
+            XCTAssertEqual(snapshot.identityBadge, entry.expected.badge, entry.name)
+            XCTAssertEqual(snapshot.identityCaption, entry.expected.caption, entry.name)
+        }
+        XCTAssertEqual(WandProvider.title(for: "pi-cli-json", engine: "sdk"), "Wand Agent")
+        XCTAssertEqual(WandProvider.title(for: "codex", engine: "core"), "Codex")
+    }
+
+    @MainActor
+    func testWebSocketInitAndStatusKeepExecutionIdentityWithoutResurrectingOldOwnership() throws {
+        let api = WandAPI(baseURL: URL(string: "http://fixture.example.test")!, token: nil)
+        let store = ChatStore(sessionId: "fixture", api: api)
+        defer { store.shutdown() }
+        func receive(_ json: String) throws {
+            store.receiveForTesting(try JSONDecoder().decode(WsIncoming.self, from: Data(json.utf8)))
+        }
+        try receive("""
+        {"type":"init","data":{"id":"fixture","provider":"pi","sessionKind":"structured",
+        "structuredState":{"engine":"core","runner":"pi-cli-json"},"employeeId":"old","employeeName":"旧员工"}}
+        """)
+        XCTAssertEqual(store.snapshot?.providerLabel, "Wand Agent")
+        XCTAssertEqual(store.snapshot?.employeeName, "旧员工")
+        try receive("""
+        {"type":"status","data":{"structuredState":{"engine":"cli","runner":"pi-cli-json"}}}
+        """)
+        XCTAssertEqual(store.snapshot?.providerLabel, "Pi")
+        try receive("""
+        {"type":"init","data":{"id":"fixture","provider":"pi","sessionKind":"structured",
+        "structuredState":{"engine":"core","runner":"pi-cli-json"}}}
+        """)
+        XCTAssertEqual(store.snapshot?.providerLabel, "Wand Agent")
+        XCTAssertNil(store.snapshot?.employeeId)
+        XCTAssertNil(store.snapshot?.employeeName)
+        XCTAssertNil(store.snapshot?.teamChat)
+        XCTAssertNil(store.snapshot?.teamStep)
+        let catalog = try JSONDecoder().decode(ModelsResponse.self, from: Data("""
+        {"models":[],"codexModels":[],"piModels":[{"id":"pi-model","label":"Pi Model"}],
+         "geminiModels":[{"id":"gemini-model","label":"Gemini Model"}],
+         "defaultModels":{"pi":"pi-model","gemini":"gemini-model"}}
+        """.utf8))
+        store.modelCatalogForTesting(catalog)
+        XCTAssertEqual(store.availableModels.map(\.id), ["pi-model"])
+        try receive("""
+        {"type":"status","data":{"provider":"gemini","structuredState":{"engine":"cli"}}}
+        """)
+        XCTAssertEqual(store.snapshot?.providerLabel, "Gemini")
+        XCTAssertEqual(store.availableModels.map(\.id), ["gemini-model"])
+        XCTAssertEqual(store.defaultModel, "gemini-model")
+    }
+
+    @MainActor
+    func testIdentityRowsRenderAtDesktopSidebarWidthsInBothThemes() throws {
+        guard let output = ProcessInfo.processInfo.environment["WAND_MACOS_VISUAL_DIR"] else {
+            throw XCTSkip("设置 WAND_MACOS_VISUAL_DIR 保存本轮原生身份行截图")
+        }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/session-identity.json")
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let entries = try (fixture["cases"] as! [[String: Any]]).map { entry -> (SessionSnapshot, WorkspaceSessionSummary) in
+            var payload = entry["payload"] as! [String: Any]
+            payload["title"] = entry["name"]
+            payload["cwd"] = "/fixture/project"
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (try JSONDecoder().decode(SessionSnapshot.self, from: data),
+                    try JSONDecoder().decode(WorkspaceSessionSummary.self, from: data))
+        }
+        let api = WandAPI(baseURL: URL(string: "http://fixture.example.test")!, token: nil)
+        let store = WorkspaceStore(api: api, serverID: "visual-fixture")
+        let workspace = Workspace(id: "fixture", name: "测试项目", cwd: "/fixture",
+                                  defaultProvider: nil, layout: nil, createdAt: "2026-10-12", lastOpenedAt: nil)
+        let task = WorkspaceTaskSummary(
+            id: "task", workspaceId: "fixture", name: "测试任务", worktree: nil, layout: nil,
+            status: "active", createdAt: "2026-10-12", lastOpenedAt: nil, cwd: "/fixture",
+            isolated: false, worktreeError: nil, sessions: entries.map { $0.1 }
+        )
+        let list = WorkspaceListView(store: store, api: api, selectedTaskId: nil, query: "", onOpenTask: { _, _ in })
+        let directory = URL(fileURLWithPath: output, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for dark in [false, true] {
+            for width in [280.0, 360.0] {
+                let view = VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                        SessionTile(session: entry.0, isSelected: false, isSelecting: false, checked: false)
+                    }
+                    Divider().padding(.vertical, 8)
+                    ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
+                        list.sessionRowForTesting(entry.1, summary: task, workspace: workspace, index: index)
+                    }
+                }
+                .padding(12)
+                .frame(width: width)
+                .background(Theme.workspaceBackground)
+                .preferredColorScheme(dark ? .dark : .light)
+                let hosting = NSHostingView(rootView: view)
+                hosting.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                hosting.frame = NSRect(x: 0, y: 0, width: width, height: 900)
+                let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+                window.contentView = hosting
+                hosting.layoutSubtreeIfNeeded()
+                let height = hosting.fittingSize.height
+                XCTAssertGreaterThan(height, 200)
+                window.setContentSize(NSSize(width: width, height: height))
+                hosting.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: directory.appendingPathComponent("identities-\(dark ? "dark" : "light")-\(Int(width)).png"))
+                window.contentView = nil
+            }
+        }
+    }
+
     func testGeminiModelsComeFromItsOwnCatalogNotClauses() throws {
         // 回归：Gemini 曾经落到 default 分支，显示 Claude 的模型列表和默认模型。
         let payload = """
@@ -70,6 +218,13 @@ final class ProviderCatalogTests: XCTestCase {
         XCTAssertEqual(decoded.models(for: "gemini").map(\.id), ["gemini-model"])
         XCTAssertEqual(decoded.models(for: "claude").map(\.id), ["claude-model"])
         XCTAssertEqual(decoded.defaultModelId(for: "gemini"), "gemini-model")
+    }
+
+    func testLogosNormalizeAliasesWithoutGivingUnknownToolsAClaudeMark() {
+        let rect = CGRect(x: 0, y: 0, width: 24, height: 24)
+        XCTAssertTrue(BrandLogoShape(provider: "future-cli").path(in: rect).isEmpty)
+        XCTAssertEqual(BrandLogoShape(provider: "pi-cli-json").path(in: rect), BrandLogoShape(provider: "pi").path(in: rect))
+        XCTAssertEqual(BrandLogoShape(provider: "gemini-cli-json").path(in: rect), BrandLogoShape(provider: "gemini").path(in: rect))
     }
 
     func testAliasListStillResolvesTheOlderProviders() throws {

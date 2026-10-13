@@ -2,13 +2,13 @@
 
 Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专注阅读区、
 按需文件与 Git 检查器，配合原生命令面板和操作快捷键。交互参考 ChatGPT 桌面端，
-核心流程围绕六种 AI 工具、聊天、PTY、工作任务和工作树展开。
+核心流程围绕七种 CLI 工具、聊天、PTY、工作任务和工作树展开。已有会话按实际 engine 区分 Pi CLI 与 Wand Agent，不把 SDK 执行标成 Pi；员工/团队会话保留服务端身份标记。
 
 视觉延续 Web 登录页的暖纸底色、墨色文字与赤陶主动作。连接、聊天、任务、文件、Git 和设置
 共用输入、按钮与轻量分组；悬停与焦点反馈为 120 ms，手动面板展开为 180 ms，遵循 Reduce Motion。
 聊天内容与状态文字保持静态，流式消息不添加列表入场动效。
 
-首页、会话、工作空间和任务看板共用主窗口。输入框底部按需配置工具、模型、目录与任务归属；
+首页、会话、工作空间、任务看板、员工通讯录与对话共用主窗口。输入框底部按需配置工具、模型、目录与任务归属；
 设置保留外观、发送方式、连接、系统权限、故障排查和客户端更新。
 原生附加的并行任务/收件箱、网页工具目录、完整控制台包装层、入门页与快捷键说明页已移除；
 服务端与 Web 的功能及已有数据保持原状。
@@ -26,6 +26,7 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 | 新建会话 / 工作任务 | ⌘N / ⇧⌘N |
 | 搜索与命令 | ⇧⌘P |
 | 定位单独会话 / 定位工作空间 / 打开看板 | ⌘1 / ⌘2 / ⌘3 |
+| 员工对话 / 通讯录 | ⌘4 / ⌘5 |
 | 显示侧栏 / 检查器 | ⌃⌘S / ⌥⌘I |
 | 聚焦输入 / 查找对话 | ⌘L / ⌘F |
 | 设置 / 切换服务器 | ⌘, / ⇧⌘, |
@@ -33,7 +34,7 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 
 ⌘1 / ⌘2 显示侧栏并定位下方 / 上方分区，保留主内容区当前打开的任务或会话。
 操作快捷键由 `DesktopCommand` 统一提供给系统菜单和命令面板。Return 默认发送，Shift-Return
-换行；设置中可改为 Command-Return 发送。中文输入法选词不提交；PTY 保留终端按键行为。
+换行；设置中可改为 Command-Return 发送。中文输入法选词不提交；候选经 AppKit `insertText` 确认后同步结束组字状态，恢复鼠标发送门禁；PTY 保留终端按键行为。
 草稿只在本次 App 运行期间按服务器和会话恢复，不承诺退出后恢复。
 
 ## 约定
@@ -53,15 +54,31 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 - PTY：SwiftTerm AppKit 原生终端直接发送 `pty_input` / `pty_resize` / `pty_ack`，不加载网页
 - 终端快捷键：⌘L 聚焦、⌘F 查找回滚、⌘± 缩放、⌘0 重置、⌘K 仅清除本地回滚历史
 
+## 原生员工与对话
+
+- 通讯录读取员工身份、职责、标签和候选，资料原位展开；不读取知识端点，也不投影/缓存角色提示词。
+- 私聊固定为服务端 `dm_<employeeId>`，打开空白私聊只读详情，不反复创建执行会话。每条新消息是独立执行；跟进原工作从该条 `sessionLink` 打开现有 ChatView，不猜最新任务或旧沟通通道。
+- 对话/群聊使用 `/api/conversations` 的列表、详情、messages、channel、invitations、actions 与 requests 回执。建群/邀请只改元数据，不自动开工；群沟通不自动跟随任务，选择明确 taskId/runId 才跟进。@ 插入精确成员 ID，避免同名误派。
+- 同一 `server + conversation + target` 的输入/附件/revision/发送归 `ConversationComposerState`，UI 只投影；草稿只在 App 内存保留。已提交正文不持久化；未知请求只存 ID/指纹/归属，核对 404 不能当未接受，也不自动重发。
+- 202 接受与启动成功不同；startup failed 保留“已接受但执行异常”，不能当未发送恢复。迟到读取/上传/ACK 不覆盖新会话或新输入，明确拒收合并恢复，用户清除阻止复活。
+- 消息/Markdown/工具复用 TurnView，输入复用 IMEAwareComposerTextView；只读消息里的工具交互禁用，需打开精确执行会话处理。⌘F 原位查找已加载正文、工具输出与预览，⌘L 聚焦输入；通讯页面不提供不相关的文件检查器。
+- 群创建、邀请、原会话链接、选定轮次沟通与审批/停止/明确 +10 步入口已接入。员工 CRUD、团队模板/直接开工、群解散/删除管理、统一看板派发与完整设置仍待补齐。应用不为验证隐式调用真实付费模型。
+
+协议样本：父仓 `tests/fixtures/native-communications.json` 与子仓 `WandTests/Fixtures/communications.json` 在检出时比对。`CommunicationsTests` 用独立偏好/假服务覆盖状态，`CommunicationsVisualTests` 复用真实原生编辑和组件；`WAND_COMMUNICATIONS_LIVE=1` 开启安装服务元数据验收（仅自身默认员工、临时群与空输入拒收，清理本次创建的精确记录）。真实模型执行和完整安装客户端鼠标/升级必须另获授权，不以截图或条件跳过冒称通过。
+
 ## 本地构建（仅 macOS）
 
 ```bash
 ./build.sh 1.16.0
 # 产物：build/Wand.app + ZIP + DMG + wand-v1.16.0.update.json
+# 隔离验收可设置 WAND_BUILD_DIR / WAND_DIST_DIR（尚不存在的绝对路径），保留已有产物。
 ```
 
 单测：`xcodebuild test` 在 testmanagerd 不可达的环境会失败，此时用
-`./scripts/run-tests.sh [测试名过滤]`（先 `build-for-testing`，再把测试 bundle 注入宿主 App 运行 XCTest）。
+`./scripts/run-tests.sh [测试名过滤]`（先 `build-for-testing`，再把本次测试 bundle 注入隔离宿主 App 运行 XCTest）。
+`DERIVED_DATA` 可指定派生数据目录；构建失败立即退出，不搜旧产物。测试宿主不挂载生产主壳、不连接用户服务器或触碰真实更新缓存。
+
+协议增量以服务端为事实源：父仓 `tests/fixtures/native-session-identity.json` 与本子仓独立可测试的 `WandTests/Fixtures/session-identity.json` 镜像由 Swift 的 `ProviderCatalogTests` 和父仓 `tests/macos-session-contract.test.ts` 校验 provider、实际 engine、员工与团队身份。父仓测试在镜像检出时断言两份完全一致，服务端单独检出不依赖初始化原生子模块。新增身份字段/执行工具时同步此契约；这不是 SwiftUI/React 界面代码的自动双向同步。原生通讯录与私聊/群聊纵切已接入下述通讯协议；AI 团队管理、看板统一派发与完整 AI 设置仍需独立纵切，不能把通讯入口当作全部功能对齐。
 
 要求：
 
@@ -125,7 +142,7 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 ## 更新
 
 客户端启动 3 秒后检查所选更新源；成功检查后 24 小时防抖，失败不写检查时间。
-应用菜单和原生设置均可强制检查。更新通道是本机偏好，不跟随当前连接服务的 Web 更新通道：
+应用菜单和原生设置均可强制检查。下载/准备期间不重复检查或启动安装；取消、切换通道/服务器或断开连接撤销旧下载事务，迟到结果不能创建待安装包。已校验的待重启事务保持独立，不被检查/通道切换覆盖。更新通道是本机偏好，不跟随当前连接服务的 Web 更新通道：
 
 - Stable：只使用官方 GitHub 稳定 Release。
 - Beta：**只使用当前连接的 Wand 服务端** `macos.dmgDir` 中本地 ZIP/DMG，绝不回退 GitHub；切换服务器会重新检查。`X.Y.Z-debug.*` 按 Wand 安装顺序视为同版本正式版之后的构建。未连接或服务端未提供包时提示原因。
@@ -168,6 +185,11 @@ macos/Wand/
 ├── TaskBoardPickers.swift     # 里程碑/标签/截止日期/Agent 选择器
 ├── ChatView.swift             # 原生消息、输入、权限审批与快捷提交入口
 ├── ChatStore.swift            # REST 快照与 WebSocket 增量状态机
+├── CommunicationsModels.swift # 员工、对话、群成员、任务/会话链接与回执 DTO
+├── CommunicationsRepository.swift # 只读目录与唯一 mutation receipt ledger
+├── CommunicationsComposer.swift # 会话/目标级草稿、revision、提交与未知核对
+├── CommunicationsStore.swift  # 请求代次、选择与 API 状态投影
+├── CommunicationsViews.swift  # 通讯录、私聊/群聊、原生消息与输入表面
 ├── NewSessionView.swift       # 首页输入、底部配置入口、默认值与创建草稿
 ├── GitQuickCommitView.swift   # 原生快捷提交面板
 ├── MacUpdateManager.swift     # 唯一更新状态源、Stable/Beta、缓存与待重启事务

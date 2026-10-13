@@ -569,6 +569,22 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertFalse(draft.refreshingOptions)
     }
 
+    func testGeminiCreationUsesItsOwnRunnerRatherThanClaude() async throws {
+        let api = makeAPI { request in
+            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["provider"] as? String, "gemini")
+            XCTAssertEqual(body["runner"] as? String, "gemini-cli-json")
+            XCTAssertNil(body["prompt"], "测试不能提交模型输入")
+            return Data(#"{"id":"fixture","provider":"gemini"}"#.utf8)
+        }
+        let session = try await api.createStructuredSession(
+            provider: "gemini", cwd: "/fixture", mode: nil, prompt: nil
+        )
+        XCTAssertEqual(session.providerLabel, "Gemini")
+    }
+
     private var testSessions: [URLSession] = []
 
     override func tearDown() {

@@ -46,12 +46,18 @@ final class ChatStore: ObservableObject {
     @Published private(set) var snapshot: SessionSnapshot?
     private let socket: WandSocket
     private var started = false
+    private var modelCatalog: ModelsResponse?
     private let earlierPageSize = 40
     private var queuePromotePending = false
     private var settingsMutationTail: Task<Void, Never>?
     private var modelUpdateRevision: UInt64 = 0
     private var thinkingUpdateRevision: UInt64 = 0
     private var queueMutationRevision: UInt64 = 0
+    private var modeUpdateRevision: UInt64 = 0
+    @Published private(set) var currentEmployee: EmployeeContact?
+    var mode: String { snapshot?.mode ?? "default" }
+    var displayEmployeeName: String { currentEmployee?.name ?? snapshot?.employeeName ?? "员工" }
+    var displayEmployeeAvatar: String { if let currentEmployee { return currentEmployee.avatar ?? "" }; return snapshot?.employeeAvatar ?? "" }
 
     var isStructured: Bool { snapshot?.isStructured ?? true }
     var sessionEnded: Bool { ["exited", "failed", "stopped"].contains(status) }
@@ -89,6 +95,9 @@ final class ChatStore: ObservableObject {
                 loadError = error.localizedDescription
             }
             await loadModels()
+            if let id = snapshot?.employeeId, let employees = try? await api.employeeContacts() {
+                currentEmployee = employees.first { $0.id == id }
+            }
             socket.connect()
             socket.subscribe(sessionId: sessionId)
         }
@@ -114,6 +123,11 @@ final class ChatStore: ObservableObject {
             }
         }
     }
+
+    #if DEBUG
+    func receiveForTesting(_ event: WsIncoming) { handle(event) }
+    func modelCatalogForTesting(_ catalog: ModelsResponse) { applyModelCatalog(catalog) }
+    #endif
 
     // MARK: - 推送合流
 
@@ -141,6 +155,7 @@ final class ChatStore: ObservableObject {
     private func apply(snapshot snap: SessionSnapshot) {
         let previousError = snapshot?.structuredState?.lastError
         self.snapshot = snap
+        if let modelCatalog { applyModelCatalog(modelCatalog) }
         applyWindowedMessages(snap.messages, offset: snap.messageOffset, total: snap.messageTotal)
         status = snap.status ?? status
         isResponding = snap.isResponding
@@ -217,6 +232,16 @@ final class ChatStore: ObservableObject {
             snapshot?.providerCliActive = data.providerCliActive
             snapshot?.providerCliExitCode = data.providerCliExitCode
         }
+        // init 是权威快照：缺失身份也要清除，不能带着上一位员工或上一个团队。
+        snapshot?.provider = data.provider
+        snapshot?.runner = data.runner
+        snapshot?.engine = data.structuredState?.engine ?? data.engine
+        snapshot?.employeeId = data.employeeId
+        snapshot?.employeeName = data.employeeName
+        snapshot?.employeeAvatar = data.employeeAvatar
+        snapshot?.teamChat = data.teamChat
+        snapshot?.teamStep = data.teamStep
+        if let modelCatalog { applyModelCatalog(modelCatalog) }
     }
 
     private func applyOutput(_ data: WsData) {
@@ -248,6 +273,17 @@ final class ChatStore: ObservableObject {
     }
 
     private func applyCommonFields(_ data: WsData) {
+        if let provider = data.provider, provider != snapshot?.provider {
+            snapshot?.provider = provider
+            if let modelCatalog { applyModelCatalog(modelCatalog) }
+        }
+        if let runner = data.runner { snapshot?.runner = runner }
+        if let engine = data.structuredState?.engine ?? data.engine { snapshot?.engine = engine }
+        if let id = data.employeeId { snapshot?.employeeId = id }
+        if let name = data.employeeName { snapshot?.employeeName = name }
+        if let avatar = data.employeeAvatar { snapshot?.employeeAvatar = avatar }
+        if let chat = data.teamChat { snapshot?.teamChat = chat }
+        if let step = data.teamStep { snapshot?.teamStep = step }
         if let busy = data.ptyBusy {
             snapshot?.ptyBusy = busy
             isResponding = snapshot?.isResponding ?? isResponding
@@ -278,7 +314,7 @@ final class ChatStore: ObservableObject {
     // MARK: - 用户动作
 
     /// 发送一条消息。PTY 会话分包发送正文与 Return，结构化会话直接发文本。
-    func send(text: String, onFailure: @escaping () -> Void = {}) {
+    func send(text: String, onAccepted: @escaping () -> Void = {}, onFailure: @escaping () -> Void = {}) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !sending else { return }
         sending = true
@@ -304,6 +340,7 @@ final class ChatStore: ObservableObject {
                 } else {
                     try await sendPtyChatInput(trimmed)
                 }
+                onAccepted()
             } catch {
                 toast = error.localizedDescription
                 if isStructured {
@@ -393,17 +430,27 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func setMode(_ mode: String) {
+        guard snapshot?.provider != "codex" else { return }
+        modeUpdateRevision &+= 1; let captured = modeUpdateRevision
+        enqueueSettingsMutation { [self] in
+            do {
+                let result = try await api.setMode(id: sessionId, mode: mode)
+                guard captured == modeUpdateRevision else { return }
+                apply(snapshot: result)
+            } catch { if captured == modeUpdateRevision { toast = error.localizedDescription } }
+        }
+    }
+
     private func loadModels() async {
         guard let response = try? await api.models() else { return }
+        applyModelCatalog(response)
+    }
+
+    private func applyModelCatalog(_ response: ModelsResponse) {
+        modelCatalog = response
         let provider = snapshot?.provider ?? "claude"
-        switch provider {
-        case "codex": availableModels = response.codexModels
-        case "opencode": availableModels = response.opencodeModels ?? []
-        case "grok": availableModels = response.grokModels ?? []
-        case "qoder": availableModels = response.qoderModels ?? []
-        case "pi": availableModels = response.piModels ?? []
-        default: availableModels = response.models
-        }
+        availableModels = response.models(for: provider)
         defaultModel = response.defaultModelId(for: provider)
     }
 

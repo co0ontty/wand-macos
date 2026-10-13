@@ -15,8 +15,7 @@ struct BrandLogo: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let normalized = provider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized == nil || normalized == "terminal" || normalized == "shell" {
+        if WandProvider.normalizedID(provider) == nil {
             Image(systemName: "terminal")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -85,14 +84,15 @@ struct BrandLogoShape: Shape {
     let provider: String?
 
     func path(in rect: CGRect) -> Path {
-        switch provider {
+        switch WandProvider.normalizedID(provider) {
         case "codex": return Self.codexPath(in: rect)
         case "opencode": return Self.openCodePath(in: rect)
         case "grok": return Self.grokPath(in: rect)
         case "qoder": return Self.qoderPath(in: rect)
-case "pi": return Self.piPath(in: rect)
-case "gemini": return Self.geminiPath(in: rect)
-default: return Self.claudePath(in: rect)
+        case "pi": return Self.piPath(in: rect)
+        case "gemini": return Self.geminiPath(in: rect)
+        case "claude": return Self.claudePath(in: rect)
+        default: return Path()
         }
     }
 

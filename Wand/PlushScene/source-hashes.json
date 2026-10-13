@@ -1,0 +1,11 @@
+{
+  "reference": "Android",
+  "sources": {
+    "src/web-ui/react/avatars/renderer.ts": "c3f7891f2e6a9e2e44eb371ff6788e6c76365f13e9d1c77f6a21ab01823190cb",
+    "src/web-ui/react/avatars/file-props.ts": "f554e46e254fc74c51793da75d7baa68733773575caa14479f9e84a84dddea0d",
+    "src/web-ui/react/avatars/runtime-contract.ts": "e9c231c7bf6eb233a416d7af1afc661eed1a8b59617e3255b2c6c9cbc1821459",
+    "src/plush-cat-appearance.ts": "d18e02388dcbd14f76b6b5a2fb3271431e1e4577443c5ad2961ea58ab3119b43",
+    "src/plush-avatar.ts": "3f74f98d0e8bc7db5b50f6613eec6be3a80c4d917265f6e692fc29d4858db159"
+  },
+  "runtimeBytes": 602105
+}

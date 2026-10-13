@@ -325,11 +325,57 @@ struct Workspace: Codable, Equatable, Identifiable {
     }
 }
 
+/// 与 Web WorkspaceSessionTeamChat / WorkspaceSessionTeamStep 的字段契约一致。
+struct WorkspaceSessionTeamChat: Codable, Equatable {
+    let teamId: String
+    let runId: String
+    let teamName: String
+    let chatTitle: String?
+    let memberCount: Int
+}
+
+struct WorkspaceSessionTeamStep: Codable, Equatable {
+    let runId: String
+    let stepId: String
+    let kind: String
+    let title: String
+    let memberId: String
+    let memberName: String
+    let teamName: String
+    let stepStatus: String
+    let runStatus: String
+    let runFinished: Bool
+}
+
+func sessionIdentityBadge(
+    employeeId: String?, teamChat: WorkspaceSessionTeamChat?, teamStep: WorkspaceSessionTeamStep?
+) -> String? {
+    if teamChat != nil { return "群聊" }
+    if teamStep != nil { return "团队" }
+    return employeeId?.isEmpty == false ? "员工" : nil
+}
+
+func sessionIdentityCaption(
+    employeeId: String?, employeeName: String?,
+    teamChat: WorkspaceSessionTeamChat?, teamStep: WorkspaceSessionTeamStep?
+) -> String? {
+    if let teamChat { return "\(teamChat.teamName) · 群聊" }
+    if let teamStep { return "\(teamStep.teamName) · \(teamStep.memberName)" }
+    guard employeeId?.isEmpty == false else { return nil }
+    return employeeName?.isEmpty == false ? employeeName : "员工会话"
+}
+
 struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
     let id: String
     let provider: String?
     let sessionKind: String?
     let runner: String?
+    let engine: String?
+    let employeeId: String?
+    let employeeName: String?
+    let employeeAvatar: String?
+    let teamChat: WorkspaceSessionTeamChat?
+    let teamStep: WorkspaceSessionTeamStep?
     let title: String?
     let status: String?
     let cwd: String?
@@ -349,11 +395,17 @@ struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
         provider = snapshot.provider
         sessionKind = snapshot.sessionKind
         runner = snapshot.runner
+        engine = snapshot.engine ?? snapshot.structuredState?.engine
+        employeeId = snapshot.employeeId
+        employeeName = snapshot.employeeName
+        employeeAvatar = snapshot.employeeAvatar
+        teamChat = snapshot.teamChat
+        teamStep = snapshot.teamStep
         title = snapshot.title
         status = snapshot.status
         cwd = snapshot.cwd
         startedAt = snapshot.startedAt
-        workspaceTaskId = nil
+        workspaceTaskId = snapshot.workspaceTaskId
         ptyBusy = snapshot.ptyBusy
         providerCliActive = snapshot.providerCliActive
         inFlight = snapshot.structuredState?.inFlight
@@ -389,7 +441,15 @@ struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
 
     var providerLabel: String {
         guard let provider, !provider.isEmpty else { return "终端" }
-        return WandProvider(normalizing: provider).title
+        return WandProvider.title(for: provider, engine: engine)
+    }
+
+    var identityBadge: String? {
+        sessionIdentityBadge(employeeId: employeeId, teamChat: teamChat, teamStep: teamStep)
+    }
+
+    var identityCaption: String? {
+        sessionIdentityCaption(employeeId: employeeId, employeeName: employeeName, teamChat: teamChat, teamStep: teamStep)
     }
 
     /// 完成但还没被明确打开看过。纯展示态，不改会话的 idle/running/exited。

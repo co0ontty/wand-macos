@@ -149,7 +149,10 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
 
     /// 服务端 `defaultProvider` / 会话 `provider` 是裸字符串；这里只做展示，
     /// 不把未知 provider 伪装成已知的一个（错标比回退更糟）。
-    static func title(for rawProvider: String?) -> String {
+    static func title(for rawProvider: String?, engine: String? = nil) -> String {
+        if normalizedID(rawProvider) == pi.rawValue, engine == "core" || engine == "sdk" {
+            return "Wand Agent"
+        }
         guard let id = normalizedID(rawProvider) else {
             let raw = rawProvider?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return raw.isEmpty ? claude.title : raw
@@ -357,17 +360,41 @@ enum ContentBlock: Decodable {
 struct ConversationTurn: Decodable {
     let role: String
     let content: [ContentBlock]
+    let messageId: String?
+    let createdAt: String?
+    let completedAt: String?
+    let author: ConversationMessageAuthor?
+    let sessionLink: ConversationSessionLink?
+    let sessionPreview: ConversationReplyPreview?
+    let conversationLink: ConversationTaskLink?
+    let taskPreview: ConversationTaskReplyPreview?
+    let conversationTarget: ConversationTarget?
+    let notice: Bool?
 
-    private enum CodingKeys: String, CodingKey { case role, content }
+    private enum CodingKeys: String, CodingKey {
+        case role, content, messageId, createdAt, completedAt, author, sessionLink, sessionPreview
+        case conversationLink, taskPreview, conversationTarget, notice
+    }
 
     init(role: String, content: [ContentBlock]) {
-        self.role = role
-        self.content = content
+        self.role = role; self.content = content
+        messageId = nil; createdAt = nil; completedAt = nil; author = nil; sessionLink = nil; sessionPreview = nil
+        conversationLink = nil; taskPreview = nil; conversationTarget = nil; notice = nil
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         role = (try? c.decode(String.self, forKey: .role)) ?? "assistant"
+        messageId = try? c.decode(String.self, forKey: .messageId)
+        createdAt = try? c.decode(String.self, forKey: .createdAt)
+        completedAt = try? c.decode(String.self, forKey: .completedAt)
+        author = try? c.decode(ConversationMessageAuthor.self, forKey: .author)
+        sessionLink = try? c.decode(ConversationSessionLink.self, forKey: .sessionLink)
+        sessionPreview = try? c.decode(ConversationReplyPreview.self, forKey: .sessionPreview)
+        conversationLink = try? c.decode(ConversationTaskLink.self, forKey: .conversationLink)
+        taskPreview = try? c.decode(ConversationTaskReplyPreview.self, forKey: .taskPreview)
+        conversationTarget = try? c.decode(ConversationTarget.self, forKey: .conversationTarget)
+        notice = try? c.decode(Bool.self, forKey: .notice)
         // 逐块容错：单个块解析失败不拖垮整条消息。
         var blocks: [ContentBlock] = []
         if var arr = try? c.nestedUnkeyedContainer(forKey: .content) {
@@ -418,6 +445,7 @@ struct PermissionRequestInfo: Decodable {
 
 struct StructuredSessionState: Decodable {
     let runner: String?
+    let engine: String?
     let model: String?
     let lastError: String?
     let inFlight: Bool?
@@ -431,8 +459,8 @@ struct StructuredSessionState: Decodable {
 struct SessionSnapshot: Decodable, Identifiable {
     let id: String
     let sessionKind: String?
-    let provider: String?
-    let runner: String?
+    var provider: String?
+    var runner: String?
     let command: String?
     let cwd: String?
     let mode: String?
@@ -469,17 +497,24 @@ struct SessionSnapshot: Decodable, Identifiable {
     var providerCliActive: Bool? = nil
     var providerCliExitCode: Int? = nil
     var ptyBusy: Bool? = nil
+    var engine: String? = nil
+    var employeeId: String? = nil
+    var employeeName: String? = nil
+    var employeeAvatar: String? = nil
+    var teamChat: WorkspaceSessionTeamChat? = nil
+    var teamStep: WorkspaceSessionTeamStep? = nil
 
     var isStructured: Bool { (sessionKind ?? "pty") == "structured" }
     var providerLabel: String {
-        switch provider {
-        case "codex": return "Codex"
-        case "grok": return "Grok"
-        case "opencode": return "OpenCode"
-        case "qoder": return "Qoder"
-        case "pi": return "Pi"
-        default: return "Claude"
-        }
+        WandProvider.title(for: provider, engine: engine ?? structuredState?.engine)
+    }
+
+    var identityBadge: String? {
+        sessionIdentityBadge(employeeId: employeeId, teamChat: teamChat, teamStep: teamStep)
+    }
+
+    var identityCaption: String? {
+        sessionIdentityCaption(employeeId: employeeId, employeeName: employeeName, teamChat: teamChat, teamStep: teamStep)
     }
 
     /// 列表标题以服务端 title 为准，不再用任务名 / 目录名自行兜底。
@@ -596,6 +631,12 @@ struct WsIncoming: Decodable {
 struct WsData: Decodable {
     // —— 快照公共字段（init / status / ended）——
     let id: String?
+    let engine: String?
+    let employeeId: String?
+    let employeeName: String?
+    let employeeAvatar: String?
+    let teamChat: WorkspaceSessionTeamChat?
+    let teamStep: WorkspaceSessionTeamStep?
     let sessionKind: String?
     let provider: String?
     let runner: String?

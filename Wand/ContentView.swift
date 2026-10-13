@@ -32,7 +32,7 @@ struct ContentView: View {
             .environmentObject(store)
         }
         .onChange(of: store.connectionID) { _ in
-            guard store.serverURL != nil, MacUpdateManager.shared.channel == .beta else { return }
+            guard MacUpdateManager.shared.channel == .beta else { return }
             Task { @MainActor in
                 guard let result = await MacUpdateManager.shared.check(.channelChanged),
                       case let .updateAvailable(update) = result else { return }
