@@ -152,6 +152,13 @@ struct SettingsView: View {
                 }
             }
 
+            settingsCard("会话内容宽度", description: "结构化会话、工作区会话与私聊/群聊共用。立即生效并自动保存在这台 Mac，不影响其他设备或终端。") {
+                ChatContentWidthPicker()
+                Text("铺满可用区域；居中时正文与输入区最多 840pt。窄窗口自动适应可用空间。")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+            }
+
             settingsCard("消息输入", description: "选择你在已打开的对话里使用的发送方式。") {
                 Picker("发送消息", selection: $sendWithCommandEnter) {
                     Text("Return 发送").tag(false)

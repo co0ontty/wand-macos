@@ -15,11 +15,14 @@ struct NewTaskSheetRequest: Identifiable, Equatable {
 
 /// 共享滚动侧栏的工作空间分区：项目、任务及任务内会话。
 struct WorkspaceListView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: WorkspaceStore
     let api: WandAPI
     let selectedTaskId: String?
     var selectedSessionId: String? = nil
     let query: String
+    var recentOnly = false
+    var activeOnly = false
     let onOpenTask: (Workspace, WorkspaceTask) -> Void
     var onTaskRenamed: ((WorkspaceTask) -> Void)? = nil
     var onTaskDeleted: ((String) -> Void)? = nil
@@ -40,6 +43,8 @@ struct WorkspaceListView: View {
     @State private var deleteBusy = false
     @State private var deleteError: String?
     @State private var expandedTaskGroups = Set<String>()
+    @State private var knownTaskGroups = Set<String>()
+    @State private var collapsedRecentGroups = Set<String>()
     @State private var pendingSelectionReveal = false
     @State private var collapsedTaskIds = Set<String>()
     @State private var clearTarget: WorkspaceTaskSummary?
@@ -71,7 +76,7 @@ struct WorkspaceListView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 2) {
-                sectionHeader
+                if !recentOnly { sectionHeader }
                 stateContent
             }
             if let toastMessage {
@@ -106,12 +111,21 @@ struct WorkspaceListView: View {
         .wandMotion(value: expandedTaskGroups, layout: true)
         .wandMotion(value: collapsedTaskIds, layout: true)
         .wandMotion(value: isSelecting, layout: true)
-        .onAppear { revealSelection() }
+        .onAppear { discoverDirectories(); revealSelection() }
         .onChange(of: selectedTaskId) { _ in revealSelection() }
         .onChange(of: selectedSessionId) { _ in revealSelection() }
         .onChange(of: store.taskGroups) { _ in
+            discoverDirectories()
             if pendingSelectionReveal { revealSelection() }
         }
+        .onChange(of: recentOnly) { _ in
+            isSelecting = false
+            selectedTaskIds.removeAll()
+            selectedSessionIds.removeAll()
+        }
+        .wandMotion(value: recentOnly)
+        .wandMotion(value: activeOnly)
+        .wandMotion(value: collapsedRecentGroups, layout: true)
         .sheet(item: $newTaskRequest) { request in
             newTaskSheet(request)
         }
@@ -231,7 +245,7 @@ struct WorkspaceListView: View {
     private var sectionHeader: some View {
         HStack(spacing: 2) {
             SidebarSectionCaption(
-                title: "工作空间",
+                title: "工作区",
                 count: visibleTaskGroups.isEmpty ? nil : visibleTaskGroups.count
             )
             Spacer(minLength: 0)
@@ -293,9 +307,21 @@ struct WorkspaceListView: View {
             } else {
                 loadingState
             }
+        } else if recentOnly {
+            recentContent.transition(projectionTransition)
         } else {
-            taskGroupsContent
+            taskGroupsContent.transition(projectionTransition)
         }
+    }
+
+    private var projectionTransition: AnyTransition {
+        reduceMotion ? .identity : .asymmetric(
+            insertion: .opacity.animation(Theme.Motion.structure),
+            removal: .opacity.animation(Theme.Motion.feedback))
+    }
+
+    private func discoverDirectories() {
+        TaskListPresentation.discoverDirectories(store.taskGroups, known: &knownTaskGroups, expanded: &expandedTaskGroups)
     }
 
     private var isFiltering: Bool {
@@ -303,31 +329,8 @@ struct WorkspaceListView: View {
     }
 
     private var visibleTaskGroups: [TaskDirectoryGroup] {
-        var groups = store.taskGroups.compactMap { group -> TaskDirectoryGroup? in
-            guard !group.isSynthetic || !group.tasks.isEmpty else { return nil }
-            return TaskDirectoryGroup(
-                workspaceId: group.workspaceId, workspaceName: group.workspaceName,
-                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
-                tasks: group.tasks.filter { $0.status != "done" }, standaloneSessions: []
-            )
-        }
-        let groupedWorkspaceIds = Set(groups.map(\.workspaceId))
-        groups += store.workspaces.filter { !groupedWorkspaceIds.contains($0.id) }.map {
-            TaskDirectoryGroup(
-                workspaceId: $0.id, workspaceName: $0.name, workspaceCwd: $0.cwd,
-                synthetic: false, tasks: [], standaloneSessions: []
-            )
-        }
-        let filtered = TaskListPresentation.filteredDirectoryGroups(groups, query: query)
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return groups.compactMap { group in
-            if group.tasks.isEmpty && !group.isSynthetic {
-                return needle.isEmpty
-                    || group.workspaceName.localizedCaseInsensitiveContains(needle)
-                    || group.workspaceCwd.localizedCaseInsensitiveContains(needle) ? group : nil
-            }
-            return filtered.first { $0.id == group.id }
-        }
+        TaskListPresentation.sidebarDirectoryGroups(store.taskGroups, workspaces: store.workspaces, query: query,
+            activeOnly: activeOnly, selectedSessionId: selectedSessionId, selectedTaskId: selectedTaskId)
     }
 
     private var manageableSelection: TaskListPresentation.ManageSelection {
@@ -336,16 +339,18 @@ struct WorkspaceListView: View {
         for group in groups where TaskListPresentation.isDirectoryExpanded(
             userCollapsed: !expandedTaskGroups.contains(group.id),
             directoryCount: groups.count,
-            isSearching: isFiltering
+            isSearching: isFiltering || activeOnly
         ) {
             for task in group.tasks {
                 selection.taskIds.insert(task.id)
                 if TaskListPresentation.isTaskSessionsExpanded(
                     userCollapsed: collapsedTaskIds.contains(task.id),
                     sessionCount: task.listedSessionCount,
-                    isSearching: isFiltering
+                    isSearching: isFiltering || activeOnly
                 ) {
-                    selection.sessionIds.formUnion(task.sessions.map(\.id))
+                    selection.sessionIds.formUnion(task.sessions.filter {
+                        !activeOnly || TaskListPresentation.isActive($0, selectedSessionId: selectedSessionId)
+                    }.map(\.id))
                 }
             }
         }
@@ -376,12 +381,10 @@ struct WorkspaceListView: View {
         .padding(.bottom, 4)
     }
 
-    /// 工作空间标题从组左缘大约 44pt 起（4 + 展开钮 12 + 间距 6 + 文件夹 16 + 间距 6）。
-    /// 任务标题再往右一档，会话图标与任务标题对齐，会话文字因此再缩进一档。
-    /// 改这里时三档必须保持这个先后，不能拉回同一列。
+    /// Compact native tree: leave room for titles while keeping workspace → task → session hierarchy.
     private enum TreeIndent {
-        static let task: CGFloat = 62
-        static let session: CGFloat = 78
+        static let task: CGFloat = 28
+        static let session: CGFloat = 42
         static let guide: CGFloat = 16
     }
 
@@ -389,9 +392,9 @@ struct WorkspaceListView: View {
         let expanded = TaskListPresentation.isDirectoryExpanded(
             userCollapsed: !expandedTaskGroups.contains(group.id),
             directoryCount: directoryCount,
-            isSearching: isFiltering
+            isSearching: isFiltering || activeOnly
         )
-        let collapsible = !isFiltering && TaskListPresentation.showsDirectoryDisclosure(directoryCount: directoryCount)
+        let collapsible = !isFiltering && !activeOnly && TaskListPresentation.showsDirectoryDisclosure(directoryCount: directoryCount)
         let containsSelection = groupContainsSelection(group)
         return VStack(alignment: .leading, spacing: 2) {
             taskGroupHeader(
@@ -406,7 +409,7 @@ struct WorkspaceListView: View {
                         taskSummaryRow(summary, group: group)
                     }
                     if group.tasks.isEmpty {
-                        Text("这个目录还没有任务。")
+                        Text(activeOnly ? "没有活动任务" : "这个目录还没有任务。")
                             .font(.system(size: 11))
                             .foregroundColor(Theme.textMuted)
                             .padding(.leading, TreeIndent.task)
@@ -422,10 +425,7 @@ struct WorkspaceListView: View {
                         .padding(.leading, TreeIndent.guide)
                         .padding(.vertical, 4)
                 }
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Theme.textPrimary.opacity(0.06))
-                )
+                .accessibilityIdentifier("sidebar-directory-children-\(group.id)")
             }
         }
     }
@@ -440,7 +440,7 @@ struct WorkspaceListView: View {
             return (Theme.warning, "等待中")
         case "failed":
             return (Theme.danger, "已失败")
-        case "permission":
+        case "permission", "permission-blocked":
             return (Theme.warning, "等待授权")
         default:
             return nil
@@ -482,10 +482,11 @@ struct WorkspaceListView: View {
                         sessionTotal: sessionTotal
                     )
                 }
+                .sidebarPresence("sidebar-group-\(group.id)")
 
                 if !collapsible {
                     // 筛选期间标题不可折叠：用可见文字说明，别让用户对着没有反应的标题反复点击。
-                    Text("筛选时保持展开")
+                    Text(activeOnly ? "活动" : "筛选时展开")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(Theme.textMuted)
                         .lineLimit(1)
@@ -497,7 +498,7 @@ struct WorkspaceListView: View {
                     requestNewTask(NewTaskSheetRequest(
                         cwd: group.workspaceCwd,
                         projectHint: group.workspaceName,
-                        workspaceId: group.synthetic == true ? nil : group.workspaceId
+                        workspaceId: group.isSynthetic || group.isGlobal ? nil : group.workspaceId
                     ))
                 } label: {
                     Image(systemName: "plus")
@@ -514,7 +515,7 @@ struct WorkspaceListView: View {
             .padding(.vertical, 5)
             .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
             .contextMenu {
-                if !group.isSynthetic {
+                if !group.isSynthetic && !group.isGlobal {
                     Button {
                         requestNewTask(NewTaskSheetRequest(
                             cwd: group.workspaceCwd,
@@ -549,7 +550,7 @@ struct WorkspaceListView: View {
                     }
                 } else {
                     // 未归档目录是按 cwd 聚合出来的视图，没有可改可删的目录实体。
-                    Text("未归档目录")
+                    Text(group.isGlobal ? "未归属工作区" : "目录分组")
                 }
             }
             .modifier(DirectoryMenuHint(group: group))
@@ -570,12 +571,12 @@ struct WorkspaceListView: View {
                 .frame(width: 16, height: 16)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    Text(group.workspaceName)
+                    Text(group.displayName)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
                     if group.isSynthetic {
-                        Text("未归档")
+                        Text("目录")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(Theme.textTertiary)
                     }
@@ -677,10 +678,10 @@ struct WorkspaceListView: View {
         let expanded = TaskListPresentation.isTaskSessionsExpanded(
             userCollapsed: collapsedTaskIds.contains(summary.id),
             sessionCount: summary.listedSessionCount,
-            isSearching: isFiltering,
+            isSearching: isFiltering || activeOnly,
             isOnlyTask: group.tasks.count == 1
         )
-        let workspace = workspace(from: group)
+        let workspace = TaskListPresentation.workspaceForTask(summary, group: group, workspaces: store.workspaces)
         let task = summary.asTask()
         return VStack(spacing: 1) {
             SidebarHoveringRow { hovering in
@@ -721,11 +722,13 @@ struct WorkspaceListView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("sidebar-task-\(summary.id)")
+                    .sidebarPresence("sidebar-task-\(summary.id)")
                     .accessibilityAddTraits(selected ? .isSelected : [])
 
                     if canCollapseSessions {
                         collapsibleControl(
-                            enabled: !isFiltering,
+                            enabled: !isFiltering && !activeOnly,
                             help: isFiltering ? "筛选时显示匹配会话" : (expanded ? "收起终端" : "展开终端"),
                             accessibilityLabel: "\(summary.listedSessionCount) 个会话",
                             accessibilityHint: isFiltering ? "筛选时显示匹配会话" : (expanded ? "收起终端" : "展开终端"),
@@ -802,14 +805,17 @@ struct WorkspaceListView: View {
             if expanded {
                 let split = WorkspaceSessionSummary.splitArchived(summary.sessions)
                 if split.active.isEmpty && split.archived.isEmpty {
-                    Text("还没有终端。点右侧「＋」新建。")
+                    Text(activeOnly ? "没有活动会话" : "还没有终端。点右侧「＋」新建。")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textMuted)
                         .padding(.leading, TreeIndent.session)
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    ForEach(Array(split.active.enumerated()), id: \.element.id) { index, session in
+                    let visibleSessions = activeOnly ? split.active.filter {
+                        TaskListPresentation.isActive($0, selectedSessionId: selectedSessionId)
+                    } : split.active
+                    ForEach(Array(visibleSessions.enumerated()), id: \.element.id) { index, session in
                         taskOwnedSessionRow(session, summary: summary, workspace: workspace, index: index)
                     }
                     if summary.listedSessionCount > summary.sessions.count {
@@ -820,7 +826,7 @@ struct WorkspaceListView: View {
                             .padding(.vertical, 4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    archivedSessionsFold(split.archived, summary: summary, workspace: workspace)
+                    if !activeOnly { archivedSessionsFold(split.archived, summary: summary, workspace: workspace) }
                 }
             }
         }
@@ -997,6 +1003,89 @@ struct WorkspaceListView: View {
     }
 
     /// 聚合行只有 workspaceId/name/cwd；打开任务需要完整 Workspace，按组信息重建。
+    private var recentContent: some View {
+        let groups = TaskListPresentation.recentGroups(store.taskGroups, query: query,
+            activeOnly: activeOnly, selectedSessionId: selectedSessionId)
+        return LazyVStack(alignment: .leading, spacing: 8) {
+            if let error = store.taskGroupsError { errorState(error) }
+            if groups.isEmpty {
+                Text(isFiltering ? "没有匹配的会话" : (activeOnly ? "现在没有活动会话" : "还没有会话"))
+                    .font(.system(size: 11)).foregroundColor(Theme.textMuted)
+                    .padding(12)
+            }
+            ForEach(groups) { group in
+                let expanded = isFiltering || activeOnly || !collapsedRecentGroups.contains(group.id)
+                VStack(alignment: .leading, spacing: 2) {
+                    Button {
+                        if collapsedRecentGroups.contains(group.id) { collapsedRecentGroups.remove(group.id) }
+                        else { collapsedRecentGroups.insert(group.id) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            treeDisclosureCaret(expanded: expanded)
+                            SidebarSectionCaption(title: group.title, count: group.entries.count)
+                            Spacer(minLength: 0)
+                        }.padding(.horizontal, 6).frame(height: 30).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                        .disabled(isFiltering || activeOnly)
+                        .accessibilityLabel("\(group.title)，\(expanded ? "已展开" : "已收起")")
+                    if expanded {
+                        ForEach(group.entries) { entry in recentSessionRow(entry) }
+                    }
+                }
+            }
+        }.padding(.horizontal, 8)
+    }
+
+    private func recentSessionRow(_ entry: TaskListPresentation.RecentEntry) -> some View {
+        let session = entry.session
+        let selected = selectedSessionId == session.id
+        return SidebarHoveringRow { hovering in
+            Button {
+                if let task = entry.task {
+                    let owner = TaskListPresentation.workspaceForTask(task, group: entry.group, workspaces: store.workspaces)
+                    onOpenTaskSession?(owner, task.asTask(), session)
+                } else { onOpenSession?(workspace(from: entry.group), session) }
+            } label: {
+                HStack(spacing: 8) {
+                    if let employee = session.employeeId {
+                        ContactAvatar(id: employee, avatar: session.employeeAvatar ?? "", name: session.employeeName ?? "",
+                                      provider: session.provider, size: 28)
+                    } else {
+                        BrandLogo(provider: session.provider ?? "terminal", color: Theme.textSecondary)
+                            .frame(width: 20, height: 20)
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(TaskListPresentation.listSessionLabel(title: session.title, providerLabel: session.providerLabel,
+                            cwd: session.cwd, index: 0))
+                            .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                            .foregroundColor(Theme.textPrimary).lineLimit(2)
+                        Text([entry.group.displayName, entry.task?.name].compactMap { $0 }.joined(separator: " · "))
+                            .font(.system(size: 10)).foregroundColor(Theme.textMuted).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if session.isJustCompleted {
+                        Text("刚完成").font(.system(size: 9)).foregroundColor(Theme.success)
+                    } else if let activity = treeSessionActivity(session) {
+                        Circle().fill(activity.color).frame(width: 6, height: 6).help(activity.label)
+                            .accessibilityLabel(activity.label)
+                    }
+                }.padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .sidebarSelectionChrome(isSelected: selected, isHovered: hovering)
+                .accessibilityIdentifier("sidebar-recent-\(session.id)")
+                .sidebarPresence("sidebar-recent-\(session.id)")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .help(session.title ?? session.providerLabel)
+        }.contextMenu {
+            Button { Task { await toggleArchive(session) } } label: {
+                Label("归档会话", systemImage: "archivebox")
+            }
+            Button(role: .destructive) { requestDeleteSession(session) } label: {
+                Label("删除会话", systemImage: "trash")
+            }
+        }
+    }
+
     private func workspace(from group: TaskDirectoryGroup) -> Workspace {
         if let workspace = store.workspaces.first(where: { $0.id == group.workspaceId }) {
             return workspace

@@ -581,12 +581,15 @@ struct WandPrimaryButtonStyle: ButtonStyle {
 
 /// Compact primary action shared by the home and conversation composers.
 struct WandSendButtonStyle: ButtonStyle {
+    var isBusy = false
+
     func makeBody(configuration: Configuration) -> some View {
-        SendButtonBody(configuration: configuration)
+        SendButtonBody(configuration: configuration, isBusy: isBusy)
     }
 
     private struct SendButtonBody: View {
         let configuration: ButtonStyleConfiguration
+        let isBusy: Bool
         @Environment(\.isEnabled) private var isEnabled
         @State private var hovering = false
 
@@ -595,7 +598,7 @@ struct WandSendButtonStyle: ButtonStyle {
                 .foregroundColor(.white)
                 .background(Circle().fill(isEnabled && hovering ? Theme.accentSolidHover : Theme.accentSolid))
                 .brightness(isEnabled && configuration.isPressed ? -0.06 : 0)
-                .opacity(isEnabled ? 1 : 0.4)
+                .opacity(isEnabled || isBusy ? 1 : 0.4)
                 .contentShape(Circle())
                 .onHover { hovering = $0 }
                 .wandMotion(value: hovering)

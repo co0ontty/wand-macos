@@ -25,7 +25,8 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     let id = UUID()
     let context: SessionCreationContext
     @Published var cwd: String
-    @Published var firstMessage: String
+    @Published var firstMessage: String { didSet { messageRevision &+= 1 } }
+    private var messageRevision: UInt64 = 0
     @Published var provider: NewSessionView.Provider = .claude
     @Published var sessionType: NewSessionView.SessionType = .structured
     @Published var mode: NewSessionView.ModeOption = .managed
@@ -53,7 +54,22 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     @Published var binding: WorkspaceBinding?
     @Published var loading = true
     @Published var loadingTask = false
-    @Published var creating = false
+    enum SubmissionPhase: Equatable {
+        case idle, creatingTask, startingSession, accepted, failed, unconfirmed
+        var label: String {
+            switch self {
+            case .idle: return "启动会话"
+            case .creatingTask: return "正在创建任务"
+            case .startingSession: return "正在启动会话"
+            case .accepted: return "会话已启动"
+            case .failed: return "启动失败，草稿已保留"
+            case .unconfirmed: return "创建状态未确认，请先核对列表"
+            }
+        }
+    }
+    @Published private(set) var submissionPhase = SubmissionPhase.idle
+    var creating: Bool { submissionPhase == .creatingTask || submissionPhase == .startingSession }
+    var creationUnconfirmed: Bool { submissionPhase == .unconfirmed }
     @Published var errorMessage: String?
     @Published var loadError: String?
     @Published var taskError: String?
@@ -66,6 +82,7 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     var taskGeneration = 0
     private var optionsRefreshPending = false
     private var optionsRefreshTask: Task<Void, Never>?
+    private var preferenceSaveTask: Task<Void, Never>?
 
     init(context: SessionCreationContext = .init(), initialMessage: String = "") {
         self.context = context
@@ -88,6 +105,113 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
         }
         return nil
     }
+
+    nonisolated static func creationIsVisible(showCreation: Bool, showCommunications: Bool, showTaskBoard: Bool,
+                                             hasSelectedTask: Bool, hasSelectedSession: Bool) -> Bool {
+        !showCommunications && (showCreation || (!showTaskBoard && !hasSelectedTask && !hasSelectedSession))
+    }
+
+    static func shouldOpenReceipt(originDraftID: UUID, currentDraftID: UUID, creationVisible: Bool) -> Bool {
+        originDraftID == currentDraftID && creationVisible
+    }
+
+    nonisolated static func deliveryIsUncertain(_ error: Error) -> Bool {
+        guard let apiError = error as? WandAPI.APIError else { return true }
+        switch apiError {
+        case .network: return true
+        case .server(let status, _): return status >= 500 || [408, 409].contains(status)
+        case .invalidURL, .unauthorized: return false
+        }
+    }
+
+    func allowRetryAfterReview() {
+        guard creationUnconfirmed else { return }
+        submissionPhase = .idle
+        errorMessage = nil
+    }
+
+    /// The shell retains this owner while pages change; only the accepted receipt hands off navigation.
+    func create(api: WandAPI, workspaceStore: WorkspaceStore?, onCreated: (SessionSnapshot) -> Void) async {
+        guard !loading, loadError == nil, !loadingTask, !creating, !creationUnconfirmed else { return }
+        let path = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        let submittedRevision = messageRevision
+        let prompt = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = provider, mode = mode, model = selectedModel, thinking = thinkingEffort
+        let kind = sessionType, worktree = worktree, taskName = taskName
+        let createsTask = destination == "new"
+        var submissionBinding = binding
+        let workspace = workspaces.first { $0.id == context.workspaceId }
+        errorMessage = nil
+        submissionPhase = createsTask ? .creatingTask : .startingSession
+        do {
+            if createsTask {
+                let matchedWorkspace = workspace.flatMap {
+                    ($0.cwd as NSString).standardizingPath == (path as NSString).standardizingPath ? $0 : nil
+                }
+                let creation: WorkspaceTaskCreation
+                if let matchedWorkspace {
+                    creation = try await api.createWorkspaceTask(workspaceId: matchedWorkspace.id, name: taskName,
+                        baseRef: nil, worktree: worktree, cwd: nil)
+                } else {
+                    creation = try await api.createStandaloneTask(name: taskName,
+                        cwd: path.isEmpty ? nil : path, worktree: path.isEmpty ? false : worktree)
+                }
+                // A committed task is visible immediately and reused after a session-start refusal.
+                tasks.removeAll { $0.id == creation.id }
+                tasks.append(SessionTaskOption(id: creation.id, workspaceId: creation.workspaceId,
+                    name: creation.name, workspaceName: matchedWorkspace?.name ?? "", cwd: creation.cwd))
+                destination = creation.id
+                cwd = creation.cwd
+                submissionBinding = WorkspaceBinding(workspaceId: creation.workspaceId, workspaceTaskId: creation.id, cwd: creation.cwd)
+                binding = submissionBinding
+                workspaceStore?.recordCreatedTask(creation, workspace: matchedWorkspace)
+                NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+            }
+            submissionPhase = .startingSession
+            let snapshot: SessionSnapshot
+            switch kind {
+            case .structured:
+                snapshot = try await api.createStructuredSession(provider: provider.rawValue, cwd: submissionBinding?.cwd ?? path,
+                    mode: mode.apiValue, model: model, thinkingEffort: thinking, prompt: prompt.isEmpty ? nil : prompt,
+                    workspaceBinding: submissionBinding)
+            case .pty:
+                snapshot = try await api.createPtySession(provider: provider.rawValue, cwd: submissionBinding?.cwd ?? path,
+                    mode: mode.apiValue, model: model, thinkingEffort: thinking, initialInput: prompt.isEmpty ? nil : prompt,
+                    workspaceBinding: submissionBinding)
+            }
+            workspaceStore?.recordCreatedSession(snapshot)
+            submissionPhase = .accepted
+            if messageRevision == submittedRevision { firstMessage = "" }
+            // Never put optional GETs or preference writes in front of the accepted-session callback.
+            onCreated(snapshot)
+            NotificationCenter.default.post(name: .wandRefreshLists, object: snapshot)
+            let previousSave = preferenceSaveTask
+            preferenceSaveTask = Task {
+                await previousSave?.value
+                try? await api.updateNewSessionDefaults(mode: mode.apiValue, model: model.isEmpty ? nil : model,
+                    provider: provider.rawValue, thinkingEffort: thinking, defaultSessionKind: kind.rawValue)
+                if createsTask {
+                    try? await api.updateCreationDefaults(defaultProvider: nil, defaultSessionKind: nil, defaultTaskWorktree: worktree)
+                }
+            }
+        } catch {
+            if Self.deliveryIsUncertain(error) {
+                submissionPhase = .unconfirmed
+                errorMessage = "创建结果未确认，可能已经创建。请先核对任务和会话列表，不要重复启动。\n" + error.localizedDescription
+                NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+            } else {
+                submissionPhase = .failed
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    #if DEBUG
+    func waitForBackgroundWorkForTesting() async {
+        await optionsRefreshTask?.value
+        await preferenceSaveTask?.value
+    }
+    #endif
 
     /// Updating available destinations must never reinitialize an edited creation draft.
     fileprivate func updateOptions(groups: [TaskDirectoryGroup], workspaces: [Workspace]) {
@@ -154,6 +278,7 @@ struct NewSessionView: View {
     let onCreated: (SessionSnapshot) -> Void
     @StateObject private var draft: SessionCreationDraft
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showBrowser = false
     @State private var showModelPicker = false
     @State private var modelQuery = ""
@@ -164,6 +289,7 @@ struct NewSessionView: View {
     @State private var composerFocused = false
     @State private var composerHeight: CGFloat = 72
     @State private var composing = false
+    @State private var confirmUnknownRetry = false
     @FocusState private var focusedInput: NewSessionInput?
 
     init(api: WandAPI, initialCwd: String? = nil, initialMessage: String = "",
@@ -413,6 +539,12 @@ struct NewSessionView: View {
         .task { await loadInitial() }
         .onAppear { composerFocused = true }
         .onChange(of: draft.mode) { _ in draft.fullAccessAcknowledged = false }
+        .confirmationDialog("已核对没有新任务或会话？", isPresented: $confirmUnknownRetry) {
+            Button("允许重新启动", role: .destructive) { draft.allowRetryAfterReview() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("原请求可能已经成功。请先核对列表；只有确认未创建后才允许重新启动，避免重复任务或执行。此操作只解除提交门禁，不会自动重发。")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
             if note.object as? DesktopCommand == .focusComposer { composerFocused = true }
         }
@@ -449,6 +581,10 @@ struct NewSessionView: View {
                         }
                     }
                     .wandInputSurface(focused: composerFocused, cornerRadius: Theme.Radius.lg)
+                    .overlay(alignment: .bottomLeading) {
+                        creationFeedback
+                            .alignmentGuide(.bottom) { dimensions in dimensions[.top] - 8 }
+                    }
                     if let error = draft.taskError {
                         VStack(alignment: .leading, spacing: 8) {
                             errorBanner(error)
@@ -456,11 +592,29 @@ struct NewSessionView: View {
                                 .buttonStyle(WandSecondaryButtonStyle())
                         }
                     }
-                    if let error = draft.errorMessage { errorBanner(error) }
                 }
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28).padding(.vertical, 32)
                 .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .center)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var creationFeedback: some View {
+        if let error = draft.errorMessage {
+            VStack(alignment: .leading, spacing: 8) {
+                errorBanner(error)
+                if draft.creationUnconfirmed {
+                    HStack(spacing: 8) {
+                        Button("核对任务和会话列表") {
+                            NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+                            NotificationCenter.default.post(name: .wandDesktopCommand, object: DesktopCommand.workspaces)
+                        }.buttonStyle(WandSecondaryButtonStyle())
+                        Button("确认未创建后允许重试") { confirmUnknownRetry = true }
+                            .buttonStyle(WandSecondaryButtonStyle())
+                    }
+                }
             }
         }
     }
@@ -602,14 +756,23 @@ struct NewSessionView: View {
     private var startButton: some View {
         Button(action: prepareCreate) {
             ZStack {
-                if draft.creating { ProgressView().controlSize(.small).tint(.white) }
-                else { Image(systemName: "arrow.up").font(.system(size: 15, weight: .semibold)) }
+                startSymbol("arrow.up", shown: draft.submissionPhase == .idle)
+                startSymbol("checkmark", shown: draft.submissionPhase == .accepted)
+                startSymbol("exclamationmark", shown: draft.submissionPhase == .failed)
+                startSymbol("questionmark", shown: draft.creationUnconfirmed)
+                ProgressView().controlSize(.small).tint(.white).opacity(draft.creating ? 1 : 0)
             }.frame(width: 34, height: 34)
         }
-        .buttonStyle(WandSendButtonStyle()).disabled(!readyToStart)
+        .buttonStyle(WandSendButtonStyle(isBusy: draft.creating)).disabled(!readyToStart)
         .keyboardShortcut(.return, modifiers: .command)
-        .accessibilityLabel(draft.creating ? "正在启动会话" : "启动会话")
-        .help("启动会话 · ⌘↵")
+        .accessibilityLabel(draft.submissionPhase.label)
+        .help(draft.submissionPhase.label + " · ⌘↵")
+        .wandMotion(value: draft.submissionPhase)
+    }
+
+    private func startSymbol(_ name: String, shown: Bool) -> some View {
+        Image(systemName: name).font(.system(size: 15, weight: .semibold))
+            .opacity(shown ? 1 : 0).scaleEffect(reduceMotion || shown ? 1 : 0.9)
     }
 
     private func prepareCreate() {
@@ -898,7 +1061,7 @@ struct NewSessionView: View {
     private var isExistingTask: Bool { draft.destination != "new" && draft.destination != "none" }
 
     private var readyToStart: Bool {
-        !draft.loading && draft.loadError == nil && !draft.loadingTask && !draft.creating && !composing
+        !draft.loading && draft.loadError == nil && !draft.loadingTask && !draft.creating && !draft.creationUnconfirmed && !composing
             && (draft.destination == "new" || !draft.cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             && (!isExistingTask || draft.binding?.workspaceTaskId == draft.destination)
     }
@@ -1027,62 +1190,8 @@ struct NewSessionView: View {
 
     private func create() {
         guard canCreate else { return }
-        let prompt = draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.creating = true
-        draft.errorMessage = nil
-        Task {
-            do {
-                let path = draft.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
-                let creatingNewTask = draft.destination == "new"
-                if draft.destination == "new" {
-                    let creation: WorkspaceTaskCreation
-                    let workspace = draft.workspaces.first(where: { $0.id == draft.context.workspaceId })
-                    if let workspace, (workspace.cwd as NSString).standardizingPath == (path as NSString).standardizingPath {
-                        creation = try await api.createWorkspaceTask(workspaceId: workspace.id, name: draft.taskName,
-                            baseRef: nil, worktree: draft.worktree, cwd: nil)
-                    } else {
-                        creation = try await api.createStandaloneTask(name: draft.taskName,
-                            cwd: path.isEmpty ? nil : path, worktree: path.isEmpty ? false : draft.worktree)
-                    }
-                    // Keep the created task on session failure, so Retry never creates a duplicate task.
-                    draft.tasks.append(SessionTaskOption(id: creation.id, workspaceId: creation.workspaceId,
-                        name: creation.name, workspaceName: workspace?.name ?? "", cwd: creation.cwd))
-                    draft.destination = creation.id
-                    draft.cwd = creation.cwd
-                    draft.binding = WorkspaceBinding(workspaceId: creation.workspaceId,
-                        workspaceTaskId: creation.id, cwd: creation.cwd)
-                    await workspaceStore?.loadTaskGroups(force: true)
-                }
-                let snapshot: SessionSnapshot
-                switch draft.sessionType {
-                case .structured:
-                    snapshot = try await api.createStructuredSession(provider: draft.provider.rawValue,
-                        cwd: draft.cwd, mode: draft.mode.apiValue, model: draft.selectedModel,
-                        thinkingEffort: draft.thinkingEffort, prompt: prompt.isEmpty ? nil : prompt,
-                        workspaceBinding: draft.binding)
-                case .pty:
-                    snapshot = try await api.createPtySession(provider: draft.provider.rawValue,
-                        cwd: draft.cwd, mode: draft.mode.apiValue, model: draft.selectedModel,
-                        thinkingEffort: draft.thinkingEffort, initialInput: prompt.isEmpty ? nil : prompt,
-                        workspaceBinding: draft.binding)
-                }
-                // Remember preferences after creation; a preference failure must not hide a live session.
-                try? await api.updateNewSessionDefaults(mode: draft.mode.apiValue,
-                    model: draft.selectedModel.isEmpty ? nil : draft.selectedModel,
-                    provider: draft.provider.rawValue, thinkingEffort: draft.thinkingEffort,
-                    defaultSessionKind: draft.sessionType.rawValue)
-                if creatingNewTask {
-                    try? await api.updateCreationDefaults(defaultProvider: nil, defaultSessionKind: nil,
-                                                          defaultTaskWorktree: draft.worktree)
-                }
-                draft.creating = false
-                NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
-                onCreated(snapshot)
-            } catch {
-                draft.creating = false
-                draft.errorMessage = error.localizedDescription
-            }
-        }
+        // Submission belongs to the retained draft, not this page's lifetime.
+        Task { await draft.create(api: api, workspaceStore: workspaceStore, onCreated: onCreated) }
     }
 }
 

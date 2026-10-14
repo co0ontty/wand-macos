@@ -9,10 +9,7 @@ private enum ComposerMetrics {
     static let actionSpacing: CGFloat = 0
 }
 
-/// Codex Desktop 的会话正文不会随窗口无限拉宽；消息和输入器共享同一条阅读轴，
-/// 宽窗口留出安静的两侧空白，窄窗口则自然吃满可用空间。
 private enum ChatLayoutMetrics {
-    static let contentMaxWidth: CGFloat = 840
     static let horizontalInset: CGFloat = 20
 }
 
@@ -222,8 +219,7 @@ struct ChatView: View {
                     Color.clear.frame(height: 1).id("chat-bottom")
                 }
                 .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
-                .frame(maxWidth: ChatLayoutMetrics.contentMaxWidth, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .chatContentWidth()
                 .padding(.top, 12)
                 .padding(.bottom, 6)
                 .background(ConversationScrollObserver(
@@ -600,8 +596,7 @@ struct ChatView: View {
             }
             inputBar
         }
-        .frame(maxWidth: ChatLayoutMetrics.contentMaxWidth)
-        .frame(maxWidth: .infinity)
+        .chatContentWidth()
         .background(
             Theme.workspaceBackground
                 .ignoresSafeArea(edges: .bottom)
@@ -627,7 +622,8 @@ struct ChatView: View {
                                 .padding(16).frame(width: 300)
                         }
                     }
-                })
+                }, primaryVisible: nativeComposerPrimaryVisible(text: draft, hasAttachments: !attachments.attachments.isEmpty,
+                    turnRunning: store.isResponding, phase: sendPresentationPhase))
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 6)
         .onChange(of: composerFocus.focused) { inputFocused = $0 }
@@ -696,7 +692,7 @@ struct ChatView: View {
 
     private var trailingButtons: some View {
         NativeComposerActionButton(phase: sendPresentationPhase, turnRunning: store.isResponding,
-            hasDraft: !draft.isEmpty || !attachments.attachments.isEmpty, canSubmit: canSend,
+            canSubmit: canSend,
             onSend: sendDraft, onStop: { showStopConfirm = true })
     }
 
@@ -779,8 +775,7 @@ struct ChatView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
-            .frame(maxWidth: ChatLayoutMetrics.contentMaxWidth)
-            .frame(maxWidth: .infinity)
+            .chatContentWidth()
             .frame(height: 34)
             .background(Theme.workspaceBackground)
             .overlay(alignment: .bottom) {
@@ -1941,7 +1936,13 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
                 }
             }
         } else if textView.window?.firstResponder === textView {
-            textView.window?.makeFirstResponder(nil)
+            // Resigning fires the SwiftUI focus binding callback. Keep it out of
+            // updateNSView, and do not let a late dismissal undo renewed editing.
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView, textView.window?.firstResponder === textView,
+                      !context.coordinator.parent.isFocused || !textView.isEditable else { return }
+                textView.window?.makeFirstResponder(nil)
+            }
         }
     }
 

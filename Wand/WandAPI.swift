@@ -465,7 +465,12 @@ final class WandAPI {
         if let mode, !mode.isEmpty { body["mode"] = mode }
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
-        if let prompt, !prompt.isEmpty { body["prompt"] = prompt }
+        if let prompt, !prompt.isEmpty {
+            body["prompt"] = prompt
+            // Creation hands off an accepted session; execution streams over /ws.
+            // Without this flag the route waits for the entire first AI turn.
+            body["respondImmediately"] = true
+        }
         return try await request(
             SessionSnapshot.self,
             method: "POST",

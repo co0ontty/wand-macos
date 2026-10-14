@@ -55,8 +55,29 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View, Settings: View>
     @ViewBuilder let add: () -> Add
     @ViewBuilder let send: () -> Send
     @ViewBuilder let settings: () -> Settings
+    var primaryVisible = true
     @Environment(\.accessibilityReduceMotion) private var reduced
     var body: some View {
+        HStack(alignment: .bottom, spacing: 4) {
+            capsule
+            // Keep the action fixed; the expanded outline grows around its slot.
+            send().frame(width: FocusComposerMetrics.touch, height: FocusComposerMetrics.touch)
+                .padding(.bottom, 2)
+                .opacity(primaryVisible ? 1 : 0).allowsHitTesting(primaryVisible).accessibilityHidden(!primaryVisible)
+                .animation(reduced ? nil : Theme.Motion.feedback, value: primaryVisible)
+        }
+        .background(outline.fill(Theme.surface)
+            .padding(.trailing, expanded ? 0 : FocusComposerMetrics.touch + 4)
+            .padding(.top, expanded ? 0 : 2))
+        .overlay(outline.stroke(Theme.border, lineWidth: 0.8)
+            .padding(.trailing, expanded ? 0 : FocusComposerMetrics.touch + 4)
+            .padding(.top, expanded ? 0 : 2))
+        .animation(reduced ? nil : Theme.Motion.structure, value: expanded)
+    }
+    private var outline: RoundedRectangle {
+        RoundedRectangle(cornerRadius: expanded ? FocusComposerMetrics.expandedRadius : FocusComposerMetrics.collapsedRadius)
+    }
+    private var capsule: some View {
         VStack(spacing: 0) {
             editor().padding(.horizontal, 12).padding(.top, expanded ? 10 : 0)
                 .frame(height: expanded ? nil : 0).clipped().opacity(expanded ? 1 : 0)
@@ -71,33 +92,39 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View, Settings: View>
                         }.frame(maxWidth: .infinity, minHeight: FocusComposerMetrics.touch).contentShape(Rectangle())
                     }.buttonStyle(.plain).opacity(expanded ? 0 : 1).allowsHitTesting(!expanded).accessibilityHidden(expanded)
                 }.frame(maxWidth: .infinity)
-                send().frame(width: expanded ? FocusComposerMetrics.touch : 0).clipped()
-                    .opacity(expanded ? 1 : 0).allowsHitTesting(expanded).accessibilityHidden(!expanded)
             }.padding(.horizontal, 4)
             settings().padding(.horizontal, 8)
                 .frame(height: expanded ? nil : 0).clipped().opacity(expanded ? 1 : 0)
                 .allowsHitTesting(expanded).accessibilityHidden(!expanded)
         }
+        .frame(maxWidth: .infinity)
         .foregroundColor(Theme.textSecondary)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: expanded ? FocusComposerMetrics.expandedRadius : FocusComposerMetrics.collapsedRadius))
-        .overlay(RoundedRectangle(cornerRadius: expanded ? FocusComposerMetrics.expandedRadius : FocusComposerMetrics.collapsedRadius).stroke(Theme.border, lineWidth: 0.8))
-        .animation(reduced ? nil : Theme.Motion.structure, value: expanded)
     }
 }
 
 enum NativeComposerPhase: Equatable { case idle, sending, sent, failed, unknown }
 
+/// Shared mobile rule: execution wins over draft and submission feedback.
+func nativeComposerPrimaryVisible(text: String, hasAttachments: Bool, turnRunning: Bool, phase: NativeComposerPhase) -> Bool {
+    turnRunning || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments ||
+        (phase != .idle && phase != .sent)
+}
+
+func nativeComposerActionPhase(phase: NativeComposerPhase, turnRunning: Bool) -> NativeComposerPhase {
+    turnRunning ? .idle : phase
+}
+
 struct NativeComposerActionButton: View {
     let phase: NativeComposerPhase
     var turnRunning = false
-    let hasDraft: Bool
     let canSubmit: Bool
     let onSend: () -> Void
     var onStop: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduced
-    private var stopping: Bool { phase == .idle && turnRunning && !hasDraft }
+    private var stopping: Bool { turnRunning }
+    private var displayedPhase: NativeComposerPhase { nativeComposerActionPhase(phase: phase, turnRunning: turnRunning) }
     private var tint: Color {
-        switch phase {
+        switch displayedPhase {
         case .sent: return Theme.brand
         case .failed, .unknown: return Theme.danger
         case .sending: return Theme.brand
@@ -107,20 +134,20 @@ struct NativeComposerActionButton: View {
     var body: some View {
         Button { if stopping { onStop() } else { onSend() } } label: {
             ZStack {
-                symbol("arrow.up", shown: phase == .idle && !stopping)
+                symbol("arrow.up", shown: displayedPhase == .idle && !stopping)
                 symbol("stop.fill", shown: stopping)
-                symbol("checkmark", shown: phase == .sent)
-                symbol("exclamationmark", shown: phase == .failed)
-                Text("核对").font(.system(size: 11, weight: .semibold)).opacity(phase == .unknown ? 1 : 0)
-                ProgressView().controlSize(.small).tint(Theme.surface).opacity(phase == .sending ? 1 : 0)
+                symbol("checkmark", shown: displayedPhase == .sent)
+                symbol("exclamationmark", shown: displayedPhase == .failed)
+                Text("核对").font(.system(size: 11, weight: .semibold)).opacity(displayedPhase == .unknown ? 1 : 0)
+                ProgressView().controlSize(.small).tint(Theme.surface).opacity(displayedPhase == .sending ? 1 : 0)
             }
             .font(.system(size: 16, weight: .bold))
-            .foregroundColor(phase == .idle && !canSubmit && !stopping ? Theme.textSecondary : Theme.surface)
+            .foregroundColor(displayedPhase == .idle && !canSubmit && !stopping ? Theme.textSecondary : Theme.surface)
             .frame(width: 34, height: 34).background(Circle().fill(tint))
             .frame(width: 48, height: 48).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(phase == .sending || (!canSubmit && !stopping))
-            .accessibilityLabel(phase == .unknown ? "核对送达状态，不重发" : stopping ? "停止当前任务" : phase == .sending ? "发送中" : phase == .sent ? "已送达" : phase == .failed ? "发送异常" : "发送消息")
-            .animation(reduced ? nil : Theme.Motion.structure, value: phase)
+        }.buttonStyle(.plain).disabled(!stopping && (displayedPhase == .sending || !canSubmit))
+            .accessibilityLabel(stopping ? "停止当前任务" : displayedPhase == .unknown ? "核对送达状态，不重发" : displayedPhase == .sending ? "发送中" : displayedPhase == .sent ? "已送达" : displayedPhase == .failed ? "发送异常" : "发送消息")
+            .animation(reduced ? nil : Theme.Motion.feedback, value: displayedPhase)
             .animation(reduced ? nil : Theme.Motion.structure, value: stopping)
     }
     private func symbol(_ name: String, shown: Bool) -> some View {

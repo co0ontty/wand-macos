@@ -89,7 +89,9 @@ final class WorkspaceStore: ObservableObject {
     @Published private(set) var taskGroups: [TaskDirectoryGroup] = []
     @Published private(set) var taskGroupsError: String?
     @Published private(set) var taskGroupsLoaded = false
-    private var loadingTaskGroups = false
+    private var taskGroupsRefreshTask: Task<Void, Never>?
+    private var taskGroupsRefreshPending = false
+    private var taskGroupsMutationGeneration = 0
     /// 增量拉取 `GET /api/tasks` 的 revision；为空时服务端回退全量。
     private var taskGroupsRevision: String?
 
@@ -274,25 +276,94 @@ final class WorkspaceStore: ObservableObject {
         return (creation, task)
     }
 
-    /// 跨目录任务聚合：任务视图数据源；失败不阻塞项目树。
-    func loadTaskGroups(force: Bool = false) async {
-        if !force && taskGroupsLoaded { return }
-        guard !loadingTaskGroups else { return }
-        loadingTaskGroups = true
-        defer { loadingTaskGroups = false }
-        do {
-            let page = try await api.listTaskGroupsPage(revision: taskGroupsRevision)
-            guard !Task.isCancelled else { return }
-            taskGroupsLoaded = true
-            if page.unchanged { taskGroupsError = nil; return }
-            taskGroups = page.groups
-            taskGroupsRevision = page.revision
-            taskGroupsError = nil
-        } catch {
-            guard !Task.isCancelled else { return }
-            // 保留最近成功的归属数据，错误仅影响工作空间分区。
-            taskGroupsError = error.localizedDescription
+    /// Apply only actual POST receipts, never provisional IDs or execution status.
+    func recordCreatedTask(_ creation: WorkspaceTaskCreation, workspace: Workspace?) {
+        let summary = WorkspaceTaskSummary(id: creation.id, workspaceId: creation.workspaceId, name: creation.name,
+            worktree: creation.worktree, layout: nil, status: creation.status, createdAt: "", lastOpenedAt: nil,
+            cwd: creation.cwd, isolated: creation.isolated, worktreeError: creation.worktreeError, sessions: [])
+        var tasks = tasksByWorkspace[creation.workspaceId] ?? []
+        if !tasks.contains(where: { $0.id == creation.id }) { tasks.insert(summary.asTask(), at: 0) }
+        tasksByWorkspace[creation.workspaceId] = tasks
+        let index = taskGroups.firstIndex { group in
+            group.tasks.contains { $0.id == creation.id } || (workspace != nil && group.id == workspace?.id)
+                || group.workspaceCwd == creation.cwd
         }
+        let group = index.map { taskGroups[$0] } ?? TaskDirectoryGroup(
+            workspaceId: workspace?.id ?? "cwd:\(creation.cwd)",
+            workspaceName: workspace?.name ?? (creation.cwd as NSString).lastPathComponent,
+            workspaceCwd: workspace?.cwd ?? creation.cwd, synthetic: workspace == nil,
+            tasks: [], standaloneSessions: [])
+        let updated = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+            workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
+            tasks: [summary] + group.tasks.filter { $0.id != creation.id }, standaloneSessions: group.standaloneSessions, global: group.global)
+        if let index { taskGroups[index] = updated } else { taskGroups.insert(updated, at: 0) }
+        invalidateTaskGroupsAfterReceipt()
+    }
+
+    func recordCreatedSession(_ snapshot: SessionSnapshot) {
+        let session = WorkspaceSessionSummary(snapshot: snapshot)
+        if let groupIndex = taskGroups.firstIndex(where: { group in
+            group.tasks.contains { $0.id == snapshot.workspaceTaskId }
+        }), let taskIndex = taskGroups[groupIndex].tasks.firstIndex(where: { $0.id == snapshot.workspaceTaskId }) {
+            let group = taskGroups[groupIndex], task = group.tasks[taskIndex]
+            let isNew = !task.sessions.contains { $0.id == snapshot.id }
+            var tasks = group.tasks
+            tasks[taskIndex] = WorkspaceTaskSummary(id: task.id, workspaceId: task.workspaceId, name: task.name,
+                worktree: task.worktree, layout: task.layout, status: task.status, createdAt: task.createdAt,
+                lastOpenedAt: task.lastOpenedAt, cwd: task.cwd, isolated: task.isolated, worktreeError: task.worktreeError,
+                sessions: [session] + task.sessions.filter { $0.id != snapshot.id },
+                totalSessions: task.listedSessionCount + (isNew ? 1 : 0), archived: task.archived)
+            taskGroups[groupIndex] = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: tasks, standaloneSessions: group.standaloneSessions, global: group.global)
+        }
+        invalidateTaskGroupsAfterReceipt()
+    }
+
+    private func invalidateTaskGroupsAfterReceipt() {
+        taskGroupsMutationGeneration &+= 1
+        taskGroupsRevision = nil
+        if taskGroupsRefreshTask != nil { taskGroupsRefreshPending = true }
+    }
+
+    /// Shared reads survive a caller leaving; mutations during a read get one fresh snapshot.
+    func loadTaskGroups(force: Bool = false) async {
+        await startTaskGroupsRefresh(force: force)?.value
+    }
+
+    private func startTaskGroupsRefresh(force: Bool) -> Task<Void, Never>? {
+        if !force && taskGroupsLoaded { return nil }
+        if let refresh = taskGroupsRefreshTask {
+            taskGroupsRefreshPending = taskGroupsRefreshPending || force
+            return refresh
+        }
+        let refresh = Task { await performTaskGroupsRefresh() }
+        taskGroupsRefreshTask = refresh
+        return refresh
+    }
+
+    #if DEBUG
+    func waitForTaskGroupsForTesting() async { await taskGroupsRefreshTask?.value }
+    #endif
+
+    private func performTaskGroupsRefresh() async {
+        defer { taskGroupsRefreshTask = nil }
+        repeat {
+            taskGroupsRefreshPending = false
+            let generation = taskGroupsMutationGeneration
+            do {
+                let page = try await api.listTaskGroupsPage(revision: taskGroupsRevision)
+                guard !Task.isCancelled else { return }
+                guard generation == taskGroupsMutationGeneration else { taskGroupsRefreshPending = true; continue }
+                taskGroupsLoaded = true
+                if !page.unchanged { taskGroups = page.groups; taskGroupsRevision = page.revision }
+                taskGroupsError = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                guard generation == taskGroupsMutationGeneration else { taskGroupsRefreshPending = true; continue }
+                // Keep committed receipts and the last successful membership on read failure.
+                taskGroupsError = error.localizedDescription
+            }
+        } while taskGroupsRefreshPending
     }
 
     /// 任务入口：独立任务走 POST /api/tasks（目录可空，使用全局临时目录）；
@@ -336,17 +407,8 @@ final class WorkspaceStore: ObservableObject {
                     lastOpenedAt: nil
                 )
         }
-        tasksByWorkspace[workspace.id] = (tasksByWorkspace[workspace.id] ?? []) + [WorkspaceTask(
-            id: creation.id,
-            workspaceId: creation.workspaceId,
-            name: creation.name,
-            worktree: creation.worktree,
-            layout: nil,
-            status: creation.status,
-            createdAt: "",
-            lastOpenedAt: nil
-        )]
-        await loadTaskGroups(force: true)
+        recordCreatedTask(creation, workspace: workspaceId == nil ? nil : workspace)
+        _ = startTaskGroupsRefresh(force: true)
         return (workspace, creation)
     }
 

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C9000000000000000000A00B /* ChatContentLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B00B /* ChatContentLayout.swift */; };
+		C9000000000000000000A106 /* ChatContentWidthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B106 /* ChatContentWidthTests.swift */; };
 		C9000000000000000000A00A /* NativeAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B00A /* NativeAcceptance.swift */; };
 		C9000000000000000000A105 /* AvatarComposerParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B105 /* AvatarComposerParityTests.swift */; };
 		C9000000000000000000A006 /* ContactAvatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B006 /* ContactAvatar.swift */; };
@@ -95,6 +97,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C9000000000000000000B00B /* ChatContentLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContentLayout.swift; sourceTree = "<group>"; };
+		C9000000000000000000B106 /* ChatContentWidthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContentWidthTests.swift; sourceTree = "<group>"; };
 		C9000000000000000000B00A /* NativeAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAcceptance.swift; sourceTree = "<group>"; };
 		C9000000000000000000B105 /* AvatarComposerParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarComposerParityTests.swift; sourceTree = "<group>"; };
 		C9000000000000000000B006 /* ContactAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAvatar.swift; sourceTree = "<group>"; };
@@ -236,6 +240,7 @@
 				D800000000000000000000B2 /* PtyTerminalStore.swift */,
 				A200000000000000000000B4 /* ChatStore.swift */,
 				A200000000000000000000B5 /* ChatView.swift */,
+				C9000000000000000000B00B /* ChatContentLayout.swift */,
 				A200000000000000000000B7 /* NewSessionView.swift */,
 				A200000000000000000000B9 /* GitQuickCommitView.swift */,
 				A200000000000000000000BA /* SettingsView.swift */,
@@ -298,6 +303,7 @@
 				C9000000000000000000B103 /* CommunicationsVisualTests.swift */,
 				C9000000000000000000B104 /* CommunicationsLiveTests.swift */,
 				C9000000000000000000B105 /* AvatarComposerParityTests.swift */,
+				C9000000000000000000B106 /* ChatContentWidthTests.swift */,
 				D800000000000000000000B4 /* NativeTerminalTests.swift */,
 			);
 			path = WandTests;
@@ -437,6 +443,7 @@
 				D800000000000000000000A2 /* PtyTerminalStore.swift in Sources */,
 				A200000000000000000000A4 /* ChatStore.swift in Sources */,
 				A200000000000000000000A5 /* ChatView.swift in Sources */,
+				C9000000000000000000A00B /* ChatContentLayout.swift in Sources */,
 				A200000000000000000000A7 /* NewSessionView.swift in Sources */,
 				A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */,
 				A200000000000000000000AA /* SettingsView.swift in Sources */,
@@ -487,6 +494,7 @@
 				C9000000000000000000A103 /* CommunicationsVisualTests.swift in Sources */,
 				C9000000000000000000A104 /* CommunicationsLiveTests.swift in Sources */,
 				C9000000000000000000A105 /* AvatarComposerParityTests.swift in Sources */,
+				C9000000000000000000A106 /* ChatContentWidthTests.swift in Sources */,
 				D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

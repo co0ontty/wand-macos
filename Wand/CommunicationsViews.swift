@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -310,15 +311,15 @@ struct ConversationPane: View {
                         }
                         Color.clear.frame(height: 1).id("conversation-bottom")
                     }
-                    .padding(.horizontal, 24).padding(.vertical, 24).frame(maxWidth: 800, alignment: .leading)
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 24).padding(.vertical, 24)
+                    .chatContentWidth()
                 }
                 .clipped().simultaneousGesture(TapGesture().onEnded { composerFocus.collapseFromContent() })
                 .onAppear { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
             }
             Divider()
             ConversationComposerSurface(owner: composer, store: store, conversation: conversation, focus: composerFocus)
-                .frame(maxWidth: 800).frame(maxWidth: .infinity)
+                .chatContentWidth()
                 .id(scope.key)
         }
         .onChange(of: conversation.id) { _ in messagesLimit = 80; inviteOpen = false; membersExpanded = false; composerFocus.resetPresentation() }
@@ -502,7 +503,7 @@ struct ConversationComposerSurface: View {
                     }.buttonStyle(.plain).accessibilityLabel("添加附件与对话操作").disabled(owner.isSending || owner.uploading)
                         .popover(isPresented: $menuOpen, arrowEdge: .bottom) { menu }
                 }, send: {
-                    NativeComposerActionButton(phase: phase, hasDraft: !owner.text.isEmpty || !owner.attachments.isEmpty,
+                    NativeComposerActionButton(phase: phase,
                         canSubmit: !composing && !owner.uploading && (owner.unknownID != nil || (blockReason == nil && owner.canSubmit))) {
                         menuOpen = false
                         Task { if owner.unknownID != nil { await store.reconcile(owner.scope) } else { await store.send(owner.scope) } }
@@ -513,7 +514,8 @@ struct ConversationComposerSurface: View {
                         setting("权限", value: candidate?.mode ?? "未取得")
                         setting("思考", value: candidate?.thinkingEffort ?? "未取得")
                     }
-                })
+                }, primaryVisible: nativeComposerPrimaryVisible(text: owner.text, hasAttachments: !owner.attachments.isEmpty,
+                    turnRunning: false, phase: phase))
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 6)
         .onChange(of: owner.isSending) { value in if value { focus.submit() } }

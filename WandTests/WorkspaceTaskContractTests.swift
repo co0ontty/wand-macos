@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import Wand
 
@@ -79,7 +81,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         let task = try XCTUnwrap(result.first?.tasks.first)
         XCTAssertEqual(result.map(\.id), ["ui"])
         XCTAssertEqual(task.id, "checkout")
-        XCTAssertEqual(task.sessions.map(\.id), ["payment-review"])
+        XCTAssertEqual(task.sessions.map(\.id), ["layout", "payment-review"], "Search keeps the complete task and action scope")
         XCTAssertEqual(task.listedSessionCount, 6, "Filtering never rewrites the task's total session count")
         XCTAssertEqual(task.cwd, groups[0].tasks[0].cwd)
         XCTAssertEqual(task.isolated, true)
@@ -113,6 +115,154 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertTrue(TaskListPresentation.isTaskSessionsExpanded(
             userCollapsed: false, sessionCount: 2, isSearching: false
         ))
+    }
+
+    func testPopulatedDirectoriesAreVisibleInitiallyAndPollingPreservesManualFolds() throws {
+        let groups = try searchGroups()
+        var known = Set<String>(), expanded = Set<String>()
+        TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
+        XCTAssertEqual(expanded, ["ui"])
+        expanded.remove("ui")
+        TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
+        XCTAssertTrue(expanded.isEmpty, "A refresh must not reopen the user's collapsed workspace")
+        let fresh = TaskDirectoryGroup(workspaceId: "new", workspaceName: "New", workspaceCwd: "/new", synthetic: true,
+            tasks: groups[0].tasks, standaloneSessions: [])
+        TaskListPresentation.discoverDirectories(groups + [fresh], known: &known, expanded: &expanded)
+        XCTAssertEqual(expanded, ["new"])
+    }
+
+    func testSyntheticDirectoryUsesRealTaskOwnerInsteadOfDisplayID() throws {
+        let group = try searchGroups()[0], task = group.tasks[0]
+        let synthetic = TaskDirectoryGroup(workspaceId: "cwd:/repo/ui", workspaceName: group.workspaceName,
+            workspaceCwd: group.workspaceCwd, synthetic: true, tasks: [task], standaloneSessions: [])
+        let owner = TaskListPresentation.workspaceForTask(task, group: synthetic, workspaces: [])
+        XCTAssertEqual(owner.id, task.workspaceId)
+        XCTAssertNotEqual(owner.id, synthetic.id)
+        XCTAssertEqual(owner.cwd, group.workspaceCwd)
+    }
+
+    func testSidebarSearchSupportsWordsAcrossTaskAndEmployeeMetadata() throws {
+        let groups = try searchGroups()
+        let result = TaskListPresentation.filteredDirectoryGroups(groups, query: "wand payments codex")
+        XCTAssertEqual(result.first?.tasks, [groups[0].tasks[0]])
+        XCTAssertEqual(result.first?.tasks.first?.sessions.count, 2)
+        XCTAssertTrue(TaskListPresentation.searchMatches("虎妞 修复", values: ["赛博虎妞", "界面修复"]))
+    }
+
+    func testRecentSidebarKeepsTaskAndStandaloneSessionsWithoutTruncationOrDuplicates() throws {
+        let groups = try searchGroups()
+        let recent = TaskListPresentation.recentGroups(groups, query: "", activeOnly: false, selectedSessionId: nil)
+        XCTAssertEqual(Set(recent.flatMap(\.entries).map(\.id)), ["layout", "payment-review", "docs", "deploy"])
+        let matched = TaskListPresentation.recentGroups(groups, query: "wand payments", activeOnly: false, selectedSessionId: nil)
+        XCTAssertEqual(matched.flatMap(\.entries).map(\.id), ["payment-review"])
+        let active = TaskListPresentation.recentGroups(groups, query: "", activeOnly: true, selectedSessionId: "payment-review")
+        XCTAssertEqual(active.flatMap(\.entries).map(\.id), ["payment-review"], "The selected idle session remains visible")
+        let duplicate = TaskListPresentation.recentGroups(groups + groups, query: "", activeOnly: false, selectedSessionId: nil)
+        XCTAssertEqual(duplicate.flatMap(\.entries).count, 4)
+    }
+
+    func testActiveSidebarDoesNotTreatAnIdleRunningProviderAsActive() throws {
+        let sessions = try JSONDecoder().decode([WorkspaceSessionSummary].self, from: Data(#"""
+        [
+          {"id":"idle","sessionKind":"structured","provider":"pi","status":"running","inFlight":false},
+          {"id":"working","sessionKind":"structured","provider":"pi","status":"running","inFlight":true},
+          {"id":"attention","status":"permission-blocked"},
+          {"id":"completed","status":"idle","completionRevision":2,"viewedCompletionRevision":1},
+          {"id":"terminal","sessionKind":"pty","provider":"","status":"running","providerCliActive":true},
+          {"id":"archived","archived":true,"inFlight":true}
+        ]
+        """#.utf8))
+        XCTAssertFalse(TaskListPresentation.isActive(sessions[0], selectedSessionId: nil))
+        for session in sessions[1...4] { XCTAssertTrue(TaskListPresentation.isActive(session, selectedSessionId: nil)) }
+        XCTAssertFalse(TaskListPresentation.isActive(sessions[5], selectedSessionId: nil))
+    }
+
+    func testGlobalGroupMetadataAndActiveDirectoryProjection() throws {
+        let source = try searchGroups()
+        let global = TaskDirectoryGroup(workspaceId: "global", workspaceName: "全局", workspaceCwd: "/tmp",
+            synthetic: false, tasks: source[0].tasks, standaloneSessions: [], global: true)
+        XCTAssertEqual(global.displayName, "未归属工作区")
+        let groups = TaskListPresentation.sidebarDirectoryGroups([global] + source, workspaces: [], query: "",
+            activeOnly: false, selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(groups.last?.id, "global")
+        XCTAssertEqual(groups.flatMap(\.tasks).count, 4)
+        let active = TaskListPresentation.sidebarDirectoryGroups(source, workspaces: [], query: "",
+            activeOnly: true, selectedSessionId: "layout", selectedTaskId: nil)
+        XCTAssertEqual(active.first?.tasks.map(\.id), ["checkout"])
+        XCTAssertEqual(active.map(\.id), source.map(\.id), "Activity filtering retains directory roots")
+    }
+
+    @MainActor
+    func testNativeTaskClickUsesRealOwnerAndRefreshPreservesDirectoryFold() async throws {
+        let source = try searchGroups()[0], task = source.tasks[0]
+        let group = TaskDirectoryGroup(workspaceId: "cwd:/repo/ui", workspaceName: "UI", workspaceCwd: "/repo/ui",
+            synthetic: true, tasks: [task], standaloneSessions: [])
+        let data = try JSONEncoder().encode([group])
+        let api = makeAPI { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return request.url?.path == "/api/tasks" ? data : Data("[]".utf8)
+        }
+        let store = trackedStore(api: api, serverID: "sidebar-click")
+        await store.loadTaskGroups()
+        var opened: (String, String)?
+        let host = NSHostingView(rootView: WorkspaceListView(store: store, api: api, selectedTaskId: nil, query: "",
+            onOpenTask: { owner, task in opened = (owner.id, task.id) }).frame(width: 260))
+        host.frame = NSRect(x: 0, y: 0, width: 260, height: 680)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        func settle() async throws {
+            host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 220_000_000); host.layoutSubtreeIfNeeded()
+        }
+        func click(_ id: String) throws {
+            let marker = try XCTUnwrap(sidebarPresenceView(host, id: id))
+            let rect = marker.convert(marker.bounds, to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+                window.sendEvent(event)
+            }
+        }
+        try await settle()
+        try click("sidebar-task-\(task.id)"); try await settle()
+        XCTAssertEqual(opened?.0, task.workspaceId)
+        XCTAssertEqual(opened?.1, task.id)
+        try click("sidebar-group-\(group.id)"); try await settle()
+        XCTAssertNil(sidebarPresenceView(host, id: "sidebar-task-\(task.id)"))
+        await store.loadTaskGroups(force: true); try await settle()
+        XCTAssertNil(sidebarPresenceView(host, id: "sidebar-task-\(task.id)"), "Refresh respects the native fold click")
+        try click("sidebar-group-\(group.id)"); try await settle()
+        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-\(task.id)"))
+    }
+
+    @MainActor
+    func testNativeSidebarRendersLoadedTasksAndRecentRowsAtDesktopWidth() async throws {
+        let groups = try searchGroups()
+        let data = try JSONEncoder().encode(groups)
+        let api = makeAPI { request in
+            XCTAssertEqual(request.httpMethod, "GET", "Rendering never writes business data")
+            return request.url?.path == "/api/tasks" ? data : Data("[]".utf8)
+        }
+        let store = trackedStore(api: api, serverID: "sidebar-visual")
+        await store.loadTaskGroups()
+        for recent in [false, true] {
+            for dark in [false, true] {
+                let view = ScrollView {
+                    WorkspaceListView(store: store, api: api, selectedTaskId: nil, query: "", recentOnly: recent,
+                                      onOpenTask: { _, _ in }, onOpenSession: { _, _ in }, onOpenTaskSession: { _, _, _ in })
+                }.frame(width: 260, height: 780).background(Theme.sidebarBackground)
+                    .preferredColorScheme(dark ? .dark : .light)
+                let host = NSHostingView(rootView: view)
+                host.frame = NSRect(x: 0, y: 0, width: 260, height: 780)
+                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+                window.contentView = host
+                host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 200_000_000); host.layoutSubtreeIfNeeded()
+                try captureSidebar(host, name: "fixture-\(recent ? "recent" : "directory")-\(dark ? "dark" : "light")")
+                window.contentView = nil
+            }
+        }
     }
 
     private func searchGroups() throws -> [TaskDirectoryGroup] {
@@ -382,7 +532,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
             if name == "Scratch" { XCTAssertNil(body["cwd"]) }
             return Data(#"{"id":"task-1","workspaceId":"global","name":"Task","status":"active","cwd":"/tmp/task"}"#.utf8)
         }
-        let store = WorkspaceStore(api: api, serverID: "test-worktree")
+        let store = trackedStore(api: api, serverID: "test-worktree")
         _ = try await store.createTask(name: "Isolated", directory: "/repo", worktree: nil)
         _ = try await store.createTask(name: "Shared", directory: "/repo", worktree: false)
         _ = try await store.createTask(name: "Scratch", directory: "", worktree: nil)
@@ -585,12 +735,339 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(session.providerLabel, "Gemini")
     }
 
-    private var testSessions: [URLSession] = []
+    @MainActor
+    func testPromptCreationReturnsAcceptedRunningSessionWithoutWaitingForTurn() async throws {
+        let api = makeAPI { request in
+            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["respondImmediately"] as? Bool, true)
+            XCTAssertEqual(body["prompt"] as? String, "fixture only")
+            return Data(#"{"id":"accepted","provider":"pi","status":"running","structuredState":{"inFlight":true}}"#.utf8)
+        }
+        let session = try await api.createStructuredSession(provider: "pi", cwd: "/fixture", mode: "managed", prompt: "fixture only")
+        XCTAssertEqual(session.id, "accepted")
+        XCTAssertEqual(session.status, "running")
+        XCTAssertEqual(session.structuredState?.inFlight, true)
+    }
 
-    override func tearDown() {
+    @MainActor
+    func testCreationPublishesReceiptAndNavigatesBeforeSlowFailingPreferences() async throws {
+        let preferencesStarted = expectation(description: "Preferences start only after navigation")
+        preferencesStarted.expectedFulfillmentCount = 2
+        let releasePreferences = DispatchSemaphore(value: 0)
+        defer { releasePreferences.signal(); releasePreferences.signal() }
+        let lock = NSLock()
+        var navigated = false
+        let api = makeAPI { request in
+            switch request.url?.path {
+            case "/api/tasks":
+                XCTAssertEqual(request.httpMethod, "POST", "No optional list GET can precede creation handoff")
+                return Data(#"{"id":"task-new","workspaceId":"global","name":"New task","status":"active","cwd":"/fixture"}"#.utf8)
+            case "/api/structured-sessions":
+                let body = try Self.requestBody(request)
+                XCTAssertEqual(body["respondImmediately"] as? Bool, true)
+                XCTAssertEqual(body["workspaceTaskId"] as? String, "task-new")
+                return Data(#"{"id":"session-new","provider":"claude","status":"running","cwd":"/fixture","workspaceId":"global","workspaceTaskId":"task-new","structuredState":{"inFlight":true}}"#.utf8)
+            case "/api/settings/config":
+                XCTAssertTrue(lock.withLock { navigated })
+                preferencesStarted.fulfill()
+                XCTAssertEqual(releasePreferences.wait(timeout: .now() + 5), .success)
+                throw URLError(.notConnectedToInternet)
+            default:
+                XCTFail("Unexpected optional blocking request")
+                throw URLError(.unsupportedURL)
+            }
+        }
+        let store = trackedStore(api: api, serverID: "handoff")
+        let draft = SessionCreationDraft(initialMessage: "fixture only")
+        backgroundDrafts.append(draft)
+        draft.loading = false
+        draft.cwd = "/fixture"
+        await draft.create(api: api, workspaceStore: store) { snapshot in
+            XCTAssertEqual(snapshot.id, "session-new")
+            XCTAssertFalse(draft.creating)
+            XCTAssertEqual(draft.submissionPhase, .accepted)
+            XCTAssertEqual(store.taskGroups.first?.tasks.first?.id, "task-new")
+            XCTAssertEqual(store.taskGroups.first?.tasks.first?.sessions.first?.id, snapshot.id)
+            lock.withLock { navigated = true }
+        }
+        XCTAssertTrue(lock.withLock { navigated })
+        XCTAssertEqual(draft.firstMessage, "")
+        // The draft's create() has returned while both optional writes can still fail.
+        releasePreferences.signal(); releasePreferences.signal()
+        await fulfillment(of: [preferencesStarted], timeout: 3)
+        XCTAssertNil(draft.errorMessage)
+        XCTAssertEqual(draft.submissionPhase, .accepted)
+    }
+
+    @MainActor
+    func testRejectedSessionRetainsCommittedTaskAndRetryNeverCreatesAnotherTask() async throws {
+        let lock = NSLock()
+        var taskCount = 0, sessionCount = 0
+        let api = makeAPI { request in
+            if request.url?.path == "/api/settings/config" { return Data("{}".utf8) }
+            if request.url?.path == "/api/tasks" {
+                lock.withLock { taskCount += 1 }
+                return Data(#"{"id":"task-kept","workspaceId":"global","name":"Retained","status":"active","cwd":"/fixture"}"#.utf8)
+            }
+            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            let count = lock.withLock { sessionCount += 1; return sessionCount }
+            if count == 1 { throw WandAPI.APIError.server(status: 403, message: "fixture rejection") }
+            XCTAssertEqual(try Self.requestBody(request)["workspaceTaskId"] as? String, "task-kept")
+            return Data(#"{"id":"session-retry","status":"running","workspaceId":"global","workspaceTaskId":"task-kept"}"#.utf8)
+        }
+        let store = trackedStore(api: api, serverID: "retry")
+        let draft = SessionCreationDraft(initialMessage: "preserved fixture")
+        backgroundDrafts.append(draft)
+        draft.loading = false; draft.cwd = "/fixture"
+        await draft.create(api: api, workspaceStore: store) { _ in XCTFail("A rejected session must not navigate") }
+        XCTAssertFalse(draft.creating)
+        XCTAssertEqual(draft.submissionPhase, .failed)
+        XCTAssertEqual(draft.errorMessage, "fixture rejection")
+        XCTAssertEqual(draft.firstMessage, "preserved fixture")
+        XCTAssertEqual(draft.destination, "task-kept")
+        XCTAssertEqual(store.taskGroups.first?.tasks.first?.id, "task-kept")
+        var navigationCount = 0
+        await draft.create(api: api, workspaceStore: store) { _ in navigationCount += 1 }
+        XCTAssertEqual(navigationCount, 1)
+        XCTAssertEqual(lock.withLock { taskCount }, 1)
+        XCTAssertEqual(lock.withLock { sessionCount }, 2)
+        XCTAssertEqual(store.taskGroups.first?.tasks.first?.sessions.count, 1)
+    }
+
+    @MainActor
+    func testCreationSingleFlightAndLateReceiptCannotClearNewInputOrHijackNavigation() async throws {
+        let started = expectation(description: "Session request started")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let api = makeAPI { request in
+            if request.url?.path == "/api/settings/config" {
+                XCTAssertEqual(try Self.requestBody(request)["defaultProvider"] as? String, "claude", "Save captured settings, not later edits")
+                return Data("{}".utf8)
+            }
+            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            started.fulfill()
+            XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+            return Data(#"{"id":"session-late","status":"running"}"#.utf8)
+        }
+        let draft = SessionCreationDraft(context: .init(cwd: "/fixture", startsNewTask: false), initialMessage: "old fixture")
+        backgroundDrafts.append(draft)
+        draft.loading = false
+        let nextDraft = SessionCreationDraft()
+        var callbacks = 0
+        let submission = Task { await draft.create(api: api, workspaceStore: nil) { _ in
+            callbacks += 1
+            XCTAssertFalse(SessionCreationDraft.shouldOpenReceipt(originDraftID: draft.id, currentDraftID: nextDraft.id, creationVisible: true))
+        } }
+        await fulfillment(of: [started], timeout: 2)
+        await draft.create(api: api, workspaceStore: nil) { _ in XCTFail("Double submission must not dispatch") }
+        draft.firstMessage = "new input"
+        draft.provider = .codex
+        release.signal()
+        await submission.value
+        XCTAssertEqual(callbacks, 1)
+        XCTAssertEqual(draft.firstMessage, "new input")
+        XCTAssertFalse(SessionCreationDraft.shouldOpenReceipt(originDraftID: draft.id, currentDraftID: draft.id, creationVisible: false))
+        XCTAssertTrue(SessionCreationDraft.shouldOpenReceipt(originDraftID: draft.id, currentDraftID: draft.id, creationVisible: true))
+        XCTAssertFalse(SessionCreationDraft.creationIsVisible(showCreation: false, showCommunications: true,
+            showTaskBoard: false, hasSelectedTask: false, hasSelectedSession: false), "Contacts/DM navigation must not be hijacked by a late creation receipt")
+        XCTAssertFalse(SessionCreationDraft.creationIsVisible(showCreation: false, showCommunications: false,
+            showTaskBoard: true, hasSelectedTask: false, hasSelectedSession: false))
+        XCTAssertTrue(SessionCreationDraft.creationIsVisible(showCreation: true, showCommunications: false,
+            showTaskBoard: false, hasSelectedTask: true, hasSelectedSession: false))
+    }
+
+    @MainActor
+    func testTaskGroupInvalidationDuringReadKeepsReceiptAndRefetchesAfterCallerLeaves() async throws {
+        let started = expectation(description: "Old list request started")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let lock = NSLock()
+        var requests = 0
+        var currentGroups = Data("[]".utf8)
+        let api = makeAPI { request in
+            XCTAssertEqual(request.url?.path, "/api/tasks")
+            let number = lock.withLock { requests += 1; return requests }
+            if number == 1 {
+                started.fulfill()
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+                return Data("[]".utf8)
+            }
+            return lock.withLock { currentGroups }
+        }
+        let store = trackedStore(api: api, serverID: "invalidation")
+        let first = Task { await store.loadTaskGroups(force: true) }
+        await fulfillment(of: [started], timeout: 2)
+        let receipt = try JSONDecoder().decode(WorkspaceTaskCreation.self, from: Data(#"{"id":"committed","workspaceId":"global","name":"Visible immediately","status":"active","cwd":"/fixture"}"#.utf8))
+        store.recordCreatedTask(receipt, workspace: nil)
+        let session = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"id":"committed-session","status":"running","workspaceTaskId":"committed"}"#.utf8))
+        store.recordCreatedSession(session)
+        store.recordCreatedSession(session)
+        XCTAssertEqual(store.taskGroups.first?.tasks.first?.listedSessionCount, 1)
+        let encoded = try JSONEncoder().encode(store.taskGroups)
+        lock.withLock { currentGroups = encoded }
+        var lostReceipt = false
+        let observation = store.$taskGroups.sink { groups in
+            if !groups.flatMap(\.tasks).contains(where: { $0.id == receipt.id }) { lostReceipt = true }
+        }
+        defer { observation.cancel() }
+        first.cancel()
+        let invalidation = Task { await store.loadTaskGroups(force: true) }
+        await Task.yield()
+        release.signal()
+        await first.value; await invalidation.value
+        XCTAssertFalse(lostReceipt, "Old responses must never erase the committed local list row")
+        XCTAssertEqual(lock.withLock { requests }, 2)
+        XCTAssertTrue(store.taskGroupsLoaded)
+        XCTAssertEqual(store.taskGroups.first?.tasks.first?.sessions.first?.id, session.id)
+        XCTAssertNil(store.taskGroupsError)
+    }
+
+    @MainActor
+    func testLostTaskOrSessionReceiptBlocksReplayUntilExplicitReview() async throws {
+        for lostPath in ["/api/tasks", "/api/structured-sessions"] {
+            let lock = NSLock()
+            var taskRequests = 0, sessionRequests = 0
+            let api = makeAPI { request in
+                if request.url?.path == "/api/tasks" {
+                    lock.withLock { taskRequests += 1 }
+                    if lostPath == "/api/tasks" { return Data("accepted but response lost".utf8) }
+                    return Data(#"{"id":"task-unknown","workspaceId":"global","name":"Committed","status":"active","cwd":"/fixture"}"#.utf8)
+                }
+                XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+                lock.withLock { sessionRequests += 1 }
+                return Data("accepted but response lost".utf8)
+            }
+            let draft = SessionCreationDraft(initialMessage: "Do not replay this fixture")
+            backgroundDrafts.append(draft)
+            draft.loading = false; draft.cwd = "/fixture"
+            await draft.create(api: api, workspaceStore: nil) { _ in XCTFail("Unknown identity must not be guessed") }
+            XCTAssertTrue(draft.creationUnconfirmed)
+            XCTAssertFalse(draft.creating)
+            XCTAssertEqual(draft.firstMessage, "Do not replay this fixture")
+            XCTAssertEqual(draft.destination, lostPath == "/api/tasks" ? "new" : "task-unknown")
+            await draft.create(api: api, workspaceStore: nil) { _ in XCTFail("Unknown submission must never replay") }
+            XCTAssertEqual(lock.withLock { taskRequests }, 1)
+            XCTAssertEqual(lock.withLock { sessionRequests }, lostPath == "/api/tasks" ? 0 : 1)
+            draft.allowRetryAfterReview()
+            XCTAssertFalse(draft.creationUnconfirmed)
+            XCTAssertEqual(draft.submissionPhase, .idle)
+            XCTAssertEqual(lock.withLock { taskRequests }, 1, "Review only unlocks, never resends")
+        }
+    }
+
+    func testCreationDeliveryClassificationUsesProtocolFactsNotErrorWords() {
+        for status in [408, 409, 500, 503] {
+            XCTAssertTrue(SessionCreationDraft.deliveryIsUncertain(WandAPI.APIError.server(status: status, message: "anything")))
+        }
+        for status in [400, 401, 403, 422] {
+            XCTAssertFalse(SessionCreationDraft.deliveryIsUncertain(WandAPI.APIError.server(status: status, message: "anything")))
+        }
+        XCTAssertTrue(SessionCreationDraft.deliveryIsUncertain(WandAPI.APIError.network("unrelated wording")))
+        XCTAssertFalse(SessionCreationDraft.deliveryIsUncertain(WandAPI.APIError.invalidURL))
+    }
+
+    @MainActor
+    func testNativeCreationShortcutShowsLoadingAndFailureKeepsDraft() async throws {
+        let started = expectation(description: "Native Command-Return creates a session")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let api = makeAPI { request in
+            if request.httpMethod == "GET" { return Data("[]".utf8) }
+            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            XCTAssertEqual(try Self.requestBody(request)["respondImmediately"] as? Bool, true)
+            started.fulfill()
+            XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+            throw WandAPI.APIError.server(status: 403, message: "本地夹具：启动被拒绝，未执行模型")
+        }
+        let draft = SessionCreationDraft(context: .init(cwd: "/fixture", startsNewTask: false), initialMessage: "仅用于本地界面验收的草稿")
+        backgroundDrafts.append(draft)
+        draft.loading = false; draft.initialized = true
+        let host = NSHostingView(rootView: NewSessionView(api: api, draft: draft, embedded: true) { _ in XCTFail("Rejected creation cannot navigate") })
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 650)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        func settle() async throws { host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 200_000_000); host.layoutSubtreeIfNeeded() }
+        func capture(_ name: String) throws {
+            guard let directory = ProcessInfo.processInfo.environment["WAND_CREATION_OUTPUT"] else { return }
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+        }
+        host.appearance = NSAppearance(named: .aqua)
+        try await settle(); try capture("creation-idle")
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let editor = try XCTUnwrap(descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        let idleEditorRect = editor.convert(editor.bounds, to: host)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        let commandReturn = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        XCTAssertTrue(editor.performKeyEquivalent(with: commandReturn))
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(draft.submissionPhase, .startingSession)
+        try await settle(); try capture("creation-starting")
+        release.signal()
+        for _ in 0..<50 {
+            if !draft.creating { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(draft.submissionPhase, .failed)
+        XCTAssertEqual(draft.firstMessage, "仅用于本地界面验收的草稿")
+        XCTAssertTrue(editor === descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        try await settle(); try capture("creation-failed-light")
+        XCTAssertEqual(editor.convert(editor.bounds, to: host).midY, idleEditorRect.midY, accuracy: 1, "Failure feedback cannot move the input or send slot")
+        host.appearance = NSAppearance(named: .darkAqua)
+        try await settle(); try capture("creation-failed-dark")
+    }
+
+    @MainActor
+    func testStandaloneTaskReceiptReturnsBeforeSlowOptionalListRead() async throws {
+        let started = expectation(description: "Background list read started")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let api = makeAPI { request in
+            if request.httpMethod == "GET" {
+                started.fulfill()
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+                throw URLError(.notConnectedToInternet)
+            }
+            return Data(#"{"id":"task-immediate","workspaceId":"global","name":"Immediate","status":"active","cwd":"/fixture"}"#.utf8)
+        }
+        let store = trackedStore(api: api, serverID: "task-return")
+        let result = try await store.createTask(name: "Immediate", directory: "/fixture", worktree: false)
+        XCTAssertEqual(result.creation.id, "task-immediate")
+        XCTAssertEqual(store.taskGroups.first?.tasks.first?.id, result.creation.id)
+        await fulfillment(of: [started], timeout: 2)
+        let join = Task { await store.loadTaskGroups() }
+        await Task.yield()
+        release.signal(); await join.value
+        XCTAssertEqual(store.taskGroups.first?.tasks.first?.id, result.creation.id)
+        XCTAssertNotNil(store.taskGroupsError)
+    }
+
+    private var testSessions: [URLSession] = []
+    private var backgroundDrafts: [SessionCreationDraft] = []
+    private var backgroundStores: [WorkspaceStore] = []
+
+    @MainActor
+    private func trackedStore(api: WandAPI, serverID: String) -> WorkspaceStore {
+        let store = WorkspaceStore(api: api, serverID: serverID)
+        backgroundStores.append(store)
+        return store
+    }
+
+    override func tearDown() async throws {
+        // Respect actual owner task completion before invalidating its mock transport.
+        await Task.yield()
+        for draft in backgroundDrafts { await draft.waitForBackgroundWorkForTesting() }
+        for store in backgroundStores { await store.waitForTaskGroupsForTesting() }
+        backgroundDrafts = []; backgroundStores = []
         testSessions.forEach { $0.invalidateAndCancel() }
         testSessions = []
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeAPI(handler: @escaping (URLRequest) throws -> Data) -> WandAPI {
@@ -721,10 +1198,114 @@ private final class WorkspaceContractURLProtocol: URLProtocol {
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
+        } catch WandAPI.APIError.server(let status, let message) {
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: ["error": message]))
+            client?.urlProtocolDidFinishLoading(self)
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
     }
 
     override func stopLoading() {}
+}
+
+/// Separate suite: the live read-only guard must never run mutation fixtures.
+final class SidebarLiveTests: XCTestCase {
+    @MainActor
+    func testInstalledServiceSidebarLoadsEveryTaskAndSwitchesNativeProjectionsReadOnly() async throws {
+        guard ProcessInfo.processInfo.environment["WAND_SIDEBAR_LIVE"] == "1" else {
+            throw XCTSkip("Installed-service sidebar acceptance is opt-in")
+        }
+        XCTAssertTrue(NativeAcceptance.enabled, "Live UI must use the read-only request guard")
+        let storage = NativeAcceptance.defaults
+        defer { NativeAcceptance.cleanup() }
+        let origin = try XCTUnwrap(URL(string: try XCTUnwrap(storage.string(forKey: "wand.serverURL"))))
+        let token = try XCTUnwrap(storage.string(forKey: "wand.token"))
+        let api = WandAPI(baseURL: origin, token: token)
+        let groups = try await api.listTaskGroups()
+        let tasks = groups.flatMap(\.tasks).filter { $0.status != "done" && $0.archived != true }
+        XCTAssertFalse(tasks.isEmpty, "Live fixture needs at least one existing task; do not manufacture user data")
+        var known = Set<String>(), expanded = Set<String>()
+        TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
+        let projected = TaskListPresentation.sidebarDirectoryGroups(groups, workspaces: [], query: "", activeOnly: false,
+            selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(Set(projected.flatMap(\.tasks).map(\.id)), Set(tasks.map(\.id)))
+        XCTAssertTrue(projected.filter { !$0.tasks.isEmpty }.allSatisfy { expanded.contains($0.id) })
+        let recent = TaskListPresentation.recentGroups(groups, query: "", activeOnly: false, selectedSessionId: nil)
+        let expectedSessions = tasks.flatMap(\.sessions) + groups.flatMap(\.standaloneSessions)
+        XCTAssertEqual(Set(recent.flatMap(\.entries).map(\.id)), Set(expectedSessions.filter { $0.archived != true }.map(\.id)))
+        storage.set(false, forKey: "wand.desktop.sidebarRecent")
+        storage.set(false, forKey: "wand.desktop.sidebarActiveOnly")
+        let host = NSHostingView(rootView: MainShellView(serverURL: origin, token: token).defaultAppStorage(storage))
+        host.frame = NSRect(x: 0, y: 0, width: 1280, height: 850)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = host; window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 1_500_000_000); host.layoutSubtreeIfNeeded()
+        try captureSidebar(host, name: "installed-directory")
+        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"),
+            "An actual loaded task must be rendered before any expand click")
+        let searchButton = try XCTUnwrap(sidebarPresenceView(host, id: "sidebar-search-button"))
+        let buttonFrame = searchButton.convert(searchButton.bounds, to: host)
+        try clickSidebarMarker(host, window: window, id: "sidebar-search-button")
+        try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+        let field = try XCTUnwrap(sidebarDescendants(host).compactMap { $0 as? NSTextField }
+            .first { $0.placeholderString == "搜索工作区、任务或会话" })
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView, "Search focuses the native input immediately")
+        editor.insertText("no-match-sidebar-acceptance", replacementRange: NSRange(location: 0, length: 0))
+        try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"))
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        window.sendEvent(escape)
+        try await Task.sleep(nanoseconds: 350_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"), "Escape clears the search and restores tasks")
+        XCTAssertEqual(searchButton.convert(searchButton.bounds, to: host), buttonFrame, "Search never moves its trigger")
+        storage.set(true, forKey: "wand.desktop.sidebarRecent")
+        try await Task.sleep(nanoseconds: 400_000_000); host.layoutSubtreeIfNeeded()
+        try captureSidebar(host, name: "installed-recent")
+        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-recent-\(try XCTUnwrap(recent.first?.entries.first).id)"))
+        storage.set(true, forKey: "wand.desktop.sidebarActiveOnly")
+        try await Task.sleep(nanoseconds: 400_000_000); host.layoutSubtreeIfNeeded()
+        try captureSidebar(host, name: "installed-active")
+        storage.set(false, forKey: "wand.desktop.sidebarActiveOnly")
+        storage.set(false, forKey: "wand.desktop.sidebarRecent")
+        try await Task.sleep(nanoseconds: 400_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"), "Switching views never loses the task projection")
+    }
+
+}
+
+@MainActor
+private func captureSidebar(_ host: NSView, name: String) throws {
+    guard let path = ProcessInfo.processInfo.environment["WAND_SIDEBAR_OUTPUT"] else { return }
+    let directory = URL(fileURLWithPath: path, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+    host.cacheDisplay(in: host.bounds, to: bitmap)
+    try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent(name + ".png"))
+}
+
+@MainActor
+private func sidebarPresenceView(_ root: NSView, id: String) -> NSView? {
+    if root.identifier?.rawValue == id && root.bounds.width > 0 && root.bounds.height > 0 { return root }
+    return root.subviews.compactMap { sidebarPresenceView($0, id: id) }.first
+}
+
+@MainActor
+private func sidebarDescendants(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(sidebarDescendants) }
+
+@MainActor
+private func clickSidebarMarker(_ host: NSView, window: NSWindow, id: String) throws {
+    let marker = try XCTUnwrap(sidebarPresenceView(host, id: id))
+    let rect = marker.convert(marker.bounds, to: nil)
+    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY),
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        window.sendEvent(event)
+    }
 }

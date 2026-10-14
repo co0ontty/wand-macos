@@ -97,6 +97,83 @@ final class AvatarComposerParityTests: XCTestCase {
         XCTAssertTrue(descendants(host).contains { $0 === editor })
     }
 
+    func testExteriorActionVisibilityAndRunningPriorityMatchMobile() {
+        for text in ["", " \n\t"] {
+            XCTAssertFalse(nativeComposerPrimaryVisible(text: text, hasAttachments: false, turnRunning: false, phase: .idle))
+            XCTAssertFalse(nativeComposerPrimaryVisible(text: text, hasAttachments: false, turnRunning: false, phase: .sent))
+            XCTAssertTrue(nativeComposerPrimaryVisible(text: text, hasAttachments: true, turnRunning: false, phase: .idle))
+            XCTAssertTrue(nativeComposerPrimaryVisible(text: text, hasAttachments: false, turnRunning: true, phase: .idle))
+        }
+        XCTAssertTrue(nativeComposerPrimaryVisible(text: "消息", hasAttachments: false, turnRunning: false, phase: .idle))
+        for phase: NativeComposerPhase in [.idle, .sending, .sent, .failed, .unknown] {
+            XCTAssertEqual(nativeComposerActionPhase(phase: phase, turnRunning: true), .idle, "execution must remain stoppable even with new text or pending feedback")
+            XCTAssertEqual(nativeComposerActionPhase(phase: phase, turnRunning: false), phase)
+        }
+        for phase: NativeComposerPhase in [.sending, .failed, .unknown] {
+            XCTAssertTrue(nativeComposerPrimaryVisible(text: "", hasAttachments: false, turnRunning: false, phase: phase))
+        }
+    }
+
+    func testSendStopMouseDispatchAndStableSlotAcrossCollapse() async throws {
+        let focus = ComposerFocusController()
+        let probe = NativeProbe()
+        let host = NSHostingView(rootView: MouseSendProbe(focus: focus, probe: probe)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 240)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func settle() async throws { host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded() }
+        try await settle()
+        let region = try XCTUnwrap(descendants(host).compactMap { $0 as? MouseSendRegion }.first)
+        let editor = try XCTUnwrap(descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        func rect() -> NSRect { region.convert(region.bounds, to: host) }
+        func click() async throws {
+            let point = region.convert(NSPoint(x: region.bounds.midX, y: region.bounds.midY), to: nil)
+            let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: 0.01, windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0))
+            NSApp.postEvent(up, atStart: false); window.sendEvent(down); await Task.yield()
+        }
+        let emptySlot = rect()
+        XCTAssertEqual(emptySlot.width, 48, accuracy: 0.5)
+        XCTAssertEqual(emptySlot.maxX, host.bounds.maxX, accuracy: 0.5)
+        try await click(); XCTAssertEqual(probe.submissions, 0, "hidden empty action cannot dispatch")
+        probe.text = "保留草稿"; try await settle()
+        try await click(); XCTAssertEqual(probe.submissions, 1, "collapsed draft can send without opening editor")
+        focus.focus(); try await settle()
+        XCTAssertEqual(rect().midX, emptySlot.midX, accuracy: 0.5)
+        XCTAssertEqual(rect().midY, emptySlot.midY, accuracy: 0.5)
+        XCTAssertTrue(editor === descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        probe.running = true; probe.phase = .sending; probe.composing = true
+        focus.collapse(); try await settle()
+        try await click(); XCTAssertEqual(probe.stops, 1, "running task can stop despite draft, IME and send feedback")
+        XCTAssertEqual(probe.submissions, 1, "stop never sends or clears the draft")
+        XCTAssertEqual(probe.text, "保留草稿")
+        XCTAssertEqual(rect().midX, emptySlot.midX, accuracy: 0.5)
+        XCTAssertEqual(rect().midY, emptySlot.midY, accuracy: 0.5)
+        probe.running = false; probe.composing = false; probe.phase = .sending
+        try await settle(); try await click(); XCTAssertEqual(probe.submissions, 1, "sending cannot submit twice")
+        probe.phase = .idle; probe.text = ""; probe.hasAttachments = true
+        try await settle(); try await click(); XCTAssertEqual(probe.submissions, 2, "attachment-only input remains sendable")
+        if let directory = ProcessInfo.processInfo.environment["WAND_COMPOSER_OUTPUT"] {
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            for dark in [false, true] { for width: CGFloat in [320, 800] { for expanded in [false, true] {
+                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                host.frame.size.width = width
+                if expanded { focus.focus() } else { focus.collapse() }
+                probe.running = true; probe.phase = .idle; probe.text = "运行中保留的草稿"; probe.hasAttachments = false
+                try await settle()
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("\(dark ? "dark" : "light")-\(Int(width))-\(expanded ? "expanded" : "collapsed").png"))
+                XCTAssertEqual(rect().width, 48, accuracy: 0.5)
+                XCTAssertEqual(rect().maxX, host.bounds.maxX, accuracy: 0.5)
+            } } }
+        }
+    }
+
     func testAvatarUsesOnlyCurrentUnfinishedSemanticCallsNotNames() throws {
         func turn(_ body: String) throws -> ConversationTurn { try JSONDecoder().decode(ConversationTurn.self, from: Data(body.utf8)) }
         let user = ConversationTurn(role: "user", content: [.text(text: "任务", subagent: nil)])
@@ -188,7 +265,15 @@ final class AvatarComposerParityTests: XCTestCase {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded.fulfill() }
     }
 
-    private final class NativeProbe: ObservableObject { @Published var text = ""; @Published var composing = false; var submissions = 0 }
+    private final class NativeProbe: ObservableObject {
+        @Published var text = ""
+        @Published var composing = false
+        @Published var running = false
+        @Published var phase = NativeComposerPhase.idle
+        @Published var hasAttachments = false
+        var submissions = 0
+        var stops = 0
+    }
     private final class MouseSendRegion: NSView { override func hitTest(_ point: NSPoint) -> NSView? { nil } }
     private struct MouseSendMarker: NSViewRepresentable {
         func makeNSView(context: Context) -> MouseSendRegion { MouseSendRegion() }
@@ -202,9 +287,12 @@ final class AvatarComposerParityTests: XCTestCase {
                 IMEAwareComposerTextView(text: $probe.text, placeholder: "本地测试", isFocused: focus.focused, sendWithCommandEnter: false,
                     onFocusChange: { focus.focused = $0 }, onCompositionChange: { probe.composing = $0 }, onSubmit: { probe.submissions += 1 }, onHeightChange: { _ in }, onEscape: focus.collapse).frame(height: 48)
             }, add: { Color.clear }, send: {
-                NativeComposerActionButton(phase: .idle, hasDraft: !probe.text.isEmpty, canSubmit: !probe.composing && !probe.text.isEmpty,
-                    onSend: { probe.submissions += 1 }).background(MouseSendMarker())
-            }, settings: { Color.clear.frame(height: 44) })
+                NativeComposerActionButton(phase: probe.phase, turnRunning: probe.running,
+                    canSubmit: !probe.composing && (!probe.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || probe.hasAttachments),
+                    onSend: { probe.submissions += 1 }, onStop: { probe.stops += 1 }).background(MouseSendMarker())
+            }, settings: { Color.clear.frame(height: 44) },
+                primaryVisible: nativeComposerPrimaryVisible(text: probe.text, hasAttachments: probe.hasAttachments,
+                    turnRunning: probe.running, phase: probe.phase))
         }
     }
     private struct FocusProbe: View {

@@ -49,6 +49,9 @@ struct MainShellView: View {
     @State private var selectedSession: SessionSnapshot?
     @State private var selectedWorkspaceTask: WorkspaceTaskSelection?
     @State private var sidebarQuery = ""
+    @State private var sidebarSearchOpen = false
+    @AppStorage("wand.desktop.sidebarRecent") private var sidebarRecent = false
+    @AppStorage("wand.desktop.sidebarActiveOnly") private var sidebarActiveOnly = false
     @State private var sidebarScrollRequest: SidebarScrollRequest?
     private let sidebarRefreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     @State private var showCreateWorkspace = false
@@ -157,6 +160,8 @@ struct MainShellView: View {
                 showCommandPalette = false
                 sidebarVisible = true
                 sidebarQuery = workspace.name
+                sidebarSearchOpen = true
+                sidebarRecent = false
                 sidebarScrollRequest = SidebarScrollRequest(section: .workspaces)
             }, onDismiss: { showCommandPalette = false }, unavailableCommands: unavailableCommands)
         }
@@ -418,21 +423,30 @@ struct MainShellView: View {
     }
 
     private var creationDestinationVisible: Bool {
-        showCreation || (!showTaskBoard
-            && selectedWorkspaceTask == nil && selectedSessionId == nil)
+        SessionCreationDraft.creationIsVisible(showCreation: showCreation, showCommunications: showCommunications,
+            showTaskBoard: showTaskBoard, hasSelectedTask: selectedWorkspaceTask != nil, hasSelectedSession: selectedSessionId != nil)
     }
 
     private func openCreatedSession(_ session: SessionSnapshot, originDraftID: UUID) {
-        let shouldOpen = creationDraft.id == originDraftID && creationDestinationVisible
-        creationDrafts = creationDrafts.filter { $0.value.id != originDraftID }
+        let shouldOpen = SessionCreationDraft.shouldOpenReceipt(originDraftID: originDraftID,
+            currentDraftID: creationDraft.id, creationVisible: creationDestinationVisible)
+        creationDrafts = creationDrafts.filter { $0.value.id != originDraftID || !$0.value.firstMessage.isEmpty }
         if creationDraft.id == originDraftID {
-            creationDraft = SessionCreationDraft(context: creationDraft.context)
+            if creationDraft.firstMessage.isEmpty {
+                creationDraft = SessionCreationDraft(context: creationDraft.context)
+            } else {
+                creationDrafts[CreationDraftKey(creationDraft.context)] = creationDraft
+            }
         }
-        if shouldOpen { presentSession(session) }
-        NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+        if shouldOpen {
+            sidebarQuery = ""
+            sidebarVisible = true
+            presentSession(session)
+        }
         Task {
-            await workspaceStore.loadWorkspaceIndex()
-            await workspaceStore.loadTaskGroups(force: true)
+            async let indexLoad: Void = workspaceStore.loadWorkspaceIndex()
+            async let groupsLoad: Void = workspaceStore.loadTaskGroups(force: true)
+            _ = await (indexLoad, groupsLoad)
             guard shouldOpen, let taskId = session.workspaceTaskId,
                   let detail = try? await api.getWorkspaceTask(taskId: taskId),
                   let workspace = workspaceStore.workspaces.first(where: {
@@ -531,6 +545,7 @@ struct MainShellView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         workspaceSidebar.id(SidebarSection.workspaces)
+                        if !sidebarRecent {
                         sidebarSectionBreak
                         SidebarColumn(
                             api: api,
@@ -542,6 +557,7 @@ struct MainShellView: View {
                                 set: { selectedSessionId = $0 }
                             ),
                             query: sidebarQuery,
+                            activeOnly: sidebarActiveOnly,
                             taskGroups: workspaceStore.taskGroups,
                             taskGroupsAvailable: workspaceStore.taskGroupsLoaded,
                             presentNewSession: .constant(false),
@@ -551,7 +567,12 @@ struct MainShellView: View {
                             }
                         )
                         .id(SidebarSection.sessions)
+                        .transition(reduceMotion ? .identity : .asymmetric(
+                            insertion: .opacity.animation(Theme.Motion.structure),
+                            removal: .opacity.animation(Theme.Motion.feedback)))
+                        }
                     }
+                    .wandMotion(value: sidebarRecent)
                     .padding(.top, 4)
                     .padding(.bottom, 16)
                 }
@@ -578,6 +599,8 @@ struct MainShellView: View {
             selectedTaskId: showTaskBoard ? nil : selectedWorkspaceTask?.task.id,
             selectedSessionId: selectedSessionId,
             query: sidebarQuery,
+            recentOnly: sidebarRecent,
+            activeOnly: sidebarActiveOnly,
             onOpenTask: { workspace, task in
                 showCommunications = false
                 showTaskBoard = false
@@ -798,28 +821,87 @@ struct MainShellView: View {
     }
 
     private var sidebarChrome: some View {
-        VStack(spacing: 3) {
+        VStack(spacing: 8) {
             navigationRow(.newSession, active: showCreation && !showCommunications && selectedWorkspaceTask == nil)
-            navigationRow(.search)
-            navigationRow(.taskBoard, active: showTaskBoard)
-            navigationRow(.conversations, active: showCommunications && communicationsStore.section == .conversations)
-            navigationRow(.contacts, active: showCommunications && communicationsStore.section == .contacts)
+            HStack(spacing: 4) {
+                sidebarNavigationTool(.taskBoard, title: "看板", active: showTaskBoard)
+                sidebarNavigationTool(.conversations, title: "对话", active: showCommunications && communicationsStore.section == .conversations)
+                sidebarNavigationTool(.contacts, title: "通讯录", active: showCommunications && communicationsStore.section == .contacts)
+                sidebarNavigationTool(.search, title: "命令")
+            }
             if !showCommunications {
-            HStack(spacing: 6) {
-                Image(systemName: "line.3.horizontal.decrease").foregroundColor(Theme.textSecondary)
-                TextField("筛选工作空间与会话…", text: $sidebarQuery)
-                    .textFieldStyle(.plain).focused($sidebarSearchFocused)
-                if !sidebarQuery.isEmpty {
-                    Button { sidebarQuery = ""; sidebarSearchFocused = true } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }.buttonStyle(.plain).accessibilityLabel("清除筛选").help("清除筛选")
+                HStack(spacing: 4) {
+                    ZStack(alignment: .leading) {
+                        Text("执行会话").font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Theme.textPrimary).opacity(sidebarSearchOpen ? 0 : 1)
+                            .accessibilityHidden(sidebarSearchOpen)
+                        TextField("搜索工作区、任务或会话", text: $sidebarQuery)
+                            .textFieldStyle(.plain).focused($sidebarSearchFocused)
+                            .font(.system(size: 12)).padding(.horizontal, 8).frame(height: 32)
+                            .wandInputSurface(focused: sidebarSearchFocused, cornerRadius: Theme.Radius.control)
+                            .opacity(sidebarSearchOpen ? 1 : 0).allowsHitTesting(sidebarSearchOpen)
+                            .disabled(!sidebarSearchOpen)
+                            .accessibilityHidden(!sidebarSearchOpen)
+                            .onExitCommand { closeSidebarSearch() }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                        .sidebarPresence("sidebar-search-slot")
+                    Button {
+                        if sidebarSearchOpen { closeSidebarSearch() }
+                        else { sidebarSearchOpen = true; sidebarSearchFocused = true }
+                    } label: {
+                        ZStack {
+                            Image(systemName: "magnifyingglass").opacity(sidebarSearchOpen ? 0 : 1)
+                                .rotationEffect(.degrees(reduceMotion || !sidebarSearchOpen ? 0 : -45))
+                            Image(systemName: "arrow.uturn.backward").opacity(sidebarSearchOpen ? 1 : 0)
+                                .rotationEffect(.degrees(reduceMotion || sidebarSearchOpen ? 0 : 45))
+                        }.frame(width: 28, height: 28)
+                    }.buttonStyle(WandIconButtonStyle())
+                        .help(sidebarSearchOpen ? "收起搜索" : "搜索工作区、任务或会话")
+                        .accessibilityLabel(sidebarSearchOpen ? "收起搜索" : "搜索工作区、任务或会话")
+                        .sidebarPresence("sidebar-search-button")
+                    Menu {
+                        Button("刷新列表", systemImage: "arrow.clockwise") {
+                            closeSidebarSearch()
+                            Task { await workspaceStore.loadTaskGroups(force: true) }
+                            NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+                        }
+                        Button("新建工作区", systemImage: "folder.badge.plus") { showCreateWorkspace = true }
+                    } label: { Image(systemName: "ellipsis").frame(width: 24, height: 28) }
+                        .menuStyle(.borderlessButton).fixedSize().help("列表选项").accessibilityLabel("列表选项")
+                }.frame(height: 32).padding(.top, 4).wandMotion(value: sidebarSearchOpen)
+                HStack(spacing: 6) {
+                    Picker("会话组织方式", selection: $sidebarRecent) {
+                        Text("按工作区").tag(false)
+                        Text("最近会话").tag(true)
+                    }.pickerStyle(.segmented).labelsHidden()
+                    Button { sidebarActiveOnly.toggle() } label: {
+                        Label("活动", systemImage: "bolt").font(.system(size: 11, weight: .medium))
+                            .frame(height: 28).padding(.horizontal, 5)
+                    }.buttonStyle(DesktopNavigationButtonStyle(active: sidebarActiveOnly))
+                        .help("只看在跑、待处理、刚完成及正在查看的会话")
+                        .accessibilityLabel("只看活动会话")
+                        .accessibilityValue(sidebarActiveOnly ? "已开启" : "已关闭")
                 }
             }
-            .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 32)
-            .wandInputSurface(focused: sidebarSearchFocused, cornerRadius: Theme.Radius.control)
-            .padding(.top, 12)
-            }
-        }.padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
+        }.padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 10)
+    }
+
+    private func closeSidebarSearch() {
+        sidebarQuery = ""
+        sidebarSearchOpen = false
+        sidebarSearchFocused = false
+    }
+
+    private func sidebarNavigationTool(_ command: DesktopCommand, title: String, active: Bool = false) -> some View {
+        Button { handle(command) } label: {
+            VStack(spacing: 4) {
+                Image(systemName: command.symbol).font(.system(size: 14))
+                Text(title).font(.system(size: 10, weight: .medium))
+            }.foregroundColor(active ? Theme.wandAccent : Theme.textSecondary)
+                .frame(maxWidth: .infinity).frame(height: 44).contentShape(Rectangle())
+        }.buttonStyle(DesktopNavigationButtonStyle(active: active))
+            .help(command.subtitle).accessibilityLabel(command.title)
+            .accessibilityAddTraits(active ? .isSelected : [])
     }
 
     /// 操作区结束之后，用一条短分隔把工作空间树和单独会话切开。
@@ -939,7 +1021,9 @@ struct MainShellView: View {
         case .workspaces, .sessions:
             showCommunications = false
             sidebarVisible = true
-            sidebarQuery = ""
+            closeSidebarSearch()
+            sidebarRecent = false
+            sidebarActiveOnly = false
             sidebarScrollRequest = SidebarScrollRequest(
                 section: command == .workspaces ? .workspaces : .sessions
             )

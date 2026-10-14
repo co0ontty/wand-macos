@@ -501,6 +501,7 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
     let worktreeError: String?
     let sessions: [WorkspaceSessionSummary]
     let totalSessions: Int?
+    let archived: Bool?
 
     var isIsolated: Bool { isolated ?? (worktree != nil) }
     var listedSessionCount: Int { totalSessions ?? sessions.count }
@@ -518,7 +519,8 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         isolated: Bool?,
         worktreeError: String?,
         sessions: [WorkspaceSessionSummary],
-        totalSessions: Int? = nil
+        totalSessions: Int? = nil,
+        archived: Bool? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -533,6 +535,7 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         self.worktreeError = worktreeError
         self.sessions = sessions
         self.totalSessions = totalSessions ?? sessions.count
+        self.archived = archived
     }
 
     func asTask() -> WorkspaceTask {
@@ -559,8 +562,23 @@ struct TaskDirectoryGroup: Codable, Equatable, Identifiable {
     let tasks: [WorkspaceTaskSummary]
     let standaloneSessions: [WorkspaceSessionSummary]
 
+    let global: Bool?
+
     var id: String { workspaceId }
     var isSynthetic: Bool { synthetic ?? false }
+    var isGlobal: Bool { global ?? false }
+    var displayName: String { isGlobal ? "未归属工作区" : workspaceName }
+
+    init(workspaceId: String, workspaceName: String, workspaceCwd: String, synthetic: Bool?,
+         tasks: [WorkspaceTaskSummary], standaloneSessions: [WorkspaceSessionSummary], global: Bool? = nil) {
+        self.workspaceId = workspaceId
+        self.workspaceName = workspaceName
+        self.workspaceCwd = workspaceCwd
+        self.synthetic = synthetic
+        self.tasks = tasks
+        self.standaloneSessions = standaloneSessions
+        self.global = global
+    }
 }
 
 
@@ -656,6 +674,135 @@ struct SessionCompletionResponse: Decodable {
 }
 
 enum TaskListPresentation {
+    static func searchMatches(_ query: String, values: [String?]) -> Bool {
+        let words = query.lowercased().split(whereSeparator: { $0.isWhitespace })
+        let text = values.compactMap { $0 }.joined(separator: " ").lowercased()
+        return words.allSatisfy { text.contains($0) }
+    }
+
+    static func groupSearchText(_ session: WorkspaceSessionSummary) -> String {
+        [session.title, session.providerLabel, session.cwd, session.employeeName,
+         session.teamChat?.teamName, session.teamStep?.teamName, session.teamStep?.memberName]
+            .compactMap { $0 }.joined(separator: " ")
+    }
+
+    static func isActive(_ session: WorkspaceSessionSummary, selectedSessionId: String?) -> Bool {
+        if session.id == selectedSessionId { return true }
+        guard session.archived != true else { return false }
+        return session.ptyBusy == true || session.inFlight == true || session.isJustCompleted
+            || (session.sessionKind == "pty" && ["", "shell"].contains(session.provider ?? "") && session.providerCliActive == true)
+            || ["thinking", "failed", "waiting-input", "waiting_input", "permission-blocked", "permission", "reconnecting"].contains(session.status ?? "")
+    }
+
+    /// Open newly discovered populated directories once; polling never reopens a user's fold.
+    static func discoverDirectories(_ groups: [TaskDirectoryGroup], known: inout Set<String>, expanded: inout Set<String>) {
+        for group in groups where !known.contains(group.id) {
+            known.insert(group.id)
+            if !group.tasks.isEmpty { expanded.insert(group.id) }
+        }
+    }
+
+    static func sidebarDirectoryGroups(_ groups: [TaskDirectoryGroup], workspaces: [Workspace], query: String,
+                                       activeOnly: Bool, selectedSessionId: String?, selectedTaskId: String?) -> [TaskDirectoryGroup] {
+        var source = groups.map { group in
+            TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
+                tasks: group.tasks.filter { $0.archived != true && $0.status != "done" },
+                standaloneSessions: [], global: group.global)
+        }.filter { !$0.isSynthetic || !$0.tasks.isEmpty }
+        let ids = Set(groups.map(\.id))
+        source += workspaces.filter { !ids.contains($0.id) }.map {
+            TaskDirectoryGroup(workspaceId: $0.id, workspaceName: $0.name, workspaceCwd: $0.cwd,
+                synthetic: false, tasks: [], standaloneSessions: [])
+        }
+        source = source.filter { !$0.isGlobal || !$0.tasks.isEmpty }
+        let searched = filteredDirectoryGroups(source, query: query)
+        return source.compactMap { group in
+            let result: TaskDirectoryGroup
+            if group.tasks.isEmpty && !group.isSynthetic {
+                guard searchMatches(query, values: [group.displayName, group.workspaceCwd]) else { return nil }
+                result = group
+            } else {
+                guard let match = searched.first(where: { $0.id == group.id }) else { return nil }
+                result = match
+            }
+            guard activeOnly else { return result }
+            return TaskDirectoryGroup(workspaceId: result.workspaceId, workspaceName: result.workspaceName,
+                workspaceCwd: result.workspaceCwd, synthetic: result.synthetic,
+                tasks: result.tasks.filter { task in
+                    task.id == selectedTaskId || task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }
+                }, standaloneSessions: [], global: result.global)
+        }.sorted { !$0.isGlobal && $1.isGlobal }
+    }
+
+    /// A directory grouping key (including cwd:...) is not a task's execution owner.
+    static func workspaceForTask(_ task: WorkspaceTaskSummary, group: TaskDirectoryGroup, workspaces: [Workspace]) -> Workspace {
+        workspaces.first { $0.id == task.workspaceId } ?? Workspace(
+            id: task.workspaceId, name: group.displayName, cwd: group.workspaceCwd,
+            defaultProvider: nil, layout: nil, createdAt: "", lastOpenedAt: nil)
+    }
+
+    struct RecentEntry: Identifiable {
+        let group: TaskDirectoryGroup
+        let task: WorkspaceTaskSummary?
+        let session: WorkspaceSessionSummary
+        var id: String { session.id }
+    }
+
+    struct RecentGroup: Identifiable {
+        let id: String
+        let title: String
+        let entries: [RecentEntry]
+    }
+
+    static func recentGroups(_ groups: [TaskDirectoryGroup], query: String, activeOnly: Bool,
+                             selectedSessionId: String?) -> [RecentGroup] {
+        var seen = Set<String>()
+        var entries: [RecentEntry] = []
+        for group in groups {
+            for task in group.tasks where task.status != "done" && task.archived != true {
+                entries += task.sessions.map { RecentEntry(group: group, task: task, session: $0) }
+            }
+            entries += group.standaloneSessions.map { RecentEntry(group: group, task: nil, session: $0) }
+        }
+        entries = entries.filter { entry in
+            entry.session.archived != true && seen.insert(entry.id).inserted
+        }.sorted { left, right in
+            let a = left.session.startedAt ?? "", b = right.session.startedAt ?? ""
+            return a == b ? left.id < right.id : a > b
+        }
+        var keys: [String] = []
+        var buckets: [String: [RecentEntry]] = [:]
+        var titles: [String: String] = [:]
+        for entry in entries {
+            let session = entry.session
+            let key: String, title: String
+            if let employee = session.employeeId, !employee.isEmpty {
+                key = "employee:\(employee)"; title = session.employeeName ?? "员工"
+            } else if let team = session.teamChat {
+                key = "team:\(team.teamId)"; title = team.teamName
+            } else if let step = session.teamStep {
+                key = "team-run:\(step.runId)"; title = step.teamName
+            } else if session.sessionKind == "pty" {
+                let blank = (session.provider ?? "").isEmpty || session.provider == "shell"
+                key = blank ? "blank-terminal" : "terminal"; title = blank ? "空白终端" : "PTY 终端"
+            } else {
+                key = "cli:\(session.provider ?? "")"; title = session.providerLabel
+            }
+            if buckets[key] == nil { keys.append(key); titles[key] = title; buckets[key] = [] }
+            if (!activeOnly || isActive(session, selectedSessionId: selectedSessionId))
+                && searchMatches(query, values: [groupSearchText(session), entry.task?.name, entry.group.displayName, entry.group.workspaceCwd]) {
+                buckets[key, default: []].append(entry)
+            }
+        }
+        keys = keys.filter { $0 != "terminal" && $0 != "blank-terminal" }
+            + ["terminal", "blank-terminal"].filter { buckets[$0] != nil }
+        return keys.compactMap { key in
+            guard let entries = buckets[key], !entries.isEmpty else { return nil }
+            return RecentGroup(id: key, title: titles[key] ?? "会话", entries: entries)
+        }
+    }
+
     /// Use the complete task tree, before search or presentation limits are applied.
     static func standaloneSessions(
         sessions: [SessionSnapshot],
@@ -678,35 +825,26 @@ enum TaskListPresentation {
 
     static func filteredDirectoryGroups(_ groups: [TaskDirectoryGroup], query: String) -> [TaskDirectoryGroup] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        func matches(_ value: String?) -> Bool {
-            value?.localizedCaseInsensitiveContains(needle) == true
-        }
+        func matches(_ values: String?...) -> Bool { searchMatches(query, values: values) }
         func matchesSession(_ session: WorkspaceSessionSummary) -> Bool {
-            matches(session.title) || matches(session.providerLabel) || matches(session.cwd)
+            matches(groupSearchText(session))
         }
         return groups.compactMap { group in
             guard !group.tasks.isEmpty || !group.standaloneSessions.isEmpty else { return nil }
-            if needle.isEmpty || matches(group.workspaceName) || matches(group.workspaceCwd) {
+            if needle.isEmpty || matches(group.displayName, group.workspaceCwd) {
                 return group
             }
-            let tasks = group.tasks.compactMap { task -> WorkspaceTaskSummary? in
-                if matches(task.name) || matches(task.cwd) { return task }
-                let sessions = task.sessions.filter(matchesSession)
-                guard !sessions.isEmpty else { return nil }
-                return WorkspaceTaskSummary(
-                    id: task.id, workspaceId: task.workspaceId, name: task.name,
-                    worktree: task.worktree, layout: task.layout, status: task.status,
-                    createdAt: task.createdAt, lastOpenedAt: task.lastOpenedAt, cwd: task.cwd,
-                    isolated: task.isolated, worktreeError: task.worktreeError,
-                    sessions: sessions, totalSessions: task.totalSessions
-                )
+            // Search selects whole tasks, never a partial destructive-action scope.
+            let tasks = group.tasks.filter { task in
+                searchMatches(query, values: [group.displayName, task.name, task.cwd]
+                    + task.sessions.map { groupSearchText($0) })
             }
             let standaloneSessions = group.standaloneSessions.filter(matchesSession)
             guard !tasks.isEmpty || !standaloneSessions.isEmpty else { return nil }
             return TaskDirectoryGroup(
                 workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
-                tasks: tasks, standaloneSessions: standaloneSessions
+                tasks: tasks, standaloneSessions: standaloneSessions, global: group.global
             )
         }
     }

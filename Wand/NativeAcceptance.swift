@@ -9,6 +9,7 @@ enum NativeAcceptance {
         return false
         #endif
     }
+    private static let originalArguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
     static let suite = "WandLiveAcceptance." + UUID().uuidString
     static let defaults: UserDefaults = {
         guard enabled else { return .standard }
@@ -26,7 +27,12 @@ enum NativeAcceptance {
                   let split = decoded.lastIndex(of: "#") else { return storage }
             let token = String(decoded[decoded.index(after: split)...])
             let url = "\((config["https"] as? Bool) == true ? "https" : "http")://127.0.0.1:\(port)"
-            storage.setVolatileDomain(["wand.serverURL": url, "wand.token": token], forName: UserDefaults.argumentDomain)
+            // Preserve launch arguments (notably -XCTest); replacing this domain
+            // made a filtered live run execute every unrelated mutation fixture.
+            var arguments = originalArguments
+            arguments["wand.serverURL"] = url
+            arguments["wand.token"] = token
+            storage.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
             storage.set("system", forKey: "wand.appearanceMode")
             storage.set(true, forKey: "wand.desktop.sidebarVisible")
         } catch {
@@ -40,6 +46,9 @@ enum NativeAcceptance {
         return method == "GET" || path == "/api/login" || path == "/api/logout"
     }
     static func cleanup() {
-        if enabled { defaults.removeVolatileDomain(forName: UserDefaults.argumentDomain); defaults.removePersistentDomain(forName: suite) }
+        if enabled {
+            defaults.setVolatileDomain(originalArguments, forName: UserDefaults.argumentDomain)
+            defaults.removePersistentDomain(forName: suite)
+        }
     }
 }

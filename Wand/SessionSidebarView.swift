@@ -1,6 +1,29 @@
 import Combine
 import SwiftUI
 
+// DEBUG geometry markers let native tests verify rendered rows without requiring OS AX permission.
+extension View {
+    @ViewBuilder func sidebarPresence(_ id: String) -> some View {
+        #if DEBUG
+        background(SidebarPresenceProbe(id: id).allowsHitTesting(false).accessibilityHidden(true))
+        #else
+        self
+        #endif
+    }
+}
+
+#if DEBUG
+private struct SidebarPresenceProbe: NSViewRepresentable {
+    let id: String
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier(id)
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) { view.identifier = NSUserInterfaceItemIdentifier(id) }
+}
+#endif
+
 // MARK: - 侧栏层级
 
 /// 分区标题。比导航行和列表行更轻、更短，用来切开「工作空间」和「单独会话」。
@@ -166,6 +189,7 @@ struct SidebarColumn: View {
     let api: WandAPI
     @Binding var selectedSessionId: String?
     var query: String = ""
+    var activeOnly = false
     let taskGroups: [TaskDirectoryGroup]
     let taskGroupsAvailable: Bool
     @Binding var presentNewSession: Bool
@@ -185,6 +209,7 @@ struct SidebarColumn: View {
     @State private var deleteInProgress = false
     @State private var deletionError: String?
     @State private var sessionListRevision = ""
+    @State private var loadGeneration = 0
     @State private var archivedSessionsCollapsed = true
     @State private var archiveError: String?
     @State private var archiveInProgress = false
@@ -228,7 +253,14 @@ struct SidebarColumn: View {
         .onReceive(refreshTimer) { _ in
             Task { await load(silent: true) }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .wandRefreshLists)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .wandRefreshLists)) { notification in
+            if let created = notification.object as? SessionSnapshot {
+                // Commit the exact accepted identity before an optional server read.
+                loadGeneration &+= 1
+                sessionListRevision = ""
+                sessions.removeAll { $0.id == created.id }
+                sessions.insert(created, at: 0)
+            }
             Task { await load(silent: true) }
         }
         .confirmationDialog(
@@ -389,10 +421,9 @@ struct SidebarColumn: View {
                 }
                 .padding(.horizontal, 8)
 
-                archivedStandaloneFold
-
                 Spacer(minLength: 0)
             }
+            archivedStandaloneFold
         }
     }
 
@@ -448,9 +479,8 @@ struct SidebarColumn: View {
         guard !needle.isEmpty else { return entries }
         return entries.filter { entry in
             guard case .session(let session) = entry else { return false }
-            return session.displayTitle.lowercased().contains(needle)
-                || (session.cwd?.lowercased().contains(needle) ?? false)
-                || (session.provider?.lowercased().contains(needle) ?? false)
+            return TaskListPresentation.searchMatches(query, values: [session.displayTitle,
+                TaskListPresentation.groupSearchText(WorkspaceSessionSummary(snapshot: session))])
         }
     }
 
@@ -560,9 +590,13 @@ struct SidebarColumn: View {
         )
     }
 
-    private var visibleSessions: [SessionSnapshot] { standaloneSplit.active }
+    private var visibleSessions: [SessionSnapshot] {
+        standaloneSplit.active.filter {
+            !activeOnly || TaskListPresentation.isActive(WorkspaceSessionSummary(snapshot: $0), selectedSessionId: selectedSessionId)
+        }
+    }
 
-    private var visibleArchivedSessions: [SessionSnapshot] { standaloneSplit.archived }
+    private var visibleArchivedSessions: [SessionSnapshot] { activeOnly ? [] : standaloneSplit.archived }
 
     /// 归档 / 恢复。归档是软标记：不杀进程、不删历史，也不改任务归属。
     private func setArchived(_ archived: Bool, sessions targets: [SessionSnapshot]) async {
@@ -592,6 +626,7 @@ struct SidebarColumn: View {
 
     private var recoverableSessions: [HistorySession] {
         let managedIds = Set(sessions.compactMap(\.claudeSessionId))
+        guard !activeOnly else { return [] }
         return historySessions
             .filter {
                 ($0.hasConversation ?? true)
@@ -609,28 +644,31 @@ struct SidebarColumn: View {
         return entries.filter { entry in
             switch entry {
             case .session(let session):
-                return session.displayTitle.lowercased().contains(needle)
-                    || (session.cwd?.lowercased().contains(needle) ?? false)
-                    || (session.provider?.lowercased().contains(needle) ?? false)
+                return TaskListPresentation.searchMatches(query, values: [session.displayTitle,
+                    TaskListPresentation.groupSearchText(WorkspaceSessionSummary(snapshot: session))])
             case .recoverable(let history):
-                return history.firstUserMessage.lowercased().contains(needle)
-                    || history.cwd.lowercased().contains(needle)
+                return TaskListPresentation.searchMatches(query, values: [history.firstUserMessage, history.cwd])
             }
         }
     }
 
     @discardableResult
     private func load(silent: Bool = false) async -> Bool {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         if !silent { loading = true }
         do {
             let probe = try await api.probeSessionList(
                 revision: sessionListRevision.isEmpty ? nil : sessionListRevision
             )
+            guard generation == loadGeneration, !Task.isCancelled else { return false }
             if silent, probe.unchanged == true {
                 loading = false
                 return true
             }
-            sessions = try await api.listSessions()
+            let refreshedSessions = try await api.listSessions()
+            guard generation == loadGeneration, !Task.isCancelled else { return false }
+            sessions = refreshedSessions
             sessionListRevision = probe.revision
             if let selectedSessionId,
                let refreshed = listedSessions.first(where: { $0.id == selectedSessionId }) {
@@ -638,11 +676,14 @@ struct SidebarColumn: View {
             }
             // Older servers may still return imported history. Their optional
             // endpoints must not make a successful live-session refresh fail.
-            historySessions = await api.refreshLegacyHistory(previous: historySessions)
+            let refreshedHistory = await api.refreshLegacyHistory(previous: historySessions)
+            guard generation == loadGeneration, !Task.isCancelled else { return false }
+            historySessions = refreshedHistory
             loadError = nil
             loading = false
             return true
         } catch {
+            guard generation == loadGeneration, !Task.isCancelled else { return false }
             if !silent { loadError = error.localizedDescription }
             loading = false
             return false
