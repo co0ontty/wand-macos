@@ -1,8 +1,54 @@
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Wand
 
 final class TaskBoardTests: XCTestCase {
+    func testOrganizationNoChangesIsNotReportedAsAlreadyOrganized() throws {
+        let json = #"{"foundTasks":5,"eligibleTasks":3,"skippedTasks":2,"movedSessions":[],"categorizedTasks":[],"refused":[]}"#.data(using: .utf8)!
+        let result = try JSONDecoder().decode(WandTaskOrganizationResult.self, from: json)
+        XCTAssertEqual(result.label, "未发现可安全归类的项")
+        XCTAssertEqual(result.detail, "已检查 3 个任务；已跳过 2 个用户自定标题的任务")
+        let unavailable = #"{"foundTasks":3,"eligibleTasks":3,"skippedTasks":0,"movedSessions":[],"categorizedTasks":[],"refused":[{"reason":"自动判断不可用"}]}"#.data(using: .utf8)!
+        let refused = try JSONDecoder().decode(WandTaskOrganizationResult.self, from: unavailable)
+        XCTAssertEqual(refused.label, "未调整任何任务或会话")
+        XCTAssertEqual(refused.detail, "已检查 3 个任务；自动判断不可用")
+    }
+
+    func testTaskAgentEngineSurvivesClassificationAndNativeEditing() throws {
+        let agent = try JSONDecoder().decode(WandBoardTaskAgent.self, from: Data(#"{"provider":"pi","model":"default","engine":"sdk"}"#.utf8))
+        XCTAssertEqual(agent.engine, "sdk")
+        XCTAssertEqual(agent.jsonObject()["engine"] as? String, "sdk")
+        XCTAssertEqual(agent.withProvider("pi").engine, "sdk")
+        XCTAssertNil(agent.withProvider("codex").engine)
+        let sessions = try JSONDecoder().decode([WandBoardTaskSession].self, from: Data(#"[{"id":"cli","provider":"pi","engine":"cli"},{"id":"sdk","provider":"pi","engine":"core"}]"#.utf8))
+        let groups = wandBoardSessionGroups(sessions: sessions, assigned: agent)
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(Set(groups.map(\.id)).count, 2)
+        XCTAssertEqual(groups.first(where: { $0.agent?.engine == "sdk" })?.sessions.map(\.id), ["sdk"])
+        XCTAssertEqual(wandBoardProviderLabel("pi", engine: "sdk"), WandProvider.title(for: "pi", engine: "core"))
+        let unknown = try JSONDecoder().decode([WandBoardTaskSession].self, from: Data(#"[{"id":"legacy","provider":""}]"#.utf8))
+        XCTAssertEqual(wandBoardSessionGroups(sessions: unknown, assigned: nil).first?.sessions.map(\.id), ["legacy"])
+    }
+
+    func testOrganizationTargetsAndChangesMirrorServerContract() throws {
+        XCTAssertEqual(WandTaskOrganizationMode.auto.label, "默认范围会话")
+        XCTAssertEqual(WandTaskOrganizationMode.all.label, "所有工作会话")
+        XCTAssertEqual(WandTaskOrganizationTarget.all.jsonObject, ["kind": "all"])
+        XCTAssertEqual(WandTaskOrganizationTarget.workspace("w1").jsonObject, ["kind": "workspace", "workspaceId": "w1"])
+        let synthetic = TaskDirectoryGroup(workspaceId: "cwd:/tmp/a", workspaceName: "A", workspaceCwd: "/tmp/a", synthetic: true, tasks: [], standaloneSessions: [])
+        XCTAssertEqual(WandTaskOrganizationTarget.directoryGroup(synthetic), .directory("/tmp/a"))
+        let project = TaskDirectoryGroup(workspaceId: "w1", workspaceName: "A", workspaceCwd: "/tmp/a", synthetic: false, tasks: [], standaloneSessions: [])
+        XCTAssertEqual(WandTaskOrganizationTarget.directoryGroup(project), .workspace("w1"))
+        let global = TaskDirectoryGroup(workspaceId: "wand-global", workspaceName: "全局", workspaceCwd: "/tmp/global", synthetic: false, tasks: [], standaloneSessions: [], global: true)
+        XCTAssertEqual(WandTaskOrganizationTarget.directoryGroup(global), .directory("/tmp/global"))
+        let json = #"{"foundTasks":3,"eligibleTasks":3,"skippedTasks":0,"movedSessions":[{"sessionId":"s1"}],"categorizedTasks":[{"taskId":"t1"}],"refused":[]}"#.data(using: .utf8)!
+        let result = try JSONDecoder().decode(WandTaskOrganizationResult.self, from: json)
+        XCTAssertEqual(result.label, "已归类 1 个任务、归属 1 个会话")
+        XCTAssertEqual(result.detail, "已检查 3 个任务")
+    }
+
     func testBoardTaskDecoderReadsWorkspaceAgentAndSessions() throws {
         let json = """
         {
@@ -44,10 +90,116 @@ final class TaskBoardTests: XCTestCase {
         XCTAssertEqual(task.agent?.kind, WandBoardAgentKind.structured.rawValue)
     }
 
+    func testOrganizationRelationshipsUseBoardIDsAndKeepParentsAcrossFilters() throws {
+        let json = #"[{"id":"card-parent","workspaceTaskId":"container-parent","identifier":"TASK-1","title":"主任务"},{"id":"card-child","workspaceTaskId":"container-child","parentTaskId":"card-parent","title":"子任务"},{"id":"wrong-id-kind","parentTaskId":"container-parent"},{"id":"self","parentTaskId":"self"},{"id":"orphan","parentTaskId":"not-loaded"}]"#.data(using: .utf8)!
+        let tasks = try JSONDecoder().decode([WandBoardTask].self, from: json)
+        let visibleChild = tasks[1]
+        XCTAssertEqual(visibleChild.parentTaskId, "card-parent")
+        XCTAssertEqual(wandBoardParent(of: visibleChild, in: tasks)?.id, "card-parent")
+        XCTAssertNil(wandBoardParent(of: visibleChild, in: [visibleChild]), "筛选后的列表不能替代关系投影的完整列表")
+        XCTAssertEqual(wandBoardChildren(of: tasks[0], in: tasks).map(\.id), ["card-child"])
+        XCTAssertNil(wandBoardParent(of: tasks[2], in: tasks), "workspaceTaskId不是父卡片ID")
+        XCTAssertNil(wandBoardParent(of: tasks[3], in: tasks), "坏数据中的自引用不呈现为父任务")
+        XCTAssertTrue(wandBoardChildren(of: tasks[3], in: tasks).isEmpty)
+        XCTAssertNil(wandBoardParent(of: tasks[4], in: tasks), "缺失父任务保持可读，不虚构名称")
+    }
+
+    func testBoardTaskDecoderToleratesMissingAndLegacyParentIDs() throws {
+        for parent in ["", NSNull(), 42] as [Any] {
+            let json = try JSONSerialization.data(withJSONObject: ["id": "legacy", "parentTaskId": parent])
+            let task = try JSONDecoder().decode(WandBoardTask.self, from: json)
+            XCTAssertNil(task.parentTaskId)
+        }
+    }
+
+    @MainActor
+    func testOrganizationNativeRelationshipAndResultScreenshots() async throws {
+        guard ProcessInfo.processInfo.environment["WAND_TASK_ORGANIZE_NATIVE_VISUAL"] == "1" else {
+            throw XCTSkip("opt-in isolated native task-organization views; never calls a model")
+        }
+        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["WAND_TASK_ORGANIZE_NATIVE_OUTPUT"] ?? NSTemporaryDirectory() + "wand-task-organization-visual")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let data = #"[{"id":"parent","identifier":"TASK-1","title":"修复客户端交互","status":"doing","description":"保留所有原任务和会话的历史"},{"id":"child","parentTaskId":"parent","identifier":"TASK-2","title":"修复登录弹窗","status":"doing","description":"验证归类后的父任务信息可见"}]"#.data(using: .utf8)!
+        let tasks = try JSONDecoder().decode([WandBoardTask].self, from: data)
+        let hostName = "\(UUID().uuidString.lowercased()).organization.test"
+        CommunicationsContractURLProtocol.register(host: hostName) { request in
+            var data = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&bytes, maxLength: bytes.count)
+                    if count <= 0 { break }; data.append(bytes, count: count)
+                }
+            }
+            let body = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if body?["action"] as? String == "preview" {
+                return Data(#"{"preview":{"token":"visual-confirm","sessionCount":2,"manualSessionCount":1,"skippedSessionCount":0,"existingTaskCount":0,"contentCharacters":1888,"estimatedModelRequests":1,"unchanged":false}}"#.utf8)
+            }
+            return Data(#"{"job":{"id":"visual-job","status":"completed","stage":"完成","processedSessions":2,"totalSessions":2,"modelRequests":1,"result":{"eligibleSessions":2,"analyzedSessions":2,"skippedManualSessions":1,"skippedSessions":0,"createdTasks":[{"taskId":"new"}],"reusedTasks":[],"updatedTasks":[],"movedSessions":[{"sessionId":"one"},{"sessionId":"two"}],"unassignedSessions":[],"refused":[]}}}"#.utf8)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel(); CommunicationsContractURLProtocol.unregister(host: hostName) }
+        let api = WandAPI(baseURL: URL(string: "https://\(hostName)")!, token: nil, session: session)
+        for dark in [false, true] {
+            let suffix = dark ? "dark" : "light"
+            for task in tasks {
+                let detail = WandBoardDetailView(task: task, allTasks: tasks, onOpenTask: { _ in }, workspaces: [], milestones: [], catalog: nil, busy: false,
+                    onPatch: { _ in }, onRemember: { _ in }, onDispatch: { _, _ in }, onArchive: {}, onOpenSession: { _ in },
+                    onCreateMilestone: { _ in throw URLError(.unsupportedURL) })
+                try await organizationSnapshot(detail, size: NSSize(width: 1200, height: 850), dark: dark,
+                    path: output.appendingPathComponent("\(task.id)-detail-\(suffix).png"))
+            }
+            let action = WandTaskOrganizationAction()
+            await action.run(api: api, target: .all, mode: .auto) {
+                do {
+                    try await organizationSnapshot(WandTaskOrganizationPanel(api: api, target: .all, action: action, onChanged: {}),
+                        size: NSSize(width: 320, height: 300), dark: dark, path: output.appendingPathComponent("progress-\(suffix).png"))
+                } catch { XCTFail("Native progress snapshot failed: \(error)") }
+            }
+            XCTAssertNotNil(action.preview)
+            XCTAssertNil(action.result)
+            try await organizationSnapshot(WandTaskOrganizationPanel(api: api, target: .all, action: action, onChanged: {}),
+                size: NSSize(width: 320, height: 560), dark: dark, path: output.appendingPathComponent("preview-\(suffix).png"))
+            action.confirm(api: api, onChanged: {})
+            await action.waitForBackgroundWorkForTesting()
+            XCTAssertEqual(action.result?.label, "已新建 1 个任务、归入 2 个会话")
+            try await organizationSnapshot(WandTaskOrganizationPanel(api: api, target: .all, action: action, onChanged: {}),
+                size: NSSize(width: 320, height: 330), dark: dark, path: output.appendingPathComponent("result-\(suffix).png"))
+            let summary = VStack(alignment: .leading, spacing: 16) {
+                WandBoardRelationshipSummary(parent: tasks[0], childCount: 0)
+                WandBoardRelationshipSummary(parent: nil, childCount: 1)
+            }.padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            try await organizationSnapshot(summary, size: NSSize(width: 320, height: 100), dark: dark,
+                path: output.appendingPathComponent("relationship-summary-\(suffix).png"))
+        }
+    }
+
+    @MainActor
+    private func organizationSnapshot<Content: View>(_ content: Content, size: NSSize, dark: Bool, path: URL) async throws {
+        let host = NSHostingView(rootView: content.preferredColorScheme(dark ? .dark : .light))
+        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        host.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 250_000_000)
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        XCTAssertGreaterThan(png.count, 1000)
+        try png.write(to: path)
+    }
+
     func testBoardTaskDecoderAllowsUnassignedProjectAndAgent() throws {
         let json = #"{"id":"task-2","title":"草稿"}"#.data(using: .utf8)!
         let task = try JSONDecoder().decode(WandBoardTask.self, from: json)
         XCTAssertNil(task.workspaceId)
+        XCTAssertNil(task.parentTaskId)
         XCTAssertNil(task.agent)
         XCTAssertEqual(task.status, "todo")
         XCTAssertEqual(task.priority, "none")

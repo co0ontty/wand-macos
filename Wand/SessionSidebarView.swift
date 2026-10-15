@@ -266,16 +266,15 @@ struct SidebarColumn: View {
         .confirmationDialog(
             pendingDeletion?.title ?? "确认删除",
             isPresented: deletionConfirmationPresented,
-            titleVisibility: .visible
-        ) {
-            if let pendingDeletion {
-                Button(pendingDeletion.actionTitle, role: .destructive) {
-                    confirmPendingDeletion()
-                }
+            titleVisibility: .visible,
+            presenting: pendingDeletion
+        ) { target in
+            Button(target.actionTitle, role: .destructive) {
+                confirmPendingDeletion(target)
             }
             Button("取消", role: .cancel) {}
-        } message: {
-            Text(pendingDeletion?.message ?? "")
+        } message: { target in
+            Text(target.message)
         }
         .alert("删除未完成", isPresented: deletionErrorPresented) {
             Button("好", role: .cancel) {
@@ -290,14 +289,9 @@ struct SidebarColumn: View {
         Binding(
             get: { pendingDeletion != nil },
             set: { isPresented in
-                // SwiftUI closes a confirmationDialog before invoking its button action.
-                // Keep the payload alive until that action consumes it; otherwise the
-                // destructive button observes nil and silently skips the deletion.
-                if !isPresented, !deleteInProgress {
-                    DispatchQueue.main.async {
-                        if !deleteInProgress { pendingDeletion = nil }
-                    }
-                }
+                // The dialog's presenting value supplies an immutable action snapshot.
+                // Dismissal can clear UI state immediately, without a run-loop race.
+                if !isPresented { pendingDeletion = nil }
             }
         )
     }
@@ -716,12 +710,12 @@ struct SidebarColumn: View {
         pendingDeletion = .history(history)
     }
 
-    private func confirmPendingDeletion() {
-        guard let pendingDeletion, !deleteInProgress else { return }
+    private func confirmPendingDeletion(_ target: PendingDeletion) {
+        guard !deleteInProgress else { return }
         deleteInProgress = true
         self.pendingDeletion = nil
 
-        switch pendingDeletion {
+        switch target {
         case .sessions(let sessions):
             deleteSessions(sessions)
         case .history(let history):

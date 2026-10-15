@@ -60,6 +60,7 @@ final class ChatStore: ObservableObject {
     var displayEmployeeAvatar: String { if let currentEmployee { return currentEmployee.avatar ?? "" }; return snapshot?.employeeAvatar ?? "" }
 
     var isStructured: Bool { snapshot?.isStructured ?? true }
+    var isReadOnlySystemCall: Bool { snapshot?.isReadOnlySystemCall == true }
     var sessionEnded: Bool { ["exited", "failed", "stopped"].contains(status) }
     var canLoadEarlier: Bool { loadedOffset > 0 }
     private var isInFlight: Bool { isStructured && isResponding && status == "running" }
@@ -159,6 +160,7 @@ final class ChatStore: ObservableObject {
         applyWindowedMessages(snap.messages, offset: snap.messageOffset, total: snap.messageTotal)
         status = snap.status ?? status
         isResponding = snap.isResponding
+        if sessionEnded { clearRuntimeFacts() }
         queuedMessages = snap.queuedMessages ?? []
         pendingEscalation = snap.pendingEscalation
         permissionBlocked = snap.permissionBlocked ?? (snap.pendingEscalation != nil)
@@ -194,6 +196,7 @@ final class ChatStore: ObservableObject {
                 status = "exited"
                 isResponding = false
             }
+            clearRuntimeFacts()
         case "error":
             if let message = event.error, !message.isEmpty { toast = message }
         default:
@@ -206,7 +209,6 @@ final class ChatStore: ObservableObject {
         applyWindowedMessages(data.messages, offset: data.messageOffset, total: data.messageTotal)
         status = data.status ?? status
         if let s = data.structuredState { isResponding = s.inFlight ?? false }
-        applyCommonFields(data)
         if snapshot == nil, let id = data.id {
             // 极端情况：REST 快照还没回来 WS init 先到，补一份最小 snapshot。
             snapshot = SessionSnapshot(
@@ -232,10 +234,12 @@ final class ChatStore: ObservableObject {
             snapshot?.providerCliActive = data.providerCliActive
             snapshot?.providerCliExitCode = data.providerCliExitCode
         }
+        applyCommonFields(data, authoritative: true)
         // init 是权威快照：缺失身份也要清除，不能带着上一位员工或上一个团队。
         snapshot?.provider = data.provider
         snapshot?.runner = data.runner
         snapshot?.engine = data.structuredState?.engine ?? data.engine
+        snapshot?.automationId = data.automationId
         snapshot?.employeeId = data.employeeId
         snapshot?.employeeName = data.employeeName
         snapshot?.employeeAvatar = data.employeeAvatar
@@ -272,23 +276,22 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    private func applyCommonFields(_ data: WsData) {
+    private func applyCommonFields(_ data: WsData, authoritative: Bool = false) {
+        if let updatedStatus = data.status { status = updatedStatus }
+        snapshot?.status = status
+        applyRuntimeFacts(data, authoritative: authoritative)
         if let provider = data.provider, provider != snapshot?.provider {
             snapshot?.provider = provider
             if let modelCatalog { applyModelCatalog(modelCatalog) }
         }
         if let runner = data.runner { snapshot?.runner = runner }
         if let engine = data.structuredState?.engine ?? data.engine { snapshot?.engine = engine }
+        if let automationId = data.automationId { snapshot?.automationId = automationId }
         if let id = data.employeeId { snapshot?.employeeId = id }
         if let name = data.employeeName { snapshot?.employeeName = name }
         if let avatar = data.employeeAvatar { snapshot?.employeeAvatar = avatar }
         if let chat = data.teamChat { snapshot?.teamChat = chat }
         if let step = data.teamStep { snapshot?.teamStep = step }
-        if let busy = data.ptyBusy {
-            snapshot?.ptyBusy = busy
-            isResponding = snapshot?.isResponding ?? isResponding
-        }
-        if let s = data.structuredState { isResponding = s.inFlight ?? isResponding }
         if let active = data.providerCliActive {
             snapshot?.providerCliActive = active
             isResponding = snapshot?.isResponding ?? isResponding
@@ -309,12 +312,67 @@ final class ChatStore: ObservableObject {
         if let title = data.currentTaskTitle { currentTaskTitle = title }
         if let model = data.selectedModel { selectedModel = model }
         if let effort = data.thinkingEffort { thinkingEffort = effort }
+        if sessionEnded || status == "done"
+            || (data.isResponding == false && !data.$structuredState.isPresent && data.ptyBusy != true) {
+            clearRuntimeFacts()
+        }
+    }
+
+    /// structuredState is a complete server projection, not a patch. Replacing it
+    /// also drops omitted anchors on a new/legacy request instead of borrowing old ones.
+    private func applyRuntimeFacts(_ data: WsData, authoritative: Bool) {
+        if authoritative || data.$structuredState.isPresent {
+            snapshot?.structuredState = data.structuredState
+            if isStructured {
+                isResponding = data.structuredState?.inFlight
+                    ?? (data.structuredState == nil ? (data.isResponding ?? false) : (authoritative ? false : isResponding))
+            }
+        }
+        let wasBusy = snapshot?.ptyBusy == true
+        if authoritative || data.ptyBusy != nil { snapshot?.ptyBusy = data.ptyBusy }
+        if authoritative || data.ptyCommandRunning != nil { snapshot?.ptyCommandRunning = data.ptyCommandRunning }
+        let newPtyTurn = !wasBusy && data.ptyBusy == true
+            || (data.$ptyTurnStartedAt.isPresent && data.ptyTurnStartedAt != snapshot?.ptyTurnStartedAt)
+        if authoritative || newPtyTurn || data.$ptyTurnStartedAt.isPresent {
+            snapshot?.ptyTurnStartedAt = data.ptyTurnStartedAt
+        }
+        if authoritative || newPtyTurn || data.$ptyLastActivityAt.isPresent {
+            snapshot?.ptyLastActivityAt = data.ptyLastActivityAt
+        }
+        if snapshot?.ptyBusy != true {
+            snapshot?.ptyTurnStartedAt = nil
+            snapshot?.ptyLastActivityAt = nil
+        }
+        if data.ptyBusy != nil || (authoritative && !isStructured) {
+            isResponding = snapshot?.isResponding ?? false
+        }
+        if snapshot?.structuredState?.inFlight != true {
+            snapshot?.structuredState?.activeRequestId = nil
+            snapshot?.structuredState?.turnStartedAt = nil
+            snapshot?.structuredState?.lastActivityAt = nil
+            snapshot?.structuredState?.phase = nil
+        }
+    }
+
+    private func clearRuntimeFacts() {
+        isResponding = false
+        snapshot?.status = status
+        snapshot?.structuredState?.inFlight = false
+        snapshot?.structuredState?.activeRequestId = nil
+        snapshot?.structuredState?.turnStartedAt = nil
+        snapshot?.structuredState?.lastActivityAt = nil
+        snapshot?.structuredState?.phase = nil
+        snapshot?.ptyBusy = false
+        snapshot?.ptyTurnStartedAt = nil
+        snapshot?.ptyLastActivityAt = nil
+        snapshot?.ptyCommandRunning = false
     }
 
     // MARK: - 用户动作
 
     /// 发送一条消息。PTY 会话分包发送正文与 Return，结构化会话直接发文本。
     func send(text: String, onAccepted: @escaping () -> Void = {}, onFailure: @escaping () -> Void = {}) {
+        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能继续发送。"; onFailure(); return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !sending else { return }
         sending = true
@@ -385,6 +443,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setModel(_ model: String?) {
+        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能修改执行模型。"; return }
         let previous = selectedModel
         modelUpdateRevision &+= 1
         let revision = modelUpdateRevision
@@ -403,6 +462,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setThinkingEffort(_ effort: String) {
+        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能修改思考设置。"; return }
         let previous = thinkingEffort
         thinkingUpdateRevision &+= 1
         let revision = thinkingUpdateRevision
@@ -431,6 +491,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setMode(_ mode: String) {
+        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能修改执行模式。"; return }
         guard snapshot?.provider != "codex" else { return }
         modeUpdateRevision &+= 1; let captured = modeUpdateRevision
         enqueueSettingsMutation { [self] in
@@ -574,6 +635,7 @@ final class ChatStore: ObservableObject {
 
     /// 停止当前回复：结构化会话调 stop（杀掉当前回合），PTY 发 Esc 中断。
     func stopResponding() {
+        guard !isReadOnlySystemCall else { toast = "请在发起该调用的功能中取消，日志不能控制执行。"; return }
         Task {
             do {
                 if isStructured {
@@ -622,6 +684,7 @@ final class ChatStore: ObservableObject {
 
     /// 会话已结束时按 claudeSessionId 原地恢复（服务端 reuseId 复用本会话）。
     func resume() {
+        guard !isReadOnlySystemCall else { toast = "系统调用记录不能恢复为交互任务。"; return }
         Task {
             do {
                 let snap = try await api.resumeSession(id: sessionId)

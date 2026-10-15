@@ -9,6 +9,7 @@ import SwiftUI
  */
 struct WandBoardBoardView: View {
     let grouped: [String: [WandBoardTask]]
+    var allTasks: [WandBoardTask] = []
     let display: WandBoardDisplay
     let loading: Bool
     let busyId: String
@@ -165,6 +166,8 @@ struct WandBoardBoardView: View {
         WandBoardCard(
             task: task,
             display: display,
+            parent: wandBoardParent(of: task, in: allTasks),
+            childCount: wandBoardChildren(of: task, in: allTasks).count,
             busy: busyId == task.id,
             dropTarget: sessionDropTarget == task.id,
             onOpen: { onOpenTask(task.id) },

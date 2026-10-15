@@ -21,6 +21,7 @@ struct TaskBoardView: View {
     @State private var catalog: ModelsResponse?
     @State private var loading = true
     @State private var refreshing = false
+    @State private var loadGeneration = 0
     @State private var errorMessage: String?
     @State private var notice: String?
     @State private var view: WandBoardView = .board
@@ -198,6 +199,9 @@ struct TaskBoardView: View {
             }
             Spacer(minLength: 12)
             if selectedTask == nil {
+                WandTaskOrganizationButton(api: api, target: workspaceFilter.isEmpty ? .all : .workspace(workspaceFilter), onOpenSession: onOpenSession) {
+                    await reload(showProgress: false)
+                }
                 Button {
                     Task { await reload(showProgress: true) }
                 } label: {
@@ -318,6 +322,8 @@ struct TaskBoardView: View {
         if let task = selectedTask {
             WandBoardDetailView(
                 task: task,
+                allTasks: tasks,
+                onOpenTask: { selectedId = $0 },
                 workspaces: workspaces,
                 milestones: milestones,
                 catalog: catalog,
@@ -372,6 +378,7 @@ struct TaskBoardView: View {
             case .board:
                 WandBoardBoardView(
                     grouped: grouped,
+                    allTasks: tasks,
                     display: display,
                     loading: loading,
                     busyId: busyId,
@@ -406,6 +413,7 @@ struct TaskBoardView: View {
             case .list:
                 WandBoardListView(
                     grouped: grouped,
+                    allTasks: tasks,
                     collapsed: collapsedList,
                     archiveOpen: archiveOpen,
                     onToggle: { status in
@@ -422,6 +430,7 @@ struct TaskBoardView: View {
             case .gantt:
                 WandBoardGanttView(
                     grouped: grouped,
+                    allTasks: tasks,
                     zoom: ganttZoom,
                     hideCompleted: hideCompleted,
                     onZoom: { ganttZoom = $0 },
@@ -492,13 +501,20 @@ struct TaskBoardView: View {
     }
 
     private func reload(showProgress: Bool, silent: Bool = false) async {
-        if refreshing { return }
+        // Polling may reuse the in-flight read, but a mutation receipt must request a fresh one.
+        // Otherwise a pre-organization poll can overwrite the new parent/session projection.
+        if refreshing && silent { return }
+        loadGeneration += 1
+        let generation = loadGeneration
         refreshing = true
         if showProgress { loading = true }
         do {
-            tasks = try await api.listBoardTasks()
+            let next = try await api.listBoardTasks()
+            guard generation == loadGeneration else { return }
+            tasks = next
             errorMessage = nil
         } catch {
+            guard generation == loadGeneration else { return }
             // 静默轮询失败保留上一份列表，只把错误提示留给手动刷新。
             if !silent { errorMessage = error.localizedDescription }
         }

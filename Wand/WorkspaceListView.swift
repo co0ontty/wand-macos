@@ -72,6 +72,9 @@ struct WorkspaceListView: View {
     @State private var worktreeMergeBusy = false
     @State private var archiveError: String?
     @State private var collapsedArchivedTaskIds = Set<String>()
+    @StateObject private var organizationAction = WandTaskOrganizationAction()
+    @State private var organizationGroupId: String?
+    @State private var organizationInitialMode: WandTaskOrganizationMode?
 
     var body: some View {
         ZStack {
@@ -151,11 +154,8 @@ struct WorkspaceListView: View {
             deleteWorkspaceBusy: deleteWorkspaceBusy,
             deleteWorkspaceErrorPresented: deleteWorkspaceErrorPresented,
             deleteWorkspaceErrorMessage: deleteWorkspaceError ?? "",
-            deleteDescription: deleteWorkspaceTarget.map {
-                "目录「\($0.workspaceName)」下的 \($0.tasks.count) 个任务及其终端将被删除，此操作无法撤销。"
-            },
-            onDeleteWorkspace: {
-                guard let target = deleteWorkspaceTarget else { return }
+            deleteWorkspaceTarget: deleteWorkspaceTarget,
+            onDeleteWorkspace: { target in
                 Task { await confirmDeleteWorkspace(target) }
             },
             onClearDeleteError: { deleteWorkspaceError = nil }
@@ -168,18 +168,16 @@ struct WorkspaceListView: View {
         .confirmationDialog(
             "删除此任务？",
             isPresented: deleteConfirmationPresented,
-            titleVisibility: .visible
-        ) {
-            if let target = deleteTarget {
-                Button("删除任务", role: .destructive) {
-                    Task { await confirmDeleteTask(target) }
-                }
+            titleVisibility: .visible,
+            presenting: deleteTarget
+        ) { target in
+            Button("删除任务", role: .destructive) {
+                Task { await confirmDeleteTask(target) }
             }
+            .disabled(deleteBusy)
             Button("取消", role: .cancel) {}
-        } message: {
-            if let target = deleteTarget {
-                Text("任务「\(target.name)」及其会话和独立 worktree 将被删除，此操作无法撤销。")
-            }
+        } message: { target in
+            Text("任务「\(target.name)」及其会话和独立 worktree 将被删除，此操作无法撤销。")
         }
         .alert("操作未完成", isPresented: deletionErrorPresented) {
             Button("好", role: .cancel) {
@@ -194,16 +192,16 @@ struct WorkspaceListView: View {
                 get: { clearTarget != nil },
                 set: { if !$0 { clearTarget = nil } }
             ),
-            titleVisibility: .visible
-        ) {
+            titleVisibility: .visible,
+            presenting: clearTarget
+        ) { target in
             Button(clearBusy ? "清空中…" : "确认清空", role: .destructive) {
-                Task { await confirmClearSessions() }
+                Task { await confirmClearSessions(target) }
             }
+            .disabled(clearBusy)
             Button("取消", role: .cancel) { clearTarget = nil }
-        } message: {
-            if let target = clearTarget {
-                Text("将结束并删除「\(target.name)」的 \(target.listedSessionCount) 个终端，此操作无法撤销。")
-            }
+        } message: { target in
+            Text("将结束并删除「\(target.name)」的 \(target.listedSessionCount) 个终端，此操作无法撤销。")
         }
         .confirmationDialog(
             "删除终端？",
@@ -211,17 +209,16 @@ struct WorkspaceListView: View {
                 get: { deleteSessionTarget != nil },
                 set: { if !$0 && !deleteSessionBusy { deleteSessionTarget = nil } }
             ),
-            titleVisibility: .visible
-        ) {
+            titleVisibility: .visible,
+            presenting: deleteSessionTarget
+        ) { target in
             Button(deleteSessionBusy ? "删除中…" : "删除终端", role: .destructive) {
-                Task { await confirmDeleteSession() }
+                Task { await confirmDeleteSession(target) }
             }
             .disabled(deleteSessionBusy)
             Button("取消", role: .cancel) { deleteSessionTarget = nil }
-        } message: {
-            if let target = deleteSessionTarget {
-                Text("终端「\(sessionDeleteLabel(target))」会结束并被删除，此操作无法撤销。")
-            }
+        } message: { target in
+            Text("终端「\(sessionDeleteLabel(target))」会结束并被删除，此操作无法撤销。")
         }
         .confirmationDialog(
             "删除所选项目？",
@@ -229,16 +226,15 @@ struct WorkspaceListView: View {
                 get: { pendingManagedDelete != nil },
                 set: { if !$0 { pendingManagedDelete = nil } }
             ),
-            titleVisibility: .visible
-        ) {
+            titleVisibility: .visible,
+            presenting: pendingManagedDelete
+        ) { selection in
             Button("删除", role: .destructive) {
-                Task { await confirmManagedDelete() }
+                Task { await confirmManagedDelete(selection) }
             }
             Button("取消", role: .cancel) { pendingManagedDelete = nil }
-        } message: {
-            if let selection = pendingManagedDelete {
-                Text("将删除\(TaskListPresentation.describeManagedDeletion(selection))，此操作无法撤销。")
-            }
+        } message: { selection in
+            Text("将删除\(TaskListPresentation.describeManagedDeletion(selection))，此操作无法撤销。")
         }
     }
 
@@ -515,6 +511,20 @@ struct WorkspaceListView: View {
             .padding(.vertical, 5)
             .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
             .contextMenu {
+                Menu {
+                    ForEach(WandTaskOrganizationMode.allCases) { mode in
+                        Button(mode.label) {
+                            organizationAction.reset()
+                            organizationInitialMode = mode
+                            organizationGroupId = group.id
+                        }
+                        .help(mode.hint)
+                        .disabled(organizationAction.busy || isSelecting)
+                    }
+                } label: {
+                    Label("会话自动归类", systemImage: "folder")
+                }
+                Divider()
                 if !group.isSynthetic && !group.isGlobal {
                     Button {
                         requestNewTask(NewTaskSheetRequest(
@@ -551,6 +561,22 @@ struct WorkspaceListView: View {
                 } else {
                     // 未归档目录是按 cwd 聚合出来的视图，没有可改可删的目录实体。
                     Text(group.isGlobal ? "未归属工作区" : "目录分组")
+                }
+            }
+            .popover(isPresented: Binding(
+                get: { organizationGroupId == group.id },
+                set: { if !$0 { organizationGroupId = nil } }
+            ), arrowEdge: .bottom) {
+                WandTaskOrganizationPanel(api: api, target: .directoryGroup(group), action: organizationAction,
+                                          initialMode: organizationInitialMode, onOpenSession: { id in
+                    Task {
+                        do {
+                            let snapshot = try await api.getSession(id: id)
+                            onOpenSession?(workspace(from: group), WorkspaceSessionSummary(snapshot: snapshot))
+                        } catch { organizationAction.reportError(error.localizedDescription) }
+                    }
+                }) {
+                    await store.loadTaskGroups(force: true)
                 }
             }
             .modifier(DirectoryMenuHint(group: group))
@@ -1299,6 +1325,7 @@ struct WorkspaceListView: View {
     }
 
     private func confirmDeleteTask(_ target: WorkspaceTask) async {
+        guard !deleteBusy else { return }
         deleteBusy = true
         do {
             try await store.deleteWorkspaceTask(workspaceId: target.workspaceId, taskId: target.id)
@@ -1336,6 +1363,7 @@ struct WorkspaceListView: View {
     }
 
     private func confirmDeleteWorkspace(_ group: TaskDirectoryGroup) async {
+        guard !deleteWorkspaceBusy else { return }
         deleteWorkspaceBusy = true
         do {
             try await store.deleteWorkspace(workspaceId: group.workspaceId)
@@ -1608,8 +1636,7 @@ struct WorkspaceListView: View {
         return !all.isEmpty && selectedTaskIds == all.taskIds && selectedSessionIds == all.sessionIds
     }
 
-    private func confirmManagedDelete() async {
-        guard let pending = pendingManagedDelete else { return }
+    private func confirmManagedDelete(_ pending: TaskListPresentation.ManageSelection) async {
         let available = manageableSelection
         let selection = TaskListPresentation.resolveManagedDeletion(
             .init(taskIds: pending.taskIds.intersection(available.taskIds),
@@ -1649,8 +1676,8 @@ struct WorkspaceListView: View {
         )
     }
 
-    private func confirmDeleteSession() async {
-        guard let target = deleteSessionTarget, !deleteSessionBusy else { return }
+    private func confirmDeleteSession(_ target: WorkspaceSessionSummary) async {
+        guard !deleteSessionBusy else { return }
         deleteSessionBusy = true
         do {
             try await store.deleteSessions([target.id])
@@ -1663,8 +1690,8 @@ struct WorkspaceListView: View {
         deleteSessionBusy = false
     }
 
-    private func confirmClearSessions() async {
-        guard let target = clearTarget, !clearBusy else { return }
+    private func confirmClearSessions(_ target: WorkspaceTaskSummary) async {
+        guard !clearBusy else { return }
         clearBusy = true
         do {
             try await store.clearTaskSessions(taskId: target.id)
@@ -1715,8 +1742,8 @@ private struct DirectoryManagementModifier: ViewModifier {
     let deleteWorkspaceBusy: Bool
     let deleteWorkspaceErrorPresented: Binding<Bool>
     let deleteWorkspaceErrorMessage: String
-    let deleteDescription: String?
-    let onDeleteWorkspace: () -> Void
+    let deleteWorkspaceTarget: TaskDirectoryGroup?
+    let onDeleteWorkspace: (TaskDirectoryGroup) -> Void
     let onClearDeleteError: () -> Void
 
     func body(content: Content) -> some View {
@@ -1736,17 +1763,16 @@ private struct DirectoryManagementModifier: ViewModifier {
             .confirmationDialog(
                 "删除此目录？",
                 isPresented: deleteWorkspacePresented,
-                titleVisibility: .visible
-            ) {
+                titleVisibility: .visible,
+                presenting: deleteWorkspaceTarget
+            ) { target in
                 Button(deleteWorkspaceBusy ? "删除中…" : "删除目录", role: .destructive) {
-                    onDeleteWorkspace()
+                    onDeleteWorkspace(target)
                 }
                 .disabled(deleteWorkspaceBusy)
                 Button("取消", role: .cancel) {}
-            } message: {
-                if let deleteDescription {
-                    Text(deleteDescription)
-                }
+            } message: { target in
+                Text("目录「\(target.workspaceName)」下的 \(target.tasks.count) 个任务及其终端将被删除，此操作无法撤销。")
             }
             .alert("操作未完成", isPresented: deleteWorkspaceErrorPresented) {
                 Button("好", role: .cancel) { onClearDeleteError() }

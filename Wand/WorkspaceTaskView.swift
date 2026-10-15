@@ -33,24 +33,26 @@ struct WorkspaceTaskView: View {
         }
         .alert("删除终端？", isPresented: Binding(
             get: { pendingDeleteSession != nil },
-            set: { if !$0 && !deleteSessionBusy { pendingDeleteSession = nil; deleteSessionError = nil } }
-        )) {
+            set: { if !$0 && !deleteSessionBusy { pendingDeleteSession = nil } }
+        ), presenting: pendingDeleteSession) { target in
             Button("取消", role: .cancel) {
                 pendingDeleteSession = nil
                 deleteSessionError = nil
             }
             Button(deleteSessionBusy ? "删除中…" : "删除", role: .destructive) {
-                Task { await confirmDeleteSession() }
+                Task { await confirmDeleteSession(target) }
             }
             .disabled(deleteSessionBusy)
+        } message: { target in
+            Text("终端「\(sessionLabel(target, index: 0))」会结束并被删除，此操作无法撤销。")
+        }
+        .alert("删除未完成", isPresented: Binding(
+            get: { deleteSessionError != nil },
+            set: { if !$0 { deleteSessionError = nil } }
+        )) {
+            Button("好", role: .cancel) { deleteSessionError = nil }
         } message: {
-            if let deleteSessionError {
-                Text(deleteSessionError)
-            } else if let session = pendingDeleteSession {
-                Text("终端「\(sessionLabel(session, index: 0))」会结束并被删除，此操作无法撤销。")
-            } else {
-                Text("终端会结束并被删除，此操作无法撤销。")
-            }
+            Text(deleteSessionError ?? "")
         }
     }
 
@@ -290,8 +292,8 @@ struct WorkspaceTaskView: View {
         pendingDeleteSession = session
     }
 
-    private func confirmDeleteSession() async {
-        guard let target = pendingDeleteSession, !deleteSessionBusy else { return }
+    private func confirmDeleteSession(_ target: WorkspaceSessionSummary) async {
+        guard !deleteSessionBusy else { return }
         deleteSessionBusy = true
         do {
             try await store.deleteSessions([target.id])

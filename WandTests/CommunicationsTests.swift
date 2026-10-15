@@ -109,6 +109,26 @@ final class CommunicationsTests: XCTestCase {
         XCTAssertEqual(store.composer(for: ended).text, "不要串到最新任务")
     }
 
+    func testPagePreferenceIsSentWithoutPersistingEmployeeDefaults() async throws {
+        let api = CommunicationsStub()
+        let store = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: defaults())
+        await store.refreshIndex()
+        store.select("dm_e_first"); await store.waitForDetailForTesting()
+        let candidate = EmployeeExecutionCandidate(provider: "pi", engine: "cli", model: "page-model", kind: "structured", mode: nil, thinkingEffort: "pi:high")
+        store.executionPreference = candidate
+        store.composer(for: scope()).edit("临时配置工作")
+        await store.send(scope())
+        let body = try XCTUnwrap(api.posts.last?.body["executionPreference"] as? [String: String])
+        XCTAssertEqual(body["model"], "page-model")
+        XCTAssertEqual(body["engine"], "cli")
+        XCTAssertNil(body["mode"])
+        store.select("dm_e_second"); await store.waitForDetailForTesting()
+        XCTAssertEqual(store.executionPreference?.model, "page-model")
+        let reloaded = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: defaults())
+        XCTAssertNil(reloaded.executionPreference)
+        XCTAssertTrue(api.posts.allSatisfy { $0.path.hasSuffix("/messages") })
+    }
+
     func testSuccessfulAckKeepsNewInputAndCapturedDirectoryAndTarget() async throws {
         let api = CommunicationsStub()
         let began = expectation(description: "send began")

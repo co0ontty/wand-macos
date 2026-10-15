@@ -32,6 +32,8 @@ final class CommunicationsStore: ObservableObject {
     @Published var target: ConversationTarget?
     @Published var messageQuery = ""
     @Published var messageSearchExpanded = false
+    // Desktop page lifetime only; never persisted to employee defaults.
+    @Published var executionPreference: EmployeeExecutionCandidate?
 
     let api: CommunicationsServing
     let ledger: ConversationRequestLedger
@@ -163,7 +165,8 @@ final class CommunicationsStore: ObservableObject {
     }
     func send(_ scope: ConversationScope) async {
         guard sendBlockReason(for: scope) == nil else { return }
-        let receipt = await composer(for: scope).submit(ledger: ledger)
+        let preference = scope.target == nil && metadata[scope.conversationID]?.kind == "dm" ? executionPreference : nil
+        let receipt = await composer(for: scope).submit(ledger: ledger, executionPreference: preference)
         if receipt != nil { await refreshIndex() }
         if selectedID == scope.conversationID { refreshDetail() }
     }

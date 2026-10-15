@@ -25,6 +25,15 @@ struct EmployeeExecutionCandidate: Decodable {
     let thinkingEffort: String?
 
     var toolLabel: String { WandProvider.title(for: provider, engine: engine) }
+    var executionPreferenceBody: [String: Any] {
+        var body: [String: Any] = ["provider": provider, "model": model ?? "default", "thinkingEffort": thinkingEffort ?? "off"]
+        if let engine { body["engine"] = engine }
+        return body
+    }
+    func with(model: String? = nil, thinking: String? = nil) -> Self {
+        Self(provider: provider, engine: engine, model: model ?? self.model, kind: "structured", mode: mode,
+             thinkingEffort: thinking ?? thinkingEffort)
+    }
 }
 
 struct ConversationRecipient: Decodable {

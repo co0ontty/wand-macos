@@ -271,6 +271,8 @@ private struct ConversationContactProfile: View {
 }
 
 struct ConversationPane: View {
+    @Environment(\.desktopPageActive) private var pageActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: CommunicationsStore
     let conversation: NativeConversation
     let scope: ConversationScope
@@ -292,6 +294,16 @@ struct ConversationPane: View {
             ($0.offset, $0.element, $0.element.messageId ?? "\(conversation.id):\($0.offset)")
         }
     }
+    private var turnNavigationScope: String { "\(baseURL.absoluteString)|conversation|\(scope.key)" }
+    private var turnNavigation: TurnNavigationIndex {
+        TurnNavigationIndex(scope: turnNavigationScope, turns: conversation.turns, offset: 0,
+                            visibleIndices: Set(displayed.map(\.index)))
+    }
+    private var turnNavigationNote: String {
+        "当前显示 \(displayed.count) / 已加载 \(conversation.turns.count) 条消息；仅列用户提问。"
+            + (store.messageQuery.isEmpty ? "更早内容使用列表顶部的显示按钮。" : "当前目录遵循消息搜索筛选。")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let error = store.detailError {
@@ -330,6 +342,22 @@ struct ConversationPane: View {
                     .chatContentWidth()
                 }
                 .clipped().simultaneousGesture(TapGesture().onEnded { composerFocus.collapseFromContent() })
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    HStack {
+                        Spacer()
+                        TurnNavigator(entries: turnNavigation.entries, windowNote: turnNavigationNote) { id in
+                            guard pageActive, store.selectedID == conversation.id,
+                                  store.selectedScope == scope,
+                                  let index = turnNavigation.resolve(id),
+                                  let row = displayed.first(where: { $0.index == index }) else { return }
+                            withAnimation(reduceMotion ? nil : Theme.Motion.structure) {
+                                proxy.scrollTo(row.id, anchor: .top)
+                            }
+                        }
+                        .id(turnNavigationScope + "|query|" + store.messageQuery)
+                    }
+                    .padding(.horizontal, 24).padding(.vertical, 4)
+                }
                 .onAppear { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
             }
             Divider()
@@ -429,6 +457,11 @@ private struct CommunicationMessageRow: View {
                             }
                         }
                         if let preview = turn.sessionPreview {
+                            let status = ChatRunningPresentation.preview(status: preview.status)
+                            if !status.label.isEmpty {
+                                Text(status.label).font(.system(size: 12))
+                                    .foregroundColor(status.stage == .failed ? Theme.danger : Theme.textSecondary)
+                            }
                             Text(preview.text.isEmpty ? "打开原会话查看完整进度。" : preview.text)
                                 .font(.system(size: 14)).lineSpacing(4).lineLimit(previewExpanded ? nil : 4).textSelection(.enabled)
                         }
@@ -440,6 +473,11 @@ private struct CommunicationMessageRow: View {
                     if let link = turn.conversationLink, let preview = turn.taskPreview {
                         VStack(alignment: .leading, spacing: 7) {
                             Text(link.title ?? "群任务").font(.system(size: 13, weight: .medium))
+                            let status = ChatRunningPresentation.preview(status: preview.status)
+                            if !status.label.isEmpty {
+                                Text(status.label).font(.system(size: 12))
+                                    .foregroundColor(status.stage == .failed ? Theme.danger : Theme.textSecondary)
+                            }
                             Text(preview.text).font(.system(size: 13)).lineLimit(previewExpanded ? nil : 4).textSelection(.enabled)
                             if let runID = preview.runId {
                                 Button("选择这轮任务") { onSelectTarget(link.conversationId, ConversationTarget(taskId: link.taskId, runId: runID)) }
@@ -484,7 +522,9 @@ struct ConversationComposerSurface: View {
         case .unknown: return .unknown
         }
     }
+    private var editablePreference: Bool { !conversation.isGroup && owner.scope.target == nil }
     private var candidate: EmployeeExecutionCandidate? {
+        if editablePreference, let preference = store.executionPreference { return preference }
         if let target = owner.scope.target {
             return conversation.runs.first { $0.id == target.runId }?.team?.members.first { $0.isLeader == true }?.agent
         }
@@ -596,14 +636,51 @@ struct ConversationComposerSurface: View {
             }
         }, identity: { Text(conversation.displayTitle).foregroundColor(Theme.textPrimary) }, runtime: {
             HStack(spacing: 8) {
-                Text(preferredModel).lineLimit(1).truncationMode(.tail)
-                Text("·").accessibilityHidden(true)
-                Text("思考：" + preferredThinking).lineLimit(1).fixedSize()
+                if editablePreference, let candidate {
+                    executionSelectors(candidate).disabled(owner.isSending || owner.unknownID != nil || blockReason != nil)
+                } else {
+                    Text(candidate?.toolLabel ?? "工具未就绪").lineLimit(1)
+                    Text(preferredModel).lineLimit(1).truncationMode(.tail)
+                    Text("·").accessibilityHidden(true)
+                    Text("思考：" + preferredThinking).lineLimit(1).fixedSize()
+                }
             }.font(.system(size: 12)).foregroundColor(Theme.textSecondary)
                 .help("首选模型：\(preferredModel)；思考：\(preferredThinking)。降级后以实际执行会话为准。")
         })
     }
 
+    @ViewBuilder
+    private func executionSelectors(_ candidate: EmployeeExecutionCandidate) -> some View {
+        Menu {
+            ForEach(WandProvider.allCases) { provider in
+                Button(provider.title) {
+                    store.executionPreference = EmployeeExecutionCandidate(provider: provider.rawValue, engine: "cli", model: "default",
+                        kind: "structured", mode: nil, thinkingEffort: "off")
+                }
+            }
+            Button(WandProvider.title(for: "pi", engine: "sdk")) {
+                store.executionPreference = EmployeeExecutionCandidate(provider: "pi", engine: "sdk", model: "default",
+                    kind: "structured", mode: nil, thinkingEffort: "off")
+            }
+        } label: { Text(candidate.toolLabel).lineLimit(1) }
+            .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("本页执行工具")
+        Menu {
+            Button("跟随服务端默认") { store.executionPreference = candidate.with(model: "default", thinking: "off") }
+            ForEach((store.modelCatalog?.models(for: candidate.provider) ?? []).filter { $0.id != "default" }) { model in
+                Button(model.label) { store.executionPreference = candidate.with(model: model.id, thinking: "off") }
+            }
+        } label: { Text(preferredModel).lineLimit(1).truncationMode(.tail) }
+            .menuStyle(.borderlessButton).accessibilityLabel("本页模型")
+        Menu {
+            Button("自动（模型默认）") { store.executionPreference = candidate.with(thinking: "off") }
+            ForEach(thinkingEffortOptions(provider: candidate.provider, selectedModel: candidate.model,
+                defaultModel: store.modelCatalog?.defaultModelId(for: candidate.provider),
+                models: store.modelCatalog?.models(for: candidate.provider) ?? []).filter { $0.id != "off" }) { effort in
+                Button(effort.label) { store.executionPreference = candidate.with(thinking: effort.id) }
+            }
+        } label: { Text("思考：" + preferredThinking).lineLimit(1) }
+            .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("本页思考深度")
+    }
     private func setting(_ label: String, value: String, icon: String) -> some View {
         Button { focus.borrow("settings", open: expanded); settingsOpen = true } label: {
             ComposerSettingLabel(title: value, icon: icon)
@@ -613,6 +690,12 @@ struct ConversationComposerSurface: View {
     private var menu: some View {
         VStack(alignment: .leading, spacing: 10) {
             ComposerPopoverHeader(title: "对话操作") { menuOpen = false }
+            if store.executionPreference != nil && editablePreference {
+                Text("临时选择在本页联系人间共用，不改员工默认；只执行所选配置，不自动降级。")
+                    .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                Button("恢复员工默认执行配置") { store.executionPreference = nil; menuOpen = false }
+            }
+            setting("执行工具", value: candidate?.toolLabel ?? "工具未就绪", icon: "terminal")
             setting("首选模型", value: preferredModel, icon: "cpu")
             setting("权限", value: candidate?.mode.map(composerPermissionLabel) ?? "未取得", icon: "shield")
             setting("思考", value: preferredThinking, icon: "brain")

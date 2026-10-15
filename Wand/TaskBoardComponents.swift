@@ -49,6 +49,29 @@ struct WandBoardStatusGlyph: View {
 
 // MARK: - 胶囊
 
+/// 与 Web 看板/列表一致投影已有父任务与子任务数量，不复制一份归类状态。
+struct WandBoardRelationshipSummary: View {
+    let parent: WandBoardTask?
+    let childCount: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let parent {
+                Label(parent.identifier.isEmpty ? parent.title : parent.identifier, systemImage: "arrow.turn.down.right")
+                    .help("归属 \(parent.identifier) · \(parent.title)")
+                    .accessibilityLabel("父任务 \(parent.title)")
+            }
+            if childCount > 0 {
+                Label("\(childCount) 个子任务", systemImage: "list.bullet.indent")
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundColor(Theme.textSecondary)
+        .lineLimit(1)
+        .accessibilityIdentifier("task-relationship-summary")
+    }
+}
+
 /// 优先级胶囊；`none` 只在需要交互（详情选择器）时显示，卡片上不占位。
 struct WandBoardPriorityChip: View {
     let priority: String
@@ -169,7 +192,7 @@ struct WandBoardAgentChip: View {
         HStack(spacing: 5) {
             BrandLogo(provider: agent.provider, color: Theme.textSecondary, onDark: nil)
                 .frame(width: 12, height: 12)
-            Text(wandBoardProviderLabel(agent.provider))
+            Text(wandBoardProviderLabel(agent.provider, engine: agent.engine))
                 .lineLimit(1)
             if running {
                 HStack(spacing: 2) {
@@ -198,7 +221,7 @@ struct WandBoardAgentChip: View {
         .background(Capsule().fill(Theme.surfaceElevated))
         .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 0.5))
         .onAppear { if !reduceMotion { phase = true } }
-        .accessibilityLabel("\(wandBoardProviderLabel(agent.provider))\(running ? "，正在运行" : "")")
+        .accessibilityLabel("\(wandBoardProviderLabel(agent.provider, engine: agent.engine))\(running ? "，正在运行" : "")")
     }
 }
 
@@ -209,10 +232,10 @@ struct WandBoardAgentChips: View {
     var body: some View {
         let agents = wandBoardListAgents(sessions: sessions, assigned: assigned)
         HStack(spacing: 4) {
-            ForEach(agents, id: \.provider) { agent in
+            ForEach(agents, id: \.toolKey) { agent in
                 WandBoardAgentChip(
                     agent: agent,
-                    running: sessions.contains { $0.provider == agent.provider && $0.isRunning }
+                    running: sessions.contains { $0.provider == agent.provider && $0.toolEngine == (agent.engine ?? "cli") && $0.isRunning }
                 )
             }
         }
@@ -245,7 +268,7 @@ struct WandBoardConversationButton: View {
                     Button {
                         onOpen(session.id)
                     } label: {
-                        Text("\(wandBoardProviderLabel(session.provider)) · \(session.title.isEmpty ? session.id : session.title)")
+                        Text("\(wandBoardProviderLabel(session.provider, engine: session.engine)) · \(session.title.isEmpty ? session.id : session.title)")
                     }
                 }
             } label: {
@@ -431,7 +454,7 @@ struct WandBoardAgentSessionList: View {
                         HStack(spacing: 7) {
                             BrandLogo(provider: group.agent?.provider ?? group.provider, color: Theme.textPrimary)
                                 .frame(width: 14, height: 14)
-                            Text(wandBoardProviderLabel(group.agent?.provider ?? group.provider))
+                            Text(wandBoardProviderLabel(group.agent?.provider ?? group.provider, engine: group.agent?.engine))
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundColor(Theme.textPrimary)
                             if let agent = group.agent {
@@ -459,7 +482,7 @@ struct WandBoardAgentSessionList: View {
                                         Circle()
                                             .fill(session.isRunning ? Theme.wandAccent : Theme.textMuted)
                                             .frame(width: 6, height: 6)
-                                        Text(session.title.isEmpty ? wandBoardProviderLabel(session.provider) : session.title)
+                                        Text(session.title.isEmpty ? wandBoardProviderLabel(session.provider, engine: session.engine) : session.title)
                                             .font(.system(size: 13))
                                             .foregroundColor(Theme.textPrimary)
                                             .lineLimit(1)
@@ -566,6 +589,8 @@ let wandBoardSessionDragType = "com.wand.task-board.session-id"
 struct WandBoardCard: View {
     let task: WandBoardTask
     let display: WandBoardDisplay
+    var parent: WandBoardTask? = nil
+    var childCount = 0
     var busy = false
     var dragging = false
     var dropTarget = false
@@ -602,6 +627,9 @@ struct WandBoardCard: View {
                         .buttonStyle(WandBoardChipButtonStyle(emphasized: true))
                         .help("确认完成")
                 }
+            }
+            if parent != nil || childCount > 0 {
+                WandBoardRelationshipSummary(parent: parent, childCount: childCount)
             }
             if display.body, !task.description.isEmpty, task.sessions.isEmpty, task.agent == nil {
                 Text(task.description)

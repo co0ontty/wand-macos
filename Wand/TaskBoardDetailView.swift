@@ -6,6 +6,8 @@ import SwiftUI
  */
 struct WandBoardDetailView: View {
     let task: WandBoardTask
+    let allTasks: [WandBoardTask]
+    let onOpenTask: ((String) -> Void)?
     let workspaces: [Workspace]
     let milestones: [WandBoardMilestone]
     let catalog: ModelsResponse?
@@ -29,6 +31,8 @@ struct WandBoardDetailView: View {
 
     init(
         task: WandBoardTask,
+        allTasks: [WandBoardTask] = [],
+        onOpenTask: ((String) -> Void)? = nil,
         workspaces: [Workspace],
         milestones: [WandBoardMilestone],
         catalog: ModelsResponse?,
@@ -42,6 +46,8 @@ struct WandBoardDetailView: View {
         onCreateMilestone: @escaping (String) async throws -> WandBoardMilestone
     ) {
         self.task = task
+        self.allTasks = allTasks
+        self.onOpenTask = onOpenTask
         self.workspaces = workspaces
         self.milestones = milestones
         self.catalog = catalog
@@ -83,6 +89,7 @@ struct WandBoardDetailView: View {
                         .textSelection(.enabled)
                     titleField
                     descriptionSection
+                    taskRelationships
                     WandBoardAgentSessionList(
                         sessions: task.sessions,
                         assigned: task.agent,
@@ -128,6 +135,44 @@ struct WandBoardDetailView: View {
     }
 
     // MARK: 主区
+
+    @ViewBuilder
+    private var taskRelationships: some View {
+        let parent = wandBoardParent(of: task, in: allTasks)
+        let children = wandBoardChildren(of: task, in: allTasks)
+        if parent != nil || !children.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                WandBoardSectionTitle(title: "关联任务", detail: "归类保留原任务及其会话，不删除历史")
+                if let parent { relatedTaskRow(parent, caption: "父任务") }
+                if !children.isEmpty {
+                    Text("\(children.count) 个子任务")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                    ForEach(children) { child in relatedTaskRow(child, caption: "子任务") }
+                }
+            }
+            .accessibilityIdentifier("task-relationships")
+        }
+    }
+
+    private func relatedTaskRow(_ related: WandBoardTask, caption: String) -> some View {
+        Button { onOpenTask?(related.id) } label: {
+            HStack(spacing: 8) {
+                WandBoardStatusGlyph(status: WandBoardStatus(rawValue: related.status) ?? .todo)
+                Text(caption).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                Text(related.identifier).font(.system(size: 10, design: .monospaced)).foregroundColor(Theme.textTertiary)
+                Text(related.title).font(.system(size: 12)).foregroundColor(Theme.textPrimary).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(WandBoardRowButtonStyle())
+        .disabled(onOpenTask == nil)
+        .help("\(caption)：\(related.title)")
+        .accessibilityLabel("\(caption) \(related.identifier) \(related.title)")
+    }
 
     private var titleField: some View {
         TextField("任务标题（留空按描述自动生成）", text: $title)

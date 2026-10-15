@@ -5,6 +5,7 @@ import SwiftUI
 /// 列表视图：按状态分组的紧凑行，组头可折叠；归档目录挂在「等你确认」组内。
 struct WandBoardListView: View {
     let grouped: [String: [WandBoardTask]]
+    var allTasks: [WandBoardTask] = []
     let collapsed: Set<String>
     let archiveOpen: Bool
     let onToggle: (String) -> Void
@@ -99,6 +100,11 @@ struct WandBoardListView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
+                    let parent = wandBoardParent(of: task, in: allTasks)
+                    let children = wandBoardChildren(of: task, in: allTasks)
+                    if parent != nil || !children.isEmpty {
+                        WandBoardRelationshipSummary(parent: parent, childCount: children.count)
+                    }
                 }
                 Spacer(minLength: 12)
                 HStack(spacing: 4) {
@@ -464,6 +470,7 @@ struct WandBoardDashboardView: View {
 /// 甘特视图：状态分组 + 时间轴条，支持日 / 周 / 月尺度与隐藏已确认。
 struct WandBoardGanttView: View {
     let grouped: [String: [WandBoardTask]]
+    var allTasks: [WandBoardTask] = []
     let zoom: WandBoardGanttZoom
     let hideCompleted: Bool
     let onZoom: (WandBoardGanttZoom) -> Void
@@ -552,6 +559,13 @@ struct WandBoardGanttView: View {
                                 .foregroundColor(Theme.textPrimary)
                                 .lineLimit(1)
                             Spacer(minLength: 0)
+                            if let parent = wandBoardParent(of: task, in: allTasks) {
+                                Image(systemName: "arrow.turn.down.right")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(Theme.textSecondary)
+                                    .help("归属 \(parent.identifier) · \(parent.title)")
+                                    .accessibilityLabel("父任务 \(parent.title)")
+                            }
                         }
                         .frame(width: labelWidth, alignment: .leading)
                         ZStack(alignment: .leading) {

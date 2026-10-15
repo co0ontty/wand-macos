@@ -356,6 +356,7 @@ struct ConversationTurn: Decodable {
     let role: String
     let content: [ContentBlock]
     let messageId: String?
+    let requestId: String?
     let createdAt: String?
     let completedAt: String?
     let author: ConversationMessageAuthor?
@@ -367,13 +368,13 @@ struct ConversationTurn: Decodable {
     let notice: Bool?
 
     private enum CodingKeys: String, CodingKey {
-        case role, content, messageId, createdAt, completedAt, author, sessionLink, sessionPreview
+        case role, content, messageId, requestId, createdAt, completedAt, author, sessionLink, sessionPreview
         case conversationLink, taskPreview, conversationTarget, notice
     }
 
     init(role: String, content: [ContentBlock]) {
         self.role = role; self.content = content
-        messageId = nil; createdAt = nil; completedAt = nil; author = nil; sessionLink = nil; sessionPreview = nil
+        messageId = nil; requestId = nil; createdAt = nil; completedAt = nil; author = nil; sessionLink = nil; sessionPreview = nil
         conversationLink = nil; taskPreview = nil; conversationTarget = nil; notice = nil
     }
 
@@ -381,6 +382,7 @@ struct ConversationTurn: Decodable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         role = (try? c.decode(String.self, forKey: .role)) ?? "assistant"
         messageId = try? c.decode(String.self, forKey: .messageId)
+        requestId = try? c.decode(String.self, forKey: .requestId)
         createdAt = try? c.decode(String.self, forKey: .createdAt)
         completedAt = try? c.decode(String.self, forKey: .completedAt)
         author = try? c.decode(ConversationMessageAuthor.self, forKey: .author)
@@ -443,9 +445,11 @@ struct StructuredSessionState: Decodable {
     let engine: String?
     let model: String?
     let lastError: String?
-    let inFlight: Bool?
-    let activeRequestId: String?
-    let turnStartedAt: String?
+    var inFlight: Bool?
+    var activeRequestId: String?
+    var turnStartedAt: String?
+    var phase: String? = nil
+    var lastActivityAt: String? = nil
 }
 
 // MARK: - 会话快照
@@ -460,7 +464,7 @@ struct SessionSnapshot: Decodable, Identifiable {
     let command: String?
     let cwd: String?
     let mode: String?
-    let status: String?
+    var status: String?
     let exitCode: Int?
     let startedAt: String?
     let endedAt: String?
@@ -486,7 +490,7 @@ struct SessionSnapshot: Decodable, Identifiable {
     /// 完整历史 turn 数。更早的消息通过 /api/sessions/:id/messages 按需分页。
     let messageTotal: Int?
     let queuedMessages: [String]?
-    let structuredState: StructuredSessionState?
+    var structuredState: StructuredSessionState?
     let pendingEscalation: EscalationRequest?
     let permissionBlocked: Bool?
     let autoApprovePermissions: Bool?
@@ -494,15 +498,18 @@ struct SessionSnapshot: Decodable, Identifiable {
     var providerCliExitCode: Int? = nil
     var ptyBusy: Bool? = nil
     var ptyTurnStartedAt: String? = nil
+    var ptyLastActivityAt: String? = nil
     var ptyCommandRunning: Bool? = nil
     var engine: String? = nil
     var employeeId: String? = nil
     var employeeName: String? = nil
     var employeeAvatar: String? = nil
+    var automationId: String? = nil
     var teamChat: WorkspaceSessionTeamChat? = nil
     var teamStep: WorkspaceSessionTeamStep? = nil
 
     var isStructured: Bool { (sessionKind ?? "pty") == "structured" }
+    var isReadOnlySystemCall: Bool { automationId?.hasPrefix("system-ai:") == true }
     var providerLabel: String {
         WandProvider.title(for: provider, engine: engine ?? structuredState?.engine)
     }
@@ -626,10 +633,34 @@ struct WsIncoming: Decodable {
     let data: WsData?
 }
 
+/// A missing incremental field preserves the current fact; explicit null clears it.
+/// Synthesized decoding of Optional alone cannot make that distinction.
+@propertyWrapper
+struct WireOptional<Value: Decodable>: Decodable {
+    var wrappedValue: Value?
+    var isPresent = false
+    var projectedValue: Self { self }
+
+    init(wrappedValue: Value? = nil) { self.wrappedValue = wrappedValue }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        wrappedValue = container.decodeNil() ? nil : try container.decode(Value.self)
+        isPresent = true
+    }
+}
+
+extension KeyedDecodingContainer {
+    func decode<Value>(_ type: WireOptional<Value>.Type, forKey key: Key) throws -> WireOptional<Value> {
+        guard contains(key) else { return WireOptional() }
+        return try WireOptional(from: superDecoder(forKey: key))
+    }
+}
+
 struct WsData: Decodable {
     // —— 快照公共字段（init / status / ended）——
     let id: String?
     let engine: String?
+    let automationId: String?
     let employeeId: String?
     let employeeName: String?
     let employeeAvatar: String?
@@ -662,13 +693,16 @@ struct WsData: Decodable {
     let messageOffset: Int?
     let messageTotal: Int?
     let queuedMessages: [String]?
-    let structuredState: StructuredSessionState?
+    @WireOptional var structuredState: StructuredSessionState? = nil
     let pendingEscalation: EscalationRequest?
     let permissionBlocked: Bool?
     let autoApprovePermissions: Bool?
     let providerCliActive: Bool?
     let providerCliExitCode: Int?
     let ptyBusy: Bool?
+    @WireOptional var ptyTurnStartedAt: String? = nil
+    @WireOptional var ptyLastActivityAt: String? = nil
+    let ptyCommandRunning: Bool?
     // —— 原生终端快照与 output 增量 ——
     let output: String?
     let terminalState: PtyTerminalSnapshot?

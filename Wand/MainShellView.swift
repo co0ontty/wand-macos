@@ -460,7 +460,8 @@ struct MainShellView: View {
         beginCreation(context: SessionCreationContext(
             cwd: request.cwd.isEmpty ? nil : request.cwd,
             workspaceId: request.workspaceId ?? workspace?.id,
-            workspaceDefaultProvider: workspace?.defaultProvider?.rawValue
+            workspaceDefaultProvider: workspace?.defaultProvider?.rawValue,
+            startsNewTask: true
         ))
     }
 

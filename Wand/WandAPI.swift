@@ -451,7 +451,10 @@ final class WandAPI {
         model: String? = nil,
         thinkingEffort: String? = nil,
         prompt: String?,
-        workspaceBinding: WorkspaceBinding? = nil
+        workspaceBinding: WorkspaceBinding? = nil,
+        employeeId: String? = nil,
+        overrideCli: Bool = false,
+        engine: String? = nil
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = [
             "provider": provider,
@@ -462,6 +465,8 @@ final class WandAPI {
             body["workspaceId"] = workspaceBinding.workspaceId
             body["workspaceTaskId"] = workspaceBinding.workspaceTaskId
         }
+        if let employeeId { body["employeeId"] = employeeId; body["overrideCli"] = overrideCli }
+        if let engine { body["engine"] = engine }
         if let mode, !mode.isEmpty { body["mode"] = mode }
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
@@ -503,6 +508,16 @@ final class WandAPI {
         if let mode, !mode.isEmpty { body["mode"] = mode }
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
+        if let initialInput, !initialInput.isEmpty { body["initialInput"] = initialInput }
+        return try await request(SessionSnapshot.self, method: "POST", path: "/api/commands", body: body)
+    }
+
+    func createBlankTerminal(cwd: String, initialInput: String?, workspaceBinding: WorkspaceBinding? = nil) async throws -> SessionSnapshot {
+        var body: [String: Any] = ["shell": true, "cwd": workspaceBinding?.cwd ?? cwd, "sessionSource": "interactive"]
+        if let workspaceBinding {
+            body["workspaceId"] = workspaceBinding.workspaceId
+            body["workspaceTaskId"] = workspaceBinding.workspaceTaskId
+        }
         if let initialInput, !initialInput.isEmpty { body["initialInput"] = initialInput }
         return try await request(SessionSnapshot.self, method: "POST", path: "/api/commands", body: body)
     }
@@ -578,6 +593,36 @@ final class WandAPI {
     }
 
     // MARK: - 任务管理
+
+    func prepareConversationOrganization(target: WandTaskOrganizationTarget, mode: WandTaskOrganizationMode = .auto) async throws -> WandConversationOrganizationPreview {
+        let response = try await request(WandConversationOrganizationPreparation.self, method: "POST", path: "/api/sessions/auto-organize",
+            body: ["action": "preview", "target": target.jsonObject, "mode": mode.rawValue])
+        return response.preview
+    }
+
+    func startConversationOrganization(token: String, force: Bool = false) async throws -> WandConversationOrganizationJob {
+        do {
+            let response = try await request(WandConversationOrganizationJobResponse.self, method: "POST", path: "/api/sessions/auto-organize",
+                body: ["action": "start", "token": token, "force": force])
+            return response.job
+        } catch {
+            // Only query the accepted receipt. Never replace an unknown start with another token.
+            if let response = try? await request(WandConversationOrganizationJobResponse.self, method: "GET",
+                path: "/api/sessions/auto-organize/by-token/\(percentEncodePathComponent(token))") { return response.job }
+            throw error
+        }
+    }
+
+    func conversationOrganizationJob(id: String) async throws -> WandConversationOrganizationJob {
+        let response = try await request(WandConversationOrganizationJobResponse.self, method: "GET",
+            path: "/api/sessions/auto-organize/\(percentEncodePathComponent(id))")
+        return response.job
+    }
+
+    func cancelConversationOrganization(id: String) async throws {
+        _ = try await request(WandConversationOrganizationJobResponse.self, method: "POST",
+            path: "/api/sessions/auto-organize/\(percentEncodePathComponent(id))/cancel")
+    }
 
     func listBoardTasks(workspaceId: String? = nil) async throws -> [WandBoardTask] {
         var path = "/api/wand-tasks"

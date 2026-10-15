@@ -7,7 +7,8 @@ struct SessionCreationContext: Equatable {
     var taskId: String? = nil
     var taskName: String? = nil
     var workspaceDefaultProvider: String? = nil
-    var startsNewTask = true
+    var startsNewTask = false
+    var employeeId: String? = nil
 }
 
 struct SessionTaskOption: Identifiable {
@@ -32,6 +33,14 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     @Published var mode: NewSessionView.ModeOption = .managed
     @Published var selectedModel = ""
     @Published var thinkingEffort = "off"
+    @Published var engine: String? = nil
+    @Published var employees: [EmployeeContact] = []
+    @Published var employeeId: String? = nil
+    static var pagePreference: EmployeeExecutionCandidate?
+    func rememberExecutionPreference() {
+        Self.pagePreference = EmployeeExecutionCandidate(provider: provider.rawValue, engine: engine, model: selectedModel.isEmpty ? "default" : selectedModel,
+            kind: "structured", mode: mode.apiValue, thinkingEffort: thinkingEffort)
+    }
     @Published var fullAccessAcknowledged = false
     @Published var recentPaths: [RecentPath] = []
     @Published var availableModels: [ModelInfo] = []
@@ -81,7 +90,6 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     var taskGeneration = 0
     private var optionsRefreshPending = false
     private var optionsRefreshTask: Task<Void, Never>?
-    private var preferenceSaveTask: Task<Void, Never>?
 
     init(context: SessionCreationContext = .init(), initialMessage: String = "") {
         self.context = context
@@ -89,6 +97,7 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
         cwd = initialCwd
         unboundCwd = initialCwd
         firstMessage = initialMessage
+        employeeId = context.employeeId
         destination = context.taskId ?? (context.startsNewTask ? "new" : "none")
     }
 
@@ -171,12 +180,15 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
             switch kind {
             case .structured:
                 snapshot = try await api.createStructuredSession(provider: provider.rawValue, cwd: submissionBinding?.cwd ?? path,
-                    mode: mode.apiValue, model: model, thinkingEffort: thinking, prompt: prompt.isEmpty ? nil : prompt,
-                    workspaceBinding: submissionBinding)
+                    mode: mode.apiValue, model: providerWasEdited || employeeId == nil ? model : nil, thinkingEffort: thinking, prompt: prompt.isEmpty ? nil : prompt,
+                    workspaceBinding: submissionBinding, employeeId: employeeId, overrideCli: providerWasEdited, engine: engine)
             case .pty:
                 snapshot = try await api.createPtySession(provider: provider.rawValue, cwd: submissionBinding?.cwd ?? path,
                     mode: mode.apiValue, model: model, thinkingEffort: thinking, initialInput: prompt.isEmpty ? nil : prompt,
                     workspaceBinding: submissionBinding)
+            case .shell:
+                snapshot = try await api.createBlankTerminal(cwd: submissionBinding?.cwd ?? path,
+                    initialInput: prompt.isEmpty ? nil : prompt, workspaceBinding: submissionBinding)
             }
             workspaceStore?.recordCreatedSession(snapshot)
             submissionPhase = .accepted
@@ -184,15 +196,7 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
             // Never put optional GETs or preference writes in front of the accepted-session callback.
             onCreated(snapshot)
             NotificationCenter.default.post(name: .wandRefreshLists, object: snapshot)
-            let previousSave = preferenceSaveTask
-            preferenceSaveTask = Task {
-                await previousSave?.value
-                try? await api.updateNewSessionDefaults(mode: mode.apiValue, model: model.isEmpty ? nil : model,
-                    provider: provider.rawValue, thinkingEffort: thinking, defaultSessionKind: kind.rawValue)
-                if createsTask {
-                    try? await api.updateCreationDefaults(defaultProvider: nil, defaultSessionKind: nil, defaultTaskWorktree: worktree)
-                }
-            }
+            // Execution choices belong to this page; employee and server defaults stay unchanged.
         } catch {
             if Self.deliveryIsUncertain(error) {
                 submissionPhase = .unconfirmed
@@ -208,7 +212,6 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     #if DEBUG
     func waitForBackgroundWorkForTesting() async {
         await optionsRefreshTask?.value
-        await preferenceSaveTask?.value
     }
     #endif
 
@@ -286,6 +289,7 @@ struct NewSessionView: View {
     @State private var showProviderPicker = false
     @State private var showDirectoryOptions = false
     @State private var showTaskOptions = false
+    @State private var showEmployeePicker = false
     @State private var composerFocused = false
     @State private var composerHeight: CGFloat = 72
     @State private var composing = false
@@ -310,15 +314,16 @@ struct NewSessionView: View {
     typealias Provider = WandProvider
 
     enum SessionType: String, CaseIterable, Identifiable, Hashable {
-        case structured, pty
+        case structured, pty, shell
         var id: String { rawValue }
-        var label: String { self == .structured ? "结构化" : "PTY" }
-        var desc: String { self == .structured ? "智能对话模式" : "交互式终端会话" }
+        var label: String { switch self { case .structured: return "对话"; case .pty: return "CLI 终端"; case .shell: return "空白终端" } }
+        var desc: String { switch self { case .structured: return "智能对话模式"; case .pty: return "交互式 CLI 终端"; case .shell: return "系统 Shell" } }
         var symbol: String { self == .structured ? "bubble.left.and.bubble.right" : "terminal" }
 
         /// 对齐 Web getSessionKindHint：codex PTY 描述 + 结构化说明。
         func hint(tool: Provider) -> String {
             switch (self, tool) {
+            case (.shell, _): return "只启动系统 Shell，不使用 AI 模型。"
             case (.structured, .codex):
                 return "Codex JSONL 结构化聊天界面，支持多轮对话和工具调用展示。"
             case (.structured, .claude):
@@ -536,10 +541,8 @@ struct NewSessionView: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 26) {
-                    Text(isExistingTask ? draft.resolvedTaskName ?? "开始新的会话" : "今天，想完成什么？")
-                        .font(.system(size: 30, weight: .medium)).tracking(-0.7)
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(2).multilineTextAlignment(.center)
+                    sessionTypePicker.disabled(draft.creating || draft.creationUnconfirmed)
+                    workSentence
                     VStack(alignment: .leading, spacing: 0) {
                         firstMessageCard
                         if draft.loading {
@@ -579,6 +582,42 @@ struct NewSessionView: View {
         }
     }
 
+    private var workSentence: some View {
+        HStack(spacing: 8) {
+            if draft.sessionType == .structured {
+                Text("与")
+                Button { showEmployeePicker = true } label: {
+                    HStack(spacing: 8) {
+                        if let employee = draft.employees.first(where: { $0.id == draft.employeeId }) {
+                            WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 32)
+                            Text(employee.name)
+                        } else { Text("选择员工") }
+                        Image(systemName: "chevron.down").font(.system(size: 10))
+                    }
+                }.buttonStyle(.plain).accessibilityLabel("新工作员工")
+                    .popover(isPresented: $showEmployeePicker, arrowEdge: .bottom) {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ComposerPopoverHeader(title: "选择员工") { showEmployeePicker = false }
+                                ForEach(draft.employees) { employee in
+                                    Button { selectEmployee(employee) } label: {
+                                        HStack {
+                                            WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 32)
+                                            Text(employee.name); Spacer()
+                                        }
+                                    }.buttonStyle(.plain).frame(minHeight: 44)
+                                }
+                            }.padding(16)
+                        }.frame(width: 300, height: 360)
+                    }
+                Text("一起在")
+            } else { Text("在") }
+            directoryButton
+            Text(draft.sessionType == .structured ? "工作" : "打开终端")
+        }.font(.system(size: 16)).foregroundColor(Theme.textSecondary)
+            .disabled(draft.creating || draft.creationUnconfirmed)
+    }
+
     @ViewBuilder
     private var creationFeedback: some View {
         if let error = draft.errorMessage {
@@ -602,13 +641,16 @@ struct NewSessionView: View {
     private func composerOptions(compact: Bool) -> some View {
         if compact {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) { providerButton; modelMenuButton; Spacer(minLength: 0) }
+                HStack(spacing: 4) { if draft.sessionType != .shell { providerButton; modelMenuButton; thinkingButton }; Spacer(minLength: 0) }
                 HStack(spacing: 4) { directoryButton; taskButton; Spacer(minLength: 4); runSettingsButton; startButton }
             }
         } else {
             HStack(spacing: 4) {
-                providerButton
-                modelMenuButton
+                if draft.sessionType != .shell {
+                    providerButton
+                    modelMenuButton
+                    thinkingButton
+                }
                 directoryButton
                 taskButton
                 Spacer(minLength: 4)
@@ -629,11 +671,23 @@ struct NewSessionView: View {
         .frame(maxWidth: width).contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
     }
 
+    private var thinkingButton: some View {
+        Menu {
+            ForEach(thinkingLevels) { option in
+                Button(option.menuLabel) {
+                    draft.thinkingEffort = option.id; draft.providerWasEdited = true
+                    draft.rememberExecutionPreference()
+                }
+            }
+        } label: { chipLabel("思考：" + composerThinkingPreference(draft.thinkingEffort), symbol: "brain", width: 130) }
+            .menuStyle(.borderlessButton).accessibilityLabel("本页思考深度")
+    }
+
     private var providerButton: some View {
         Button { showProviderPicker = true } label: {
             HStack(spacing: 6) {
                 BrandLogo(provider: draft.provider.rawValue, color: Theme.textPrimary).frame(width: 13, height: 13)
-                Text(draft.provider.title).font(.system(size: 12, weight: .medium))
+                Text(WandProvider.title(for: draft.provider.rawValue, engine: draft.sessionType == .pty ? "cli" : draft.engine)).font(.system(size: 12, weight: .medium))
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
             }.foregroundColor(Theme.textSecondary).padding(.horizontal, 8).frame(height: 32)
         }
@@ -717,9 +771,11 @@ struct NewSessionView: View {
             .popover(isPresented: $showRunSettings, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("运行设置").font(.system(size: 14, weight: .semibold))
+                    if draft.sessionType != .shell {
                     ThinkingEffortSlider(options: thinkingLevels, selection: draft.thinkingEffort, accent: Theme.wandAccent) {
                         draft.providerWasEdited = true
                         draft.thinkingEffort = $0
+                        draft.rememberExecutionPreference()
                     }
                     fieldLabel("会话类型")
                     sessionTypePicker.help(sessionKindHint)
@@ -727,6 +783,7 @@ struct NewSessionView: View {
                     modePicker
                     fieldHint(modeHint)
                     if draft.mode == .fullAccess { fullAccessWarning }
+                    }
                     HStack { Spacer(); Button("完成") { showRunSettings = false }.buttonStyle(WandSecondaryButtonStyle()) }
                 }.padding(20).frame(width: 360).background(Theme.workspaceBackground)
             }
@@ -756,7 +813,7 @@ struct NewSessionView: View {
 
     private func prepareCreate() {
         guard readyToStart else { return }
-        if draft.mode == .fullAccess && !draft.fullAccessAcknowledged { showRunSettings = true }
+        if draft.sessionType != .shell && draft.mode == .fullAccess && !draft.fullAccessAcknowledged { showRunSettings = true }
         else { create() }
     }
 
@@ -825,11 +882,21 @@ struct NewSessionView: View {
                         .contentShape(Rectangle())
                 }.buttonStyle(DesktopNavigationButtonStyle())
             }
+            if draft.sessionType == .structured {
+                Button("Wand Agent") {
+                    chooseProvider(.pi, userInitiated: true)
+                    draft.engine = "sdk"; draft.rememberExecutionPreference(); showProviderPicker = false
+                }.buttonStyle(DesktopNavigationButtonStyle()).frame(height: 34)
+            }
         }
     }
 
     private var sessionTypePicker: some View {
-        Picker("会话类型", selection: $draft.sessionType) {
+        Picker("工作类型", selection: Binding(get: { draft.sessionType }, set: {
+            draft.sessionType = $0
+            if $0 == .pty { draft.engine = "cli" }
+            showProviderPicker = false; showModelPicker = false; showRunSettings = false
+        })) {
             ForEach(SessionType.allCases) { kind in
                 Text(kind.label).tag(kind)
             }
@@ -873,6 +940,7 @@ struct NewSessionView: View {
         Button {
             draft.providerWasEdited = true
             draft.selectedModel = id
+            draft.rememberExecutionPreference()
             showModelPicker = false
             modelQuery = ""
         } label: {
@@ -1041,22 +1109,45 @@ struct NewSessionView: View {
 
     private var readyToStart: Bool {
         !draft.loading && draft.loadError == nil && !draft.loadingTask && !draft.creating && !draft.creationUnconfirmed && !composing
+            && (draft.sessionType != .structured || !draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             && (draft.destination == "new" || !draft.cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             && (!isExistingTask || draft.binding?.workspaceTaskId == draft.destination)
     }
 
-    private var canCreate: Bool { readyToStart && (draft.mode != .fullAccess || draft.fullAccessAcknowledged) }
+    private var canCreate: Bool { readyToStart && (draft.sessionType == .shell || draft.mode != .fullAccess || draft.fullAccessAcknowledged) }
+
+    private func selectEmployee(_ employee: EmployeeContact) {
+        draft.employeeId = employee.id
+        if let candidate = employee.candidates.first {
+            draft.provider = Provider(normalizing: candidate.provider)
+            draft.engine = candidate.engine
+            draft.selectedModel = candidate.model ?? "default"
+            draft.thinkingEffort = candidate.thinkingEffort ?? "off"
+            draft.mode = ModeOption(apiValue: candidate.mode ?? "default") ?? .standard
+        }
+        draft.providerWasEdited = false
+        if let preference = SessionCreationDraft.pagePreference {
+            draft.provider = Provider(normalizing: preference.provider)
+            draft.engine = draft.sessionType == .pty ? "cli" : preference.engine
+            draft.selectedModel = preference.model ?? "default"
+            draft.thinkingEffort = preference.thinkingEffort ?? "off"
+            draft.providerWasEdited = true
+        }
+        showEmployeePicker = false
+    }
 
     private func chooseProvider(_ provider: Provider, userInitiated: Bool) {
         if userInitiated { draft.providerWasEdited = true }
         guard draft.provider != provider || !draft.initialized else { return }
         draft.provider = provider
+        draft.engine = "cli"
         draft.selectedModel = ""
         let supported = ModeOption.supported(for: provider)
         let preferred = ModeOption(apiValue: draft.defaultMode) ?? .managed
         draft.mode = supported.contains(preferred) ? preferred : supported.contains(.managed) ? .managed : .fullAccess
         draft.thinkingEffort = draft.defaultThinkingEffort
         draft.fullAccessAcknowledged = false
+        if userInitiated { draft.rememberExecutionPreference() }
     }
 
     private func selectDestination(_ destination: String) {
@@ -1120,8 +1211,9 @@ struct NewSessionView: View {
             async let workspacesRequest = api.listWorkspaces()
             async let modelsRequest = try? api.models()
             async let recentRequest = try? api.recentPaths()
-            let (config, groups, workspaces, models, recent) = try await (
-                configRequest, groupsRequest, workspacesRequest, modelsRequest, recentRequest
+            async let employeesRequest = api.employeeContacts()
+            let (config, groups, workspaces, models, recent, employees) = try await (
+                configRequest, groupsRequest, workspacesRequest, modelsRequest, recentRequest, employeesRequest
             )
             guard !Task.isCancelled else { return }
             draft.updateOptions(groups: groups, workspaces: workspaces)
@@ -1132,7 +1224,7 @@ struct NewSessionView: View {
                 ?? workspaces.first(where: { $0.id == draft.context.workspaceId })?.defaultProvider?.rawValue
                 ?? draft.defaultProvider
             chooseProvider(Provider(rawValue: preferredProvider) ?? .claude, userInitiated: false)
-            draft.sessionType = config.defaultSessionKind == "pty" ? .pty : .structured
+            draft.sessionType = .structured
             draft.worktree = config.defaultTaskWorktree != false
             draft.serverDefaultModels = config.defaultModels ?? ProviderDefaultModels(
                 claude: config.defaultModel, codex: config.defaultCodexModel,
@@ -1155,6 +1247,11 @@ struct NewSessionView: View {
             }
             draft.unboundCwd = draft.cwd
             draft.initialized = true
+            draft.employees = employees.filter { !$0.isArchived }
+            if let employee = draft.employees.first(where: { $0.id == draft.employeeId })
+                ?? draft.employees.first(where: { $0.id == "e_wand_default" }) ?? draft.employees.first {
+                selectEmployee(employee)
+            }
             draft.loading = false
             if isExistingTask { selectDestination(draft.destination) }
             composerFocused = true

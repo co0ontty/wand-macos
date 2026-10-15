@@ -13,6 +13,13 @@ private enum ChatLayoutMetrics {
     static let horizontalInset: CGFloat = 20
 }
 
+private struct ChatNavigationLayoutKey: PreferenceKey {
+    static var defaultValue: TurnNavigationID? = nil
+    static func reduce(value: inout TurnNavigationID?, nextValue: () -> TurnNavigationID?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
 /// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
@@ -36,6 +43,7 @@ struct ChatView: View {
     @State private var showQuickCommit = false
     @State private var followsLatest = true
     @State private var historyExpanded = false
+    @State private var pendingNavigationID: TurnNavigationID?
     @State private var expandedCurrentReplyAbsoluteIndex = -1
     @State private var observedLastUserAbsoluteIndex = Int.min
     @State private var observedLatestAssistantAbsoluteIndex = Int.min
@@ -93,7 +101,7 @@ struct ChatView: View {
                         }
                     }
                     .padding(32)
-                } else if store.messages.isEmpty && !store.isResponding {
+                } else if store.messages.isEmpty && runningPresentation.label.isEmpty {
                     sessionLaunchPanel
                 } else {
                     messageList.clipped().simultaneousGesture(TapGesture().onEnded { composerFocus.collapseFromContent(); inputFocused = false })
@@ -220,7 +228,7 @@ struct ChatView: View {
                             )
                             .id("turn-\(absoluteIndex)")
                     }
-                    if store.isResponding {
+                    if !runningPresentation.label.isEmpty {
                         respondingIndicator
                     }
                     Color.clear.frame(height: 1).id("chat-bottom")
@@ -229,8 +237,11 @@ struct ChatView: View {
                 .chatContentWidth()
                 .padding(.top, 12)
                 .padding(.bottom, 6)
+                .background(GeometryReader { _ in
+                    Color.clear.preference(key: ChatNavigationLayoutKey.self, value: pendingNavigationID)
+                })
                 .background(ConversationScrollObserver(
-                    onUserScroll: { followsLatest = false },
+                    onUserScroll: { followsLatest = false; pendingNavigationID = nil },
                     onReachedBottom: { if !showingFind { followsLatest = true } }
                 ))
             }
@@ -239,6 +250,36 @@ struct ChatView: View {
                         jumpToLatestButton(proxy)
                     }
                 }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    HStack {
+                        Spacer()
+                        TurnNavigator(entries: turnNavigation.entries, windowNote: turnNavigationNote) { id in
+                            guard pageActive, store.sessionId == sessionId,
+                                  turnNavigation.resolve(id) != nil else { return }
+                            followsLatest = false
+                            closeFind()
+                            historyExpanded = true
+                            pendingNavigationID = id
+                        }
+                        .id(turnNavigationScope)
+                    }
+                    .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
+                    .padding(.vertical, 4)
+                }
+                .onPreferenceChange(ChatNavigationLayoutKey.self) { id in
+                    guard let id else { return }
+                    // Layout now includes the requested history disclosure.
+                    DispatchQueue.main.async {
+                        guard pendingNavigationID == id, pageActive,
+                              store.sessionId == sessionId, !followsLatest,
+                              let index = turnNavigation.resolve(id) else { return }
+                        withAnimation(reduceMotion ? nil : Theme.Motion.structure) {
+                            proxy.scrollTo("turn-\(index)", anchor: .top)
+                        }
+                        pendingNavigationID = nil
+                    }
+                }
+                .onDisappear { pendingNavigationID = nil }
                 .onAppear {
                     syncReplyFoldState(force: true)
                     pinToBottom(proxy)
@@ -277,7 +318,10 @@ struct ChatView: View {
                 turn: turn,
                 baseURL: api.baseURL,
                 isLastTurn: index == store.messages.count - 1,
-                isResponding: store.isResponding,
+                isResponding: runningPresentation.spinning && ChatRunningPresentation.activityIsCurrent(
+                    snapshot: store.snapshot, messages: store.messages, index: index),
+                activityTerminal: ChatRunningPresentation.activityTerminal(status: store.status,
+                    sessionID: sessionId, messages: store.messages, index: index),
                 currentReplyExpandedOverride: showingFind ? true : (controlsCurrentReplyExpansion
                     ? (expandedCurrentReplyAbsoluteIndex == absoluteIndex)
                     : nil),
@@ -311,11 +355,25 @@ struct ChatView: View {
         case .explorationGroup(let tools, let lastTurnIndex):
             ExplorationGroupCard(
                 tools: tools,
-                running: store.isResponding
+                running: runningPresentation.spinning
+                    && ChatRunningPresentation.activityIsCurrent(snapshot: store.snapshot,
+                        messages: store.messages, index: lastTurnIndex)
                     && lastTurnIndex == store.messages.count - 1
                     && tools.contains { $0.result == nil }
             )
         }
+    }
+
+    private var turnNavigationScope: String { "\(api.baseURL.absoluteString)|session|\(sessionId)" }
+
+    private var turnNavigation: TurnNavigationIndex {
+        TurnNavigationIndex(scope: turnNavigationScope, turns: store.messages, offset: store.loadedOffset)
+    }
+
+    private var turnNavigationNote: String {
+        let range = ChatDisclosurePresentation.loadedRange(offset: store.loadedOffset,
+            count: store.messages.count, total: store.messageTotal)
+        return range + (store.canLoadEarlier ? "更早内容使用列表顶部的加载按钮或现有查找。" : "")
     }
 
     private var groupedMessageItems: [MessageDisplayItem] {
@@ -419,7 +477,7 @@ struct ChatView: View {
         followsLatest = true
         for delay in [0.05, 0.15, 0.35, 0.7] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard expandedCurrentReplyAbsoluteIndex == absoluteIndex else { return }
+                guard followsLatest, expandedCurrentReplyAbsoluteIndex == absoluteIndex else { return }
                 proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
         }
@@ -471,13 +529,34 @@ struct ChatView: View {
         }
     }
 
+    private var runningPresentation: ChatRunningPresentation {
+        ChatRunningPresentation.live(snapshot: store.snapshot, messages: store.messages,
+            status: store.status, responding: store.isResponding,
+            permissionBlocked: store.permissionBlocked, escalation: store.pendingEscalation != nil,
+            queuedCount: store.queuedMessages.count)
+    }
+
     private var respondingIndicator: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small).tint(Theme.brand)
-            Text(store.currentTaskTitle ?? "正在思考…")
-                .font(.system(size: 13))
-                .foregroundColor(Theme.textSecondary)
-                .lineLimit(1)
+        let presentation = runningPresentation
+        return HStack(spacing: 8) {
+            if presentation.spinning {
+                ProgressView().controlSize(.small).tint(Theme.brand)
+            } else {
+                Image(systemName: runningPresentation.stage == .failed ? "exclamationmark.circle" : "pause.circle")
+                    .foregroundColor(runningPresentation.stage == .failed ? Theme.danger : Theme.textSecondary)
+            }
+            Group {
+                if presentation.hasClock {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(presentation.text(at: context.date))
+                    }
+                } else {
+                    Text(presentation.label)
+                }
+            }
+            .font(.system(size: 13))
+            .foregroundColor(Theme.textSecondary)
+            .lineLimit(2)
         }
         .padding(.vertical, 4)
     }
@@ -602,7 +681,15 @@ struct ChatView: View {
                     .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
                     .padding(.bottom, 6)
             }
-            inputBar
+            if store.isReadOnlySystemCall {
+                Label("系统调用记录 · 只读日志，不能继续发送或恢复执行", systemImage: "doc.text")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(ChatLayoutMetrics.horizontalInset)
+            } else {
+                inputBar
+            }
         }
         .chatContentWidth()
         .background(
@@ -943,7 +1030,7 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !store.loading && store.loadError == nil && !store.sending
+        !store.isReadOnlySystemCall && !store.loading && store.loadError == nil && !store.sending
             && !composerIsComposing && !attachments.isUploading && (
             !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.attachments.isEmpty
@@ -1541,6 +1628,19 @@ private func parseUserAttachmentMessage(_ text: String) -> ParsedUserAttachmentM
     let body = String(afterHeader[close.upperBound...])
         .trimmingCharacters(in: .whitespacesAndNewlines)
     return ParsedUserAttachmentMessage(paths: paths, body: body)
+}
+
+/// The navigator uses the same visible body/attachment protocol as userBubble.
+/// Never include thinking, tool payloads, session previews or subagent context.
+func userQuestionPreview(_ turn: ConversationTurn) -> String {
+    let text = turn.content.compactMap { block -> String? in
+        guard case .text(let text, let subagent) = block, subagent == nil else { return nil }
+        return text
+    }.joined(separator: "\n")
+    let parsed = parseUserAttachmentMessage(text)
+    let body = parsed.body.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !body.isEmpty { return body }
+    return parsed.paths.isEmpty ? "" : "\(parsed.paths.count) 个附件"
 }
 
 private let composerImageExtensions: Set<String> = [
@@ -2483,7 +2583,8 @@ private func explorationToolsOnly(in turn: ConversationTurn) -> [ExplorationTool
     for item in pairToolBlocks(turn.content) {
         switch item {
         case .tool(let id, let name, let description, let input, let subagent, let result)
-            where isExplorationTool(name) && !toolHasVisibleImage(input: input, result: result):
+            where isExplorationTool(name) && result?.isError != true
+                && input["__wandQuestions"] == nil && !toolHasVisibleImage(input: input, result: result):
             tools.append(ExplorationToolItem(
                 id: id, name: name, description: description,
                 input: input, subagent: subagent, result: result
@@ -2657,10 +2758,10 @@ private func isCollapsibleActivityItem(_ item: DisplayItem) -> Bool {
         switch block {
         case .text, .unknown, .toolUse: return false
         case .thinking: return true
-        case .toolResult(_, _, _, _, let images, _): return images.isEmpty
+        case .toolResult(_, _, let isError, _, let images, _): return !isError && images.isEmpty
         }
     case .tool(_, let name, _, let input, _, let result):
-        if name == "AskUserQuestion" { return false }
+        if name == "AskUserQuestion" || input["__wandQuestions"] != nil { return false }
         if toolHasVisibleImage(input: input, result: result) { return false }
         return true
     }
@@ -2968,10 +3069,9 @@ private let activityWindowHeight: CGFloat = 220
 /// 离底超过这个距离就算「在读历史」：新的活动不再把用户拽回尾部。
 private let activityTailPin: CGFloat = 24
 
-/// 活动窗口展开 / 收起：240ms 强调曲线（对齐 WandMotion.tweenNormal / Web 端）；
-/// 减弱动效时瞬切。
+/// 活动窗口展开 / 收起复用结构动效 token；减弱动效时瞬切。
 private func activityWindowAnimation(_ reduceMotion: Bool) -> Animation? {
-    reduceMotion ? nil : .timingCurve(0.16, 1, 0.3, 1, duration: 0.24)
+    reduceMotion ? nil : Theme.Motion.structure
 }
 
 /// 活动窗口的滚动几何：顶/底哨兵在窗口坐标空间里的位置。
@@ -3011,6 +3111,8 @@ private struct ActivityEdgeProbe<K: PreferenceKey>: View where K.Value == CGFloa
 
 private struct ActivityFoldCard<Content: View>: View {
     let group: ActivityGroup
+    let running: Bool
+    let terminal: ChatRunningPresentation.Stage?
     /// item / 条目下标 / 窗口里「最新一条」的下标 —— 窗口按「只有最新一条展开」呈现。
     @ViewBuilder let itemView: (DisplayItem, Int, Int) -> Content
 
@@ -3025,14 +3127,47 @@ private struct ActivityFoldCard<Content: View>: View {
     @State private var viewportHeight: CGFloat = 0
     private let tailAnchorID = "activity-fold-tail"
     private var refreshToken: String { "\(group.count):\(group.latest)" }
+    private var hasError: Bool { group.items.contains { item in
+        switch item {
+        case .tool(_, _, _, _, _, let result): return result?.isError == true
+        case .plain(.toolResult(_, _, let error, _, _, _)): return error
+        default: return false
+        }
+    } }
+    private var missingResult: Bool { group.items.contains { item in
+        if case .tool(_, _, _, _, _, let result) = item { return result == nil }
+        return false
+    } }
+    private var hasThinking: Bool { group.items.contains { item in
+        if case .plain(.thinking(_, _)) = item { return true }
+        return false
+    } }
+    private var automaticExpanded: Bool {
+        ChatDisclosurePresentation.expanded(userChoice: nil, running: group.newest && running,
+            attention: hasThinking || hasError || (missingResult && terminal == .failed))
+    }
 
     init(
         group activityGroup: ActivityGroup,
+        running: Bool,
+        terminal: ChatRunningPresentation.Stage? = nil,
         @ViewBuilder itemView: @escaping (DisplayItem, Int, Int) -> Content
     ) {
         self.group = activityGroup
+        self.running = running
+        self.terminal = activityGroup.newest ? terminal : nil
         self.itemView = itemView
-        _expanded = State(initialValue: activityGroup.newest)
+        let attention = activityGroup.items.contains { item in
+            if case .plain(.thinking(_, _)) = item { return true }
+            switch item {
+            case .tool(_, _, _, _, _, let result):
+                return result?.isError == true || (result == nil && activityGroup.newest && terminal == .failed)
+            case .plain(.toolResult(_, _, let error, _, _, _)): return error
+            default: return false
+            }
+        }
+        _expanded = State(initialValue: ChatDisclosurePresentation.expanded(userChoice: nil,
+            running: activityGroup.newest && running, attention: attention))
     }
 
     var body: some View {
@@ -3050,8 +3185,16 @@ private struct ActivityFoldCard<Content: View>: View {
             .help(expanded ? "收起活动" : "展开活动")
 
             if expanded {
-                Divider()
-                window
+                if hasThinking {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(group.items.enumerated()), id: \.offset) { index, item in
+                            itemView(item, index, group.items.count - 1)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                } else {
+                    window
+                }
             }
         }
         .background(
@@ -3064,16 +3207,20 @@ private struct ActivityFoldCard<Content: View>: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .animation(activityWindowAnimation(reduceMotion), value: expanded)
-        .onChange(of: group.newest) { newest in
+        .onChange(of: automaticExpanded) { next in
             guard !userToggled else { return }
-            expanded = newest
-            if newest { pinned = true }
+            expanded = next
+            if next { pinned = true }
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
+                Text(ChatDisclosurePresentation.activityStatus(hasError: hasError, missingResult: missingResult,
+                    running: running, terminal: terminal))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(hasError || (missingResult && terminal == .failed) ? Theme.danger : Theme.textSecondary)
                 if !group.meta.isEmpty {
                     Text(group.meta)
                         .font(.system(size: 12))
@@ -3332,6 +3479,7 @@ struct TurnView: View {
     var baseURL: URL?
     var isLastTurn: Bool
     var isResponding: Bool
+    var activityTerminal: ChatRunningPresentation.Stage?
     var currentReplyExpandedOverride: Bool?
     var turnIndex: Int
     var historyBoundary: Int
@@ -3352,6 +3500,7 @@ struct TurnView: View {
         baseURL: URL? = nil,
         isLastTurn: Bool = false,
         isResponding: Bool = false,
+        activityTerminal: ChatRunningPresentation.Stage? = nil,
         currentReplyExpandedOverride: Bool? = nil,
         turnIndex: Int = -1,
         historyBoundary: Int = -1,
@@ -3369,6 +3518,7 @@ struct TurnView: View {
         self.baseURL = baseURL
         self.isLastTurn = isLastTurn
         self.isResponding = isResponding
+        self.activityTerminal = activityTerminal
         self.currentReplyExpandedOverride = currentReplyExpandedOverride
         self.turnIndex = turnIndex
         self.historyBoundary = historyBoundary
@@ -3584,7 +3734,8 @@ struct TurnView: View {
             case .item(_, let item):
                 itemView(item)
             case .activity(let group):
-                ActivityFoldCard(group: group) { item, index, tailIndex in
+                ActivityFoldCard(group: group, running: isLastTurn && isResponding && turn.completedAt == nil,
+                    terminal: activityTerminal) { item, index, tailIndex in
                     itemView(item, activityTailIndex: tailIndex, itemIndex: index)
                 }
             }
@@ -3629,7 +3780,8 @@ struct TurnView: View {
         input: [String: JSONValue], result: ToolResultInfo?,
         initiallyExpanded: Bool = false
     ) -> some View {
-        let questions = name == "AskUserQuestion" ? AskUserQuestion.parse(input: input) : []
+        let questions = name == "AskUserQuestion" || input["__wandQuestions"] != nil
+            ? AskUserQuestion.parse(input: input) : []
         if !questions.isEmpty {
             AskUserQuestionCard(
                 toolUseId: id,
@@ -3706,12 +3858,12 @@ private struct BlockView: View {
                     icon: "brain",
                     title: "思考过程",
                     tint: Theme.textSecondary,
-                    initiallyExpanded: initiallyExpanded
+                    initiallyExpanded: true
                 ) {
-                    Text(thinking)
-                        .font(.system(size: compact ? 11 : 13))
-                        .italic()
-                        .foregroundColor(compact ? Theme.textMuted : Theme.textSecondary)
+                    MarkdownText(text: thinking, baseURL: baseURL)
+                        .font(.system(size: 13))
+                        .lineSpacing(5)
+                        .foregroundColor(Theme.textSecondary)
                         .textSelection(.enabled)
                 }
             }
@@ -3736,7 +3888,7 @@ private struct BlockView: View {
                             icon: isError ? "xmark.octagon" : "doc.text",
                             title: isError ? "执行出错" : "执行结果",
                             tint: isError ? Theme.danger : Theme.textSecondary,
-                            initiallyExpanded: initiallyExpanded
+                            initiallyExpanded: isError || initiallyExpanded
                         ) {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 Text(text.count > 4000 ? String(text.prefix(4000)) + "\n…（已截断）" : text)
@@ -4322,7 +4474,7 @@ private struct ExplorationGroupCard: View {
 }
 
 /// 工具调用卡片：图标 + 中文工具名 + 参数摘要 + 可折叠结果区。
-/// 三态对齐 Web：运行中（转圈）/ 成功（左侧绿竖线）/ 失败（红弱底 + 红边框）。
+/// 完成态紧凑；错误默认展开；用户手动收放优先于后续结果更新。
 private struct ToolUseCard: View {
     let name: String
     let description: String?
@@ -4332,6 +4484,7 @@ private struct ToolUseCard: View {
     var baseURL: URL?
 
     @State private var expanded: Bool
+    @State private var userToggled = false
 
     init(
         name: String,
@@ -4348,7 +4501,8 @@ private struct ToolUseCard: View {
         self.result = result
         self.running = running
         self.baseURL = baseURL
-        _expanded = State(initialValue: initiallyExpanded)
+        _expanded = State(initialValue: ChatDisclosurePresentation.expanded(userChoice: nil,
+            running: initiallyExpanded && result == nil, attention: result?.isError == true))
     }
 
     private var isError: Bool { result?.isError == true }
@@ -4357,14 +4511,11 @@ private struct ToolUseCard: View {
     private var statusColor: Color {
         if isError { return Theme.danger }
         if running { return Theme.brand }
-        if isSuccess { return chatSuccess }
+        if isSuccess { return Theme.textSecondary }
         return Theme.textSecondary
     }
     private var statusText: String {
-        if isError { return "失败" }
-        if running { return "处理中" }
-        if isSuccess { return "完成" }
-        return "待执行"
+        ChatDisclosurePresentation.toolStatus(hasResult: result != nil, isError: isError, running: running)
     }
 
     var body: some View {
@@ -4399,44 +4550,49 @@ private struct ToolUseCard: View {
                 .stroke(isError ? Theme.danger.opacity(0.42) : Theme.border, lineWidth: 0.75)
         )
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+        .wandMotion(value: expanded, layout: true)
+        .onChange(of: isSuccess) { success in
+            guard !userToggled, success else { return }
+            expanded = false
+        }
+        .onChange(of: isError) { error in
+            guard !userToggled, error else { return }
+            expanded = true
+        }
     }
 
     private var header: some View {
         Button {
             guard hasBody else { return }
+            userToggled = true
             expanded.toggle()
         } label: {
-            HStack(spacing: 11) {
-                if running {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                            .fill(statusColor.opacity(0.12))
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(statusColor)
-                    }
-                    .frame(width: 34, height: 34)
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                            .fill(statusColor.opacity(isSuccess ? 0.10 : 0.12))
-                        Image(systemName: iconName)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(statusColor)
-                    }
-                    .frame(width: 34, height: 34)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(toolLabel(name))
+            HStack(spacing: 8) {
+                ZStack {
+                    ProgressView().controlSize(.small).tint(statusColor)
+                        .opacity(running && result == nil ? 1 : 0)
+                    Image(systemName: iconName)
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(statusColor)
+                        .opacity(running && result == nil ? 0 : 1)
+                }
+                .frame(width: 24, height: 24)
+                .wandMotion(value: running && result == nil)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(actionTitle)
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(isError ? Theme.danger : Theme.textPrimary)
-                    if !summary.isEmpty {
+                        .lineLimit(2)
+                    if !summary.isEmpty && summary != actionTitle {
                         Text(summary)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(Theme.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
+                    Text(toolLabel(name))
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
                 }
                 Spacer(minLength: 0)
                 Text(statusText)
@@ -4448,7 +4604,9 @@ private struct ToolUseCard: View {
                 if hasBody {
                     ZStack {
                         Circle().fill(Theme.background)
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        Image(systemName: "chevron.down")
+                            .rotationEffect(.degrees(expanded ? 180 : 0))
+                            .wandMotion(value: expanded)
                             .font(.system(size: 9, weight: .bold))
                             .foregroundColor(Theme.textSecondary)
                     }
@@ -4456,7 +4614,7 @@ private struct ToolUseCard: View {
                 }
             }
             .padding(.horizontal, 11)
-            .padding(.vertical, 10)
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -4471,6 +4629,13 @@ private struct ToolUseCard: View {
         if lower.contains("web") || lower.contains("fetch") { return "globe" }
         if lower.contains("task") || lower.contains("agent") { return "person.2" }
         return "wrench.and.screwdriver"
+    }
+
+    /// Supplied intent is primary; tool identity is supporting metadata.
+    private var actionTitle: String {
+        if let intent = input["description"]?.summaryText, !intent.isEmpty { return String(intent.prefix(140)) }
+        if let description, !description.isEmpty { return String(description.prefix(140)) }
+        return summary.isEmpty ? toolLabel(name) : String(summary.prefix(140))
     }
 
     /// 摘要优先级：description > 常见关键参数 > 第一个参数。

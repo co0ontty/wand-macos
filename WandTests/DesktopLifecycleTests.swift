@@ -78,7 +78,9 @@ final class DesktopLifecycleTests: XCTestCase {
     @MainActor
     func testCreationEntrySelectsHomeTaskOrExplicitUnassignedDestination() {
         let home = SessionCreationDraft()
-        XCTAssertEqual(home.destination, "new")
+        XCTAssertEqual(home.destination, "none")
+        let namedTask = SessionCreationDraft(context: .init(startsNewTask: true))
+        XCTAssertEqual(namedTask.destination, "new")
 
         let unassigned = SessionCreationDraft(context: SessionCreationContext(startsNewTask: false))
         XCTAssertEqual(unassigned.destination, "none")

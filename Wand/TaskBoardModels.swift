@@ -1,6 +1,121 @@
 import Foundation
 import SwiftUI
 
+// MARK: - 任务归类（服务端为范围与归属的事实源）
+
+enum WandTaskOrganizationMode: String, CaseIterable, Identifiable {
+    case auto, all
+    var id: String { rawValue }
+    var label: String { self == .auto ? "默认范围会话" : "所有工作会话" }
+    var hint: String { self == .auto ? "未分组及系统任务中的工作会话，不挪人工任务会话" : "包括人工任务会话，仍排除归档、私聊、自动化和系统日志" }
+}
+
+enum WandTaskOrganizationTarget: Equatable {
+    case all
+    case workspace(String)
+    case directory(String)
+
+    var jsonObject: [String: String] {
+        switch self {
+        case .all: return ["kind": "all"]
+        case .workspace(let id): return ["kind": "workspace", "workspaceId": id]
+        case .directory(let cwd): return ["kind": "directory", "cwd": cwd]
+        }
+    }
+
+    static func directoryGroup(_ group: TaskDirectoryGroup) -> Self {
+        group.isSynthetic || group.isGlobal ? .directory(group.workspaceCwd) : .workspace(group.workspaceId)
+    }
+}
+
+struct WandConversationOrganizationPreview: Decodable {
+    let token: String
+    let sessionCount: Int
+    let manualSessionCount: Int
+    let skippedSessionCount: Int
+    let existingTaskCount: Int
+    let contentCharacters: Int
+    let estimatedModelRequests: Int
+    let unchanged: Bool
+    let activeJobId: String?
+}
+struct WandConversationOrganizationPreparation: Decodable { let preview: WandConversationOrganizationPreview }
+struct WandConversationOrganizationJob: Decodable {
+    let id: String
+    let status: String
+    let stage: String
+    let processedSessions: Int
+    let totalSessions: Int
+    let modelRequests: Int
+    let result: WandTaskOrganizationResult
+    let logSessionId: String?
+    let error: String?
+}
+struct WandConversationOrganizationJobResponse: Decodable { let job: WandConversationOrganizationJob }
+
+struct WandTaskOrganizationResult: Decodable {
+    struct SessionMove: Decodable { let sessionId: String }
+    struct TaskParent: Decodable { let taskId: String }
+    struct Refusal: Decodable { let reason: String }
+    let foundTasks: Int?
+    let eligibleTasks: Int?
+    let skippedTasks: Int?
+    let movedSessions: [SessionMove]
+    let categorizedTasks: [TaskParent]?
+    let refused: [Refusal]
+    let eligibleSessions: Int?
+    let analyzedSessions: Int?
+    let skippedManualSessions: Int?
+    let skippedSessions: Int?
+    let createdTasks: [TaskParent]?
+    let reusedTasks: [TaskParent]?
+    let updatedTasks: [TaskParent]?
+    let unassignedSessions: [SessionMove]?
+    let unchanged: Bool?
+    let cancelled: Bool?
+    let error: String?
+
+    var label: String {
+        var changes: [String] = []
+        if let eligibleSessions {
+            if unchanged == true { return "内容和归属未变化，没有重复建任务或调用模型" }
+            if let createdTasks, !createdTasks.isEmpty { changes.append("新建 \(createdTasks.count) 个任务") }
+            if let updatedTasks, !updatedTasks.isEmpty { changes.append("更新 \(updatedTasks.count) 个系统任务标题") }
+            if let reusedTasks, !reusedTasks.isEmpty { changes.append("复用 \(Set(reusedTasks.map(\.taskId)).count) 个任务") }
+            if !movedSessions.isEmpty { changes.append("归入 \(movedSessions.count) 个会话") }
+            if !changes.isEmpty { return (cancelled == true || error != nil ? "部分完成：" : "已") + changes.joined(separator: "、") }
+            if error != nil { return "会话归类未完成" }
+            if cancelled == true { return "已取消后续归类" }
+            return eligibleSessions == 0 ? "没有符合范围且有正文的工作会话" : "会话尚未得到明确工作分组，本次未作调整"
+        }
+        if let categorizedTasks, !categorizedTasks.isEmpty { changes.append("归类 \(categorizedTasks.count) 个任务") }
+        if !movedSessions.isEmpty { changes.append("归属 \(movedSessions.count) 个会话") }
+        if !changes.isEmpty { return "已" + changes.joined(separator: "、") }
+        if !refused.isEmpty { return "未调整任何任务或会话" }
+        return eligibleTasks == 0 ? "没有符合归类范围的任务" : "未发现可安全归类的项"
+    }
+
+    var detail: String {
+        var parts: [String] = []
+        if let eligibleSessions {
+            parts.append("已检查 \(analyzedSessions ?? 0)/\(eligibleSessions) 个工作会话")
+            if let skippedManualSessions, skippedManualSessions > 0 { parts.append("跳过 \(skippedManualSessions) 个人工任务会话") }
+            if let skippedSessions, skippedSessions > 0 { parts.append("排除 \(skippedSessions) 个归档/私聊/系统记录或无正文会话") }
+            if let unassignedSessions, !unassignedSessions.isEmpty { parts.append("\(unassignedSessions.count) 个会话未确定主题") }
+            if let first = refused.first { parts.append(first.reason) }
+            if let error { parts.append(error) }
+            return parts.joined(separator: "；")
+        }
+        if let eligibleTasks { parts.append("已检查 \(eligibleTasks) 个任务") }
+        if let skippedTasks, skippedTasks > 0 { parts.append("已跳过 \(skippedTasks) 个用户自定标题的任务") }
+        if let first = refused.first {
+            let hasChanges = !movedSessions.isEmpty || categorizedTasks?.isEmpty == false
+            parts.append(hasChanges ? "另有 \(refused.count) 项未处理：\(first.reason)" : first.reason)
+        }
+        return parts.joined(separator: "；")
+    }
+}
+
 // MARK: - 派发 Agent 配置
 
 /**
@@ -69,6 +184,8 @@ struct WandBoardTaskAgent: Codable, Equatable {
     var thinkingEffort: String
     var mode: String
     var kind: String
+    var engine: String?
+    var toolKey: String { provider + ":" + (engine ?? "cli") }
 
     static let `default` = WandBoardTaskAgent(
         provider: "claude",
@@ -83,16 +200,18 @@ struct WandBoardTaskAgent: Codable, Equatable {
         model: String,
         thinkingEffort: String,
         mode: String = "default",
-        kind: String = "structured"
+        kind: String = "structured",
+        engine: String? = nil
     ) {
         self.provider = provider
         self.model = model
         self.thinkingEffort = thinkingEffort
         self.mode = WandBoardAgentMode.normalize(provider: provider, value: mode)
         self.kind = WandBoardAgentKind.normalize(kind)
+        self.engine = engine
     }
 
-    private enum CodingKeys: String, CodingKey { case provider, model, thinkingEffort, mode, kind }
+    private enum CodingKeys: String, CodingKey { case provider, model, thinkingEffort, mode, kind, engine }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -102,7 +221,8 @@ struct WandBoardTaskAgent: Codable, Equatable {
             model: (try? container.decode(String.self, forKey: .model)) ?? "default",
             thinkingEffort: (try? container.decode(String.self, forKey: .thinkingEffort)) ?? "off",
             mode: (try? container.decode(String.self, forKey: .mode)) ?? "default",
-            kind: (try? container.decode(String.self, forKey: .kind)) ?? "structured"
+            kind: (try? container.decode(String.self, forKey: .kind)) ?? "structured",
+            engine: try? container.decodeIfPresent(String.self, forKey: .engine)
         )
     }
 
@@ -113,18 +233,21 @@ struct WandBoardTaskAgent: Codable, Equatable {
             model: model,
             thinkingEffort: thinkingEffort,
             mode: WandBoardAgentMode.normalize(provider: provider, value: mode),
-            kind: kind
+            kind: kind,
+            engine: provider == self.provider ? engine : nil
         )
     }
 
     func jsonObject() -> [String: Any] {
-        [
+        var object: [String: Any] = [
             "provider": provider,
             "model": model,
             "thinkingEffort": thinkingEffort,
             "mode": mode,
             "kind": kind,
         ]
+        if let engine { object["engine"] = engine }
+        return object
     }
 }
 
@@ -194,6 +317,7 @@ struct WandBoardWorkspace: Codable, Equatable, Identifiable {
 struct WandBoardTaskSession: Codable, Equatable, Identifiable {
     let id: String
     let provider: String
+    let engine: String?
     let sessionKind: String
     let title: String
     let status: String
@@ -205,11 +329,13 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
 
     var isStructured: Bool { sessionKind != "pty" && sessionKind != "shell" }
     var isRunning: Bool { status == "running" }
+    var toolEngine: String { engine == "core" || engine == "sdk" ? "sdk" : "cli" }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = (try? container.decode(String.self, forKey: .id)) ?? ""
         provider = (try? container.decode(String.self, forKey: .provider)) ?? ""
+        engine = try? container.decodeIfPresent(String.self, forKey: .engine)
         sessionKind = (try? container.decode(String.self, forKey: .sessionKind)) ?? ""
         title = (try? container.decode(String.self, forKey: .title)) ?? id
         status = (try? container.decode(String.self, forKey: .status)) ?? ""
@@ -220,7 +346,7 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, provider, sessionKind, title, status, cwd, model, thinkingEffort, mode
+        case id, provider, engine, sessionKind, title, status, cwd, model, thinkingEffort, mode
     }
 }
 
@@ -262,7 +388,7 @@ struct WandBoardDispatchResult: Decodable {
 
 struct WandBoardTask: Decodable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
-        case id, workspaceId, workspaceTaskId, identifier, title, titleSource, description, status, priority
+        case id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
         case labels, dueDate, milestoneId, milestone, sortOrder, agent, createdAt, updatedAt
         case sessionIds, sessions, workspace
     }
@@ -271,6 +397,8 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
     let workspaceId: String?
     /// 关联的侧栏工作任务 id；拖拽会话入卡与「移动到其它任务」用它。
     let workspaceTaskId: String?
+    /// 看板卡片 ID（不是侧栏 workspaceTaskId）；归类只写这个关系，不删除子任务。
+    let parentTaskId: String?
     let identifier: String
     let title: String
     /// "auto" = 标题由服务端按描述自动生成；老服务端不返回时按用户手写处理。
@@ -295,6 +423,8 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         id = try container.decode(String.self, forKey: .id)
         workspaceId = try? container.decodeIfPresent(String.self, forKey: .workspaceId)
         workspaceTaskId = try? container.decodeIfPresent(String.self, forKey: .workspaceTaskId)
+        let parent = try? container.decodeIfPresent(String.self, forKey: .parentTaskId)
+        parentTaskId = parent?.isEmpty == false ? parent : nil
         identifier = (try? container.decode(String.self, forKey: .identifier)) ?? ""
         title = (try? container.decode(String.self, forKey: .title)) ?? "任务"
         titleSource = (try? container.decode(String.self, forKey: .titleSource)) ?? "user"
@@ -315,6 +445,16 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
             .filter { !$0.id.isEmpty }
         workspace = try? container.decodeIfPresent(WandBoardWorkspace.self, forKey: .workspace)
     }
+}
+
+/// 使用未筛选的同一份看板列表投影关系，筛选掉父任务时也不会丢失归属提示。
+func wandBoardParent(of task: WandBoardTask, in tasks: [WandBoardTask]) -> WandBoardTask? {
+    guard let id = task.parentTaskId, id != task.id else { return nil }
+    return tasks.first { $0.id == id }
+}
+
+func wandBoardChildren(of task: WandBoardTask, in tasks: [WandBoardTask]) -> [WandBoardTask] {
+    tasks.filter { $0.id != task.id && $0.parentTaskId == task.id }
 }
 
 // MARK: - 状态与优先级
@@ -534,11 +674,11 @@ func wandBoardLabelColor(_ label: String) -> Color {
 let wandBoardProviders = WandProvider.allCases.map(\.rawValue)
 let wandBoardEfforts = ["off", "standard", "deep", "max"]
 
-func wandBoardProviderLabel(_ provider: String) -> String {
+func wandBoardProviderLabel(_ provider: String, engine: String? = nil) -> String {
     switch provider {
     case "session", "shell": return "终端"
     case "": return "Agent"
-    default: return WandProvider.title(for: provider)
+    default: return WandProvider.title(for: provider, engine: engine)
     }
 }
 
@@ -617,7 +757,7 @@ func wandBoardDropDispatchPrompt(title: String, description: String) -> String {
 // MARK: - 会话分组
 
 struct WandBoardAgentGroup: Identifiable, Equatable {
-    var id: String { provider }
+    var id: String { agent?.toolKey ?? provider + ":cli" }
     let provider: String
     let agent: WandBoardTaskAgent?
     let sessions: [WandBoardTaskSession]
@@ -635,7 +775,7 @@ func wandBoardSessionGroups(
     var agents: [String: WandBoardTaskAgent] = [:]
     var grouped: [String: [WandBoardTaskSession]] = [:]
     func ensure(_ provider: String, _ agent: WandBoardTaskAgent?) {
-        let key = provider.isEmpty ? "session" : provider
+        let key = provider.isEmpty ? "session" : agent?.toolKey ?? (provider + ":cli")
         if !providers.contains(key) {
             providers.append(key)
             grouped[key] = []
@@ -654,15 +794,16 @@ func wandBoardSessionGroups(
                 model: session.model.isEmpty ? "default" : session.model,
                 thinkingEffort: session.thinkingEffort.isEmpty ? "off" : session.thinkingEffort,
                 mode: session.mode,
-                kind: session.sessionKind == "pty" ? "pty" : "structured"
+                kind: session.sessionKind == "pty" ? "pty" : "structured",
+                engine: session.toolEngine
             )
             : nil
-        let key = (agent?.provider ?? session.provider)
-        ensure(key, agent)
+        let key = session.provider.isEmpty ? "session" : agent?.toolKey ?? (session.provider + ":cli")
+        ensure(session.provider, agent)
         grouped[key, default: []].append(session)
     }
     return providers.map { key in
-        WandBoardAgentGroup(provider: key, agent: agents[key], sessions: grouped[key] ?? [])
+        WandBoardAgentGroup(provider: agents[key]?.provider ?? grouped[key]?.first.map { $0.provider.isEmpty ? "session" : $0.provider } ?? "session", agent: agents[key], sessions: grouped[key] ?? [])
     }
 }
 

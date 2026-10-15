@@ -49,7 +49,7 @@ struct SettingsView: View {
         let updateManager = updateManager ?? .shared
         let pane = initialPane.flatMap(SettingsPane.init(rawValue:)) ?? .employees
         _selectedPane = State(initialValue: pane)
-        _visitedPanes = State(initialValue: Set(pane.map { [$0] } ?? []))
+        _visitedPanes = State(initialValue: Set([pane]))
         _updateManager = ObservedObject(wrappedValue: updateManager)
         _betaServerDraft = State(initialValue: updateManager.betaServerAddress)
         self.loadServerVersion = loadServerVersion ?? {
@@ -201,8 +201,8 @@ struct SettingsView: View {
                 .padding(.leading, 12)
                 .accessibilityAddTraits(.isHeader)
             VStack(spacing: 0) {
-                ForEach(panes) { pane in
-                    if pane != panes.first {
+                ForEach(panes, id: \.id) { pane in
+                    if let firstPane = panes.first, pane != firstPane {
                         Divider().padding(.leading, 48)
                     }
                     Button {
@@ -235,7 +235,7 @@ struct SettingsView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(DesktopNavigationButtonStyle())
-                    .background(selectedPane == pane ? Theme.surfaceSoft : Color.clear, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                    .background(selectedPane == pane ? Theme.surfaceSoft : Color.clear, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
                     .focused($focusedPane, equals: pane)
                     .accessibilityIdentifier("settings-open-\(pane.rawValue)")
                     .sidebarPresence("settings-open-\(pane.rawValue)")
@@ -711,6 +711,8 @@ private struct SettingsEmployeeIdentities: View {
     @State private var discard = false
     @State private var needsAdmin = false
     @State private var adminPassword = ""
+    @State private var imDirty = false
+    @State private var imBusy = false
     private var selected: EmployeeContact? { employees.first { $0.id == selectedID } }
     private var dirty: Bool { name != savedName || avatar != savedAvatar }
     private var locked: Bool { selected?.systemKey != nil && PlushAvatarIdentity.fixedAsset(id: selectedID ?? "") == nil }
@@ -731,8 +733,8 @@ private struct SettingsEmployeeIdentities: View {
                     identityRow(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", subtitle: employee.duty)
                 }
             } else {
-                Button("返回员工列表") { if dirty { discard = true } else { selectedID = nil } }
-                    .buttonStyle(WandSecondaryButtonStyle()).disabled(busy).accessibilityIdentifier("settings-employee-directory")
+                Button("返回员工列表") { if dirty || imDirty { discard = true } else { selectedID = nil } }
+                    .buttonStyle(WandSecondaryButtonStyle()).disabled(busy || imBusy).accessibilityIdentifier("settings-employee-directory")
                 Text(selectedID == "user" ? "我的资料" : selected?.name ?? "员工").font(.system(size: 20, weight: .semibold))
                 Text(selectedID == "user" ? "消息署名与头像；只影响显示，不改变执行身份或权限。名字留空时显示「我」。" : "员工身份与群聊显示使用同一份资料。")
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
@@ -746,6 +748,13 @@ private struct SettingsEmployeeIdentities: View {
                             .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
                     }
                     if locked { Text("内置员工身份固定；保留其现有执行配置。").font(.system(size: 12)).foregroundColor(Theme.textSecondary) }
+                    if selectedID != "user" {
+                        Divider().padding(.vertical, 4)
+                        EmployeeImConfigEditor(api: api, employeeID: selected.id, onNeedsAdmin: { needsAdmin = true },
+                            onDirtyChange: { imDirty = $0 }, onBusyChange: { imBusy = $0 })
+                            .disabled(busy)
+                            .id(selected.id)
+                    }
                 }
                 Button { Task { await save() } } label: {
                     ZStack {
@@ -761,13 +770,13 @@ private struct SettingsEmployeeIdentities: View {
         .onChange(of: name) { _ in if !busy { result = nil } }
         .onChange(of: avatar) { _ in if !busy { result = nil } }
         .confirmationDialog("放弃尚未保存的修改？", isPresented: $discard, titleVisibility: .visible) {
-            Button("放弃修改", role: .destructive) { selectedID = nil }
+            Button("放弃修改", role: .destructive) { selectedID = nil; imDirty = false }
             Button("继续编辑", role: .cancel) {}
         }
     }
     private func identityRow(id: String, name: String, avatar: String, subtitle: String) -> some View {
         Button {
-            selectedID = id
+            selectedID = id; imDirty = false; imBusy = false
             let employee = employees.first { $0.id == id }
             self.name = id == "user" ? profile.name : employee?.name ?? ""
             self.avatar = id == "user" ? profile.avatar : employee?.avatar ?? ""

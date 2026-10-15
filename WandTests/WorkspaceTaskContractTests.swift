@@ -596,7 +596,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(draft.firstMessage, "  保留首页草稿\n以及第二行  ")
         XCTAssertEqual(draft.cwd, "/chosen/directory")
         XCTAssertEqual(draft.unboundCwd, "/chosen/directory")
-        XCTAssertEqual(draft.destination, "new")
+        XCTAssertEqual(draft.destination, "none")
         XCTAssertEqual(draft.provider, .pi)
         XCTAssertTrue(draft.providerWasEdited)
         XCTAssertEqual(draft.selectedModel, "chosen-model")
@@ -754,53 +754,35 @@ final class WorkspaceTaskContractTests: XCTestCase {
     }
 
     @MainActor
-    func testCreationPublishesReceiptAndNavigatesBeforeSlowFailingPreferences() async throws {
-        let preferencesStarted = expectation(description: "Preferences start only after navigation")
-        preferencesStarted.expectedFulfillmentCount = 2
-        let releasePreferences = DispatchSemaphore(value: 0)
-        defer { releasePreferences.signal(); releasePreferences.signal() }
-        let lock = NSLock()
-        var navigated = false
+    func testCreationPublishesReceiptWithoutWritingExecutionDefaults() async throws {
+        var posts: [String] = []
         let api = makeAPI { request in
+            posts.append(request.url?.path ?? "")
             switch request.url?.path {
             case "/api/tasks":
-                XCTAssertEqual(request.httpMethod, "POST", "No optional list GET can precede creation handoff")
                 return Data(#"{"id":"task-new","workspaceId":"global","name":"New task","status":"active","cwd":"/fixture"}"#.utf8)
             case "/api/structured-sessions":
                 let body = try Self.requestBody(request)
                 XCTAssertEqual(body["respondImmediately"] as? Bool, true)
                 XCTAssertEqual(body["workspaceTaskId"] as? String, "task-new")
                 return Data(#"{"id":"session-new","provider":"claude","status":"running","cwd":"/fixture","workspaceId":"global","workspaceTaskId":"task-new","structuredState":{"inFlight":true}}"#.utf8)
-            case "/api/settings/config":
-                XCTAssertTrue(lock.withLock { navigated })
-                preferencesStarted.fulfill()
-                XCTAssertEqual(releasePreferences.wait(timeout: .now() + 5), .success)
-                throw URLError(.notConnectedToInternet)
             default:
-                XCTFail("Unexpected optional blocking request")
+                XCTFail("Creation must not write employee or server defaults")
                 throw URLError(.unsupportedURL)
             }
         }
         let store = trackedStore(api: api, serverID: "handoff")
-        let draft = SessionCreationDraft(initialMessage: "fixture only")
-        backgroundDrafts.append(draft)
-        draft.loading = false
-        draft.cwd = "/fixture"
+        let draft = SessionCreationDraft(context: .init(startsNewTask: true), initialMessage: "fixture only")
+        draft.loading = false; draft.cwd = "/fixture"
+        var navigated = false
         await draft.create(api: api, workspaceStore: store) { snapshot in
             XCTAssertEqual(snapshot.id, "session-new")
-            XCTAssertFalse(draft.creating)
             XCTAssertEqual(draft.submissionPhase, .accepted)
-            XCTAssertEqual(store.taskGroups.first?.tasks.first?.id, "task-new")
-            XCTAssertEqual(store.taskGroups.first?.tasks.first?.sessions.first?.id, snapshot.id)
-            lock.withLock { navigated = true }
+            navigated = true
         }
-        XCTAssertTrue(lock.withLock { navigated })
+        XCTAssertTrue(navigated)
         XCTAssertEqual(draft.firstMessage, "")
-        // The draft's create() has returned while both optional writes can still fail.
-        releasePreferences.signal(); releasePreferences.signal()
-        await fulfillment(of: [preferencesStarted], timeout: 3)
-        XCTAssertNil(draft.errorMessage)
-        XCTAssertEqual(draft.submissionPhase, .accepted)
+        XCTAssertEqual(posts, ["/api/tasks", "/api/structured-sessions"])
     }
 
     @MainActor
@@ -820,7 +802,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
             return Data(#"{"id":"session-retry","status":"running","workspaceId":"global","workspaceTaskId":"task-kept"}"#.utf8)
         }
         let store = trackedStore(api: api, serverID: "retry")
-        let draft = SessionCreationDraft(initialMessage: "preserved fixture")
+        let draft = SessionCreationDraft(context: .init(startsNewTask: true), initialMessage: "preserved fixture")
         backgroundDrafts.append(draft)
         draft.loading = false; draft.cwd = "/fixture"
         await draft.create(api: api, workspaceStore: store) { _ in XCTFail("A rejected session must not navigate") }
@@ -878,6 +860,90 @@ final class WorkspaceTaskContractTests: XCTestCase {
             showTaskBoard: true, hasSelectedTask: false, hasSelectedSession: false))
         XCTAssertTrue(SessionCreationDraft.creationIsVisible(showCreation: true, showCommunications: false,
             showTaskBoard: false, hasSelectedTask: true, hasSelectedSession: false))
+    }
+
+    @MainActor
+    func testAcceptedTaskAndDirectoryDeletionImmediatelyUpdatesSidebarEvenIfRefreshFails() async throws {
+        for directory in [false, true] {
+            let groups = try searchGroups(), group = groups[0], task = group.tasks[0]
+            let data = try JSONEncoder().encode(groups)
+            let lock = NSLock()
+            var deleted = false
+            let api = makeAPI { request in
+                if request.httpMethod == "DELETE" {
+                    XCTAssertEqual(request.url?.path, directory ? "/api/workspaces/\(group.workspaceId)" : "/api/workspace-tasks/\(task.id)")
+                    if !directory { XCTAssertEqual(request.url?.query, "cascade=1") }
+                    lock.withLock { deleted = true }
+                    return Data("{}".utf8)
+                }
+                XCTAssertEqual(request.url?.path, "/api/tasks")
+                if lock.withLock({ deleted }) { throw URLError(.notConnectedToInternet) }
+                return data
+            }
+            let store = trackedStore(api: api, serverID: "deletion-receipt")
+            await store.loadTaskGroups()
+            if directory {
+                try await store.deleteWorkspace(workspaceId: group.workspaceId)
+                XCTAssertFalse(store.taskGroups.contains { $0.id == group.id })
+            } else {
+                try await store.deleteWorkspaceTask(workspaceId: task.workspaceId, taskId: task.id)
+                XCTAssertFalse(store.taskGroups.flatMap(\.tasks).contains { $0.id == task.id })
+                XCTAssertTrue(store.taskGroups.flatMap(\.tasks).contains { $0.id == group.tasks[1].id }, "Unrelated tasks remain")
+            }
+            await store.waitForTaskGroupsForTesting()
+            XCTAssertNotNil(store.taskGroupsError, "A failed read does not undo the accepted deletion")
+            XCTAssertFalse(store.taskGroups.flatMap(\.tasks).contains { $0.id == task.id })
+            XCTAssertTrue(store.taskGroups.contains { $0.id == groups[1].id }, "Unrelated directories remain")
+        }
+    }
+
+    @MainActor
+    func testPartialSessionDeletionRefreshesActualMembershipAndReportsFailure() async throws {
+        let groups = try searchGroups()
+        let lock = NSLock()
+        var listReads = 0
+        let api = makeAPI { request in
+            if request.url?.path == "/api/sessions/batch-delete" {
+                XCTAssertEqual(request.httpMethod, "POST")
+                let ids = try Self.requestBody(request)["sessionIds"] as? [String] ?? []
+                XCTAssertEqual(Set(ids), Set(["deleted", "failed"]))
+                return Data(#"{"ok":true,"deleted":1,"failed":["failed"]}"#.utf8)
+            }
+            XCTAssertEqual(request.url?.path, "/api/tasks")
+            lock.withLock { listReads += 1 }
+            return try JSONEncoder().encode(groups)
+        }
+        let store = trackedStore(api: api, serverID: "partial-deletion")
+        do {
+            try await store.deleteSessions(["deleted", "failed", "deleted", ""])
+            XCTFail("A partially successful response is not full success")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("已删除 1 个会话"))
+            XCTAssertTrue(error.localizedDescription.contains("1 个会话未删除"))
+        }
+        XCTAssertEqual(lock.withLock { listReads }, 1, "Refresh accepted deletions before reporting remaining failures")
+        XCTAssertEqual(store.taskGroups, groups)
+    }
+
+    @MainActor
+    func testRejectedTaskAndDirectoryDeletionPreservesSidebarMembership() async throws {
+        for directory in [false, true] {
+            let groups = try searchGroups(), group = groups[0], task = group.tasks[0]
+            let data = try JSONEncoder().encode(groups)
+            let api = makeAPI { request in
+                if request.httpMethod == "DELETE" { throw URLError(.noPermissionsToReadFile) }
+                return data
+            }
+            let store = trackedStore(api: api, serverID: "rejected-deletion")
+            await store.loadTaskGroups()
+            do {
+                if directory { try await store.deleteWorkspace(workspaceId: group.workspaceId) }
+                else { try await store.deleteWorkspaceTask(workspaceId: task.workspaceId, taskId: task.id) }
+                XCTFail("Rejected deletion must propagate to the confirmation owner's error UI")
+            } catch {
+                XCTAssertEqual(store.taskGroups, groups, "Do not optimistically remove rows on failure")
+            }
+        }
     }
 
     @MainActor
@@ -941,7 +1007,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
                 lock.withLock { sessionRequests += 1 }
                 return Data("accepted but response lost".utf8)
             }
-            let draft = SessionCreationDraft(initialMessage: "Do not replay this fixture")
+            let draft = SessionCreationDraft(context: .init(startsNewTask: true), initialMessage: "Do not replay this fixture")
             backgroundDrafts.append(draft)
             draft.loading = false; draft.cwd = "/fixture"
             await draft.create(api: api, workspaceStore: nil) { _ in XCTFail("Unknown identity must not be guessed") }
@@ -1071,6 +1137,94 @@ final class WorkspaceTaskContractTests: XCTestCase {
         testSessions.forEach { $0.invalidateAndCancel() }
         testSessions = []
         try await super.tearDown()
+    }
+
+    func testOrganizationAPIDefaultsAutoAndIncludesExplicitTarget() async throws {
+        let api = makeAPI { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/sessions/auto-organize")
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["mode"] as? String, "auto")
+            XCTAssertEqual(body["target"] as? [String: String], ["kind": "workspace", "workspaceId": "w1"])
+            XCTAssertEqual(body["action"] as? String, "preview")
+            return Self.organizationPreview
+        }
+        let response = try await api.prepareConversationOrganization(target: .workspace("w1"))
+        XCTAssertEqual(response.sessionCount, 1)
+        XCTAssertEqual(response.manualSessionCount, 2)
+        let all = makeAPI { request in
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["mode"] as? String, "all")
+            XCTAssertEqual(body["target"] as? [String: String], ["kind": "directory", "cwd": "/tmp/project"])
+            return Self.organizationPreview
+        }
+        _ = try await all.prepareConversationOrganization(target: .directory("/tmp/project"), mode: .all)
+    }
+
+    @MainActor
+    func testOrganizationActionKeepsResultAndClearsItWhenTargetChanges() async throws {
+        let api = makeAPI { request in
+            let body = try Self.requestBody(request)
+            return body["action"] as? String == "preview" ? Self.organizationPreview : Self.organizationComplete
+        }
+        let action = WandTaskOrganizationAction()
+        var refreshes = 0
+        await action.run(api: api, target: .all, mode: .auto) { refreshes += 1 }
+        XCTAssertFalse(action.busy)
+        XCTAssertEqual(refreshes, 0, "preview must not start model work or change tasks")
+        XCTAssertNotNil(action.preview)
+        XCTAssertNil(action.result)
+        action.confirm(api: api) { refreshes += 1 }
+        await action.waitForBackgroundWorkForTesting()
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(action.result?.label, "已新建 1 个任务、归入 1 个会话")
+        XCTAssertTrue(action.result?.detail.contains("跳过 2 个人工任务会话") == true)
+        action.reset()
+        XCTAssertNil(action.result)
+        XCTAssertNil(action.error)
+        await action.run(api: api, target: .workspace("new-target"), mode: .all) {}
+        action.confirm(api: api) {
+            refreshes += 1
+            action.reset() // 等待中的请求不能把旧范围的结果重新带回新范围。
+        }
+        await action.waitForBackgroundWorkForTesting()
+        XCTAssertFalse(action.busy)
+        XCTAssertEqual(refreshes, 2)
+        XCTAssertNil(action.result)
+    }
+
+    @MainActor
+    func testOrganizationActionShowsAPIFailureWithoutLosingRetryControls() async throws {
+        let api = makeAPI { _ in throw NSError(domain: "organization-test", code: 503) }
+        let action = WandTaskOrganizationAction()
+        var refreshed = false
+        await action.run(api: api, target: .all, mode: .auto) { refreshed = true }
+        XCTAssertFalse(action.busy)
+        XCTAssertFalse(refreshed)
+        XCTAssertNil(action.result)
+        XCTAssertNotNil(action.error)
+        XCTAssertEqual(action.label, "归类未完成")
+        action.reset()
+        XCTAssertEqual(action.label, "会话自动归类")
+    }
+
+    private static let organizationPreview = Data(#"{"kind":"preview","preview":{"token":"confirm-token","sessionCount":1,"manualSessionCount":2,"skippedSessionCount":0,"existingTaskCount":0,"contentCharacters":100,"estimatedModelRequests":1,"unchanged":false}}"#.utf8)
+    private static let organizationComplete = Data(#"{"kind":"job","job":{"id":"job-1","status":"completed","stage":"完成","processedSessions":1,"totalSessions":1,"modelRequests":1,"logSessionId":"log-1","result":{"eligibleSessions":1,"analyzedSessions":1,"skippedManualSessions":2,"skippedSessions":0,"createdTasks":[{"taskId":"new-task"}],"reusedTasks":[],"updatedTasks":[],"movedSessions":[{"sessionId":"s1"}],"unassignedSessions":[],"refused":[]}}}"#.utf8)
+
+    func testOrganizationUnknownStartQueriesSameReceiptWithoutAnotherPost() async throws {
+        var posts = 0
+        let api = makeAPI { request in
+            if request.httpMethod == "POST" {
+                posts += 1
+                XCTAssertEqual(try Self.requestBody(request)["token"] as? String, "confirm-token")
+                throw NSError(domain: "unknown-receipt", code: 503)
+            }
+            XCTAssertEqual(request.url?.path, "/api/sessions/auto-organize/by-token/confirm-token")
+            return Self.organizationComplete
+        }
+        let accepted = try await api.startConversationOrganization(token: "confirm-token")
+        XCTAssertEqual(accepted.id, "job-1")
+        XCTAssertEqual(posts, 1)
     }
 
     private func makeAPI(handler: @escaping (URLRequest) throws -> Data) -> WandAPI {

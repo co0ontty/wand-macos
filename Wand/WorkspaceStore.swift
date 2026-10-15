@@ -215,6 +215,16 @@ final class WorkspaceStore: ObservableObject {
     /// 级联删除项目（任务、会话与独立 worktree 一并清理），并清理本地状态。
     func deleteWorkspace(workspaceId: String) async throws {
         try await api.deleteWorkspace(workspaceId: workspaceId)
+        // Commit the accepted deletion to the sidebar projection before any refresh.
+        // In-flight pre-deletion reads must not resurrect these rows.
+        invalidateTaskGroupsAfterReceipt()
+        taskGroups = taskGroups.filter { $0.workspaceId != workspaceId }.map { group in
+            TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
+                tasks: group.tasks.filter { $0.workspaceId != workspaceId },
+                standaloneSessions: group.standaloneSessions, global: group.global)
+        }
+        _ = startTaskGroupsRefresh(force: true)
         workspaces.removeAll { $0.id == workspaceId }
         tasksByWorkspace[workspaceId] = nil
         standaloneSessions[workspaceId] = nil
@@ -460,6 +470,13 @@ final class WorkspaceStore: ObservableObject {
 
     func deleteWorkspaceTask(workspaceId: String, taskId: String) async throws {
         try await api.deleteWorkspaceTask(taskId: taskId)
+        invalidateTaskGroupsAfterReceipt()
+        taskGroups = taskGroups.map { group in
+            TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
+                tasks: group.tasks.filter { $0.id != taskId }, standaloneSessions: group.standaloneSessions, global: group.global)
+        }
+        _ = startTaskGroupsRefresh(force: true)
         if var list = tasksByWorkspace[workspaceId] {
             list.removeAll { $0.id == taskId }
             tasksByWorkspace[workspaceId] = list
@@ -467,14 +484,23 @@ final class WorkspaceStore: ObservableObject {
         if currentTask?.id == taskId {
             currentTask = nil
             taskState = .idle
+            visibleSessionID = nil
+            visibleSnapshot = nil
         }
     }
 
     func deleteSessions(_ sessionIds: [String]) async throws {
-        _ = try await api.deleteWorkspaceSessions(sessionIds: sessionIds)
+        let ids = Array(Set(sessionIds.filter { !$0.isEmpty }))
+        guard !ids.isEmpty else { return }
+        let deleted = try await api.deleteWorkspaceSessions(sessionIds: ids)
+        invalidateTaskGroupsAfterReceipt()
         await loadTaskGroups(force: true)
         if let workspace = currentWorkspace, let task = currentTask {
             await openTask(workspace: workspace, task: task, preferredSessionId: visibleSessionID)
+        }
+        if deleted < ids.count {
+            throw NSError(domain: "Wand", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "已删除 \(deleted) 个会话；另有 \(ids.count - deleted) 个会话未删除，请重试。"])
         }
     }
 

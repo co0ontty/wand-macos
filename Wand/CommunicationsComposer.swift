@@ -72,7 +72,7 @@ final class ConversationComposerState: ObservableObject {
     /// A second paste must not release an upload or message already in flight.
     func reportAttachmentBlocked(_ message: String) { feedback = message }
 
-    func submit(ledger: ConversationRequestLedger) async -> ConversationReceipt? {
+    func submit(ledger: ConversationRequestLedger, executionPreference: EmployeeExecutionCandidate? = nil) async -> ConversationReceipt? {
         guard canSubmit else { return nil }
         guard text.utf16.count <= 256_000 else { phase = .rejected("消息不能超过 256000 个字符。"); feedback = "消息过长，尚未发送。"; return nil }
         let capturedText = text, capturedFiles = attachments, capturedCwd = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -82,6 +82,7 @@ final class ConversationComposerState: ObservableObject {
         var body: [String: Any] = ["input": buildAttachmentPrompt(capturedFiles, body: capturedText),
                                    "target": scope.target.map { $0.body as Any } ?? NSNull()]
         if !capturedCwd.isEmpty { body["cwd"] = capturedCwd }
+        if let executionPreference { body["executionPreference"] = executionPreference.executionPreferenceBody }
         do {
             let receipt = try await ledger.perform(
                 path: "/api/conversations/\(Self.encode(scope.conversationID))/messages",
