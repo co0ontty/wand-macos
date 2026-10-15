@@ -9,10 +9,29 @@ protocol CommunicationsServing: AnyObject {
     func conversationReceipt(requestID: String) async throws -> ConversationReceipt
     func postConversation(path: String, body: [String: Any]) async throws -> ConversationReceipt
     func communicationsDefaultCwd() async throws -> String
+    func communicationsModels() async throws -> ModelsResponse?
+    func communicationsUserProfile() async throws -> NativeUserProfile
     func uploadAttachments(id: String, urls: [URL]) async throws -> [UploadedFile]
 }
 
+extension CommunicationsServing {
+    func communicationsModels() async throws -> ModelsResponse? { nil }
+    func communicationsUserProfile() async throws -> NativeUserProfile { NativeUserProfile() }
+}
+
 extension WandAPI: CommunicationsServing {
+    func communicationsUserProfile() async throws -> NativeUserProfile { try await serverConfig().userProfile ?? NativeUserProfile() }
+    func saveUserProfile(_ profile: NativeUserProfile) async throws -> NativeUserProfile {
+        struct Response: Decodable { let config: ServerConfigInfo }
+        return try await request(Response.self, method: "POST", path: "/api/settings/config",
+            body: ["userProfile": ["name": profile.name, "avatar": profile.avatar]]).config.userProfile ?? NativeUserProfile()
+    }
+    func saveEmployeeIdentity(id: String, name: String, avatar: String) async throws -> EmployeeContact {
+        var body: [String: Any] = ["name": name]
+        if PlushAvatarIdentity.fixedAsset(id: id) == nil { body["avatar"] = avatar }
+        return try await request(EmployeeContact.self, method: "PUT", path: "/api/silicon-employees/\(percentEncodePathComponent(id))", body: body)
+    }
+    func communicationsModels() async throws -> ModelsResponse? { try await models() }
     func employeeContacts() async throws -> [EmployeeContact] {
         struct Response: Decodable { let employees: [EmployeeContact] }
         return try await request(Response.self, method: "GET", path: "/api/silicon-employees?includeArchived=1").employees

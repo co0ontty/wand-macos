@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D610000000000000000000A5 /* DesktopExecutionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B5 /* DesktopExecutionProgress.swift */; };
+		D610000000000000000000A4 /* DesktopActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B4 /* DesktopActivityTests.swift */; };
+		D610000000000000000000A3 /* DesktopActivitySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B3 /* DesktopActivitySurface.swift */; };
+		D610000000000000000000A2 /* DesktopActivityMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B2 /* DesktopActivityMonitor.swift */; };
+		D610000000000000000000A1 /* DesktopActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B1 /* DesktopActivity.swift */; };
+		C9000000000000000000A107 /* SettingsLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B107 /* SettingsLayoutTests.swift */; };
 		C9000000000000000000A00B /* ChatContentLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B00B /* ChatContentLayout.swift */; };
 		C9000000000000000000A106 /* ChatContentWidthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B106 /* ChatContentWidthTests.swift */; };
 		C9000000000000000000A00A /* NativeAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9000000000000000000B00A /* NativeAcceptance.swift */; };
@@ -41,6 +47,8 @@
 		A200000000000000000000A3 /* WandSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B3 /* WandSocket.swift */; };
 		A200000000000000000000A4 /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B4 /* ChatStore.swift */; };
 		A200000000000000000000A5 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B5 /* ChatView.swift */; };
+		F7000000000000000000A001 /* ChatImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7000000000000000000B001 /* ChatImagePreview.swift */; };
+		F7000000000000000000A101 /* ChatImagePreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7000000000000000000B101 /* ChatImagePreviewTests.swift */; };
 		A200000000000000000000A7 /* NewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B7 /* NewSessionView.swift */; };
 		A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B9 /* GitQuickCommitView.swift */; };
 		A200000000000000000000AA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BA /* SettingsView.swift */; };
@@ -97,6 +105,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D610000000000000000000B5 /* DesktopExecutionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopExecutionProgress.swift; sourceTree = "<group>"; };
+		D610000000000000000000B4 /* DesktopActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActivityTests.swift; sourceTree = "<group>"; };
+		D610000000000000000000B3 /* DesktopActivitySurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActivitySurface.swift; sourceTree = "<group>"; };
+		D610000000000000000000B2 /* DesktopActivityMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActivityMonitor.swift; sourceTree = "<group>"; };
+		D610000000000000000000B1 /* DesktopActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActivity.swift; sourceTree = "<group>"; };
+		C9000000000000000000B107 /* SettingsLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLayoutTests.swift; sourceTree = "<group>"; };
 		C9000000000000000000B00B /* ChatContentLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContentLayout.swift; sourceTree = "<group>"; };
 		C9000000000000000000B106 /* ChatContentWidthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatContentWidthTests.swift; sourceTree = "<group>"; };
 		C9000000000000000000B00A /* NativeAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAcceptance.swift; sourceTree = "<group>"; };
@@ -130,6 +144,8 @@
 		A200000000000000000000B3 /* WandSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WandSocket.swift; sourceTree = "<group>"; };
 		A200000000000000000000B4 /* ChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
 		A200000000000000000000B5 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		F7000000000000000000B001 /* ChatImagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatImagePreview.swift; sourceTree = "<group>"; };
+		F7000000000000000000B101 /* ChatImagePreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatImagePreviewTests.swift; sourceTree = "<group>"; };
 		A200000000000000000000B7 /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
 		A200000000000000000000B9 /* GitQuickCommitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitQuickCommitView.swift; sourceTree = "<group>"; };
 		A200000000000000000000BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -213,6 +229,10 @@
 		A1000000000000000000F500 /* Wand */ = {
 			isa = PBXGroup;
 			children = (
+				D610000000000000000000B3 /* DesktopActivitySurface.swift */,
+				D610000000000000000000B2 /* DesktopActivityMonitor.swift */,
+				D610000000000000000000B1 /* DesktopActivity.swift */,
+				D610000000000000000000B5 /* DesktopExecutionProgress.swift */,
 				A100000000000000000000B1 /* App.swift */,
 				D7000000000000000000B005 /* SessionSidebarView.swift */,
 				D7000000000000000000B002 /* DesktopWelcomeView.swift */,
@@ -240,6 +260,7 @@
 				D800000000000000000000B2 /* PtyTerminalStore.swift */,
 				A200000000000000000000B4 /* ChatStore.swift */,
 				A200000000000000000000B5 /* ChatView.swift */,
+				F7000000000000000000B001 /* ChatImagePreview.swift */,
 				C9000000000000000000B00B /* ChatContentLayout.swift */,
 				A200000000000000000000B7 /* NewSessionView.swift */,
 				A200000000000000000000B9 /* GitQuickCommitView.swift */,
@@ -289,6 +310,7 @@
 		E5000000000000000000F500 /* WandTests */ = {
 			isa = PBXGroup;
 			children = (
+				D610000000000000000000B4 /* DesktopActivityTests.swift */,
 				E500000000000000000000B1 /* MacUpdateManagerTests.swift */,
 				E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */,
 				E500000000000000000000B4 /* TaskBoardTests.swift */,
@@ -304,6 +326,8 @@
 				C9000000000000000000B104 /* CommunicationsLiveTests.swift */,
 				C9000000000000000000B105 /* AvatarComposerParityTests.swift */,
 				C9000000000000000000B106 /* ChatContentWidthTests.swift */,
+				C9000000000000000000B107 /* SettingsLayoutTests.swift */,
+				F7000000000000000000B101 /* ChatImagePreviewTests.swift */,
 				D800000000000000000000B4 /* NativeTerminalTests.swift */,
 			);
 			path = WandTests;
@@ -417,6 +441,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D610000000000000000000A3 /* DesktopActivitySurface.swift in Sources */,
+				D610000000000000000000A2 /* DesktopActivityMonitor.swift in Sources */,
+				D610000000000000000000A1 /* DesktopActivity.swift in Sources */,
+				D610000000000000000000A5 /* DesktopExecutionProgress.swift in Sources */,
 				A100000000000000000000A1 /* App.swift in Sources */,
 				D7000000000000000000A005 /* SessionSidebarView.swift in Sources */,
 				D7000000000000000000A002 /* DesktopWelcomeView.swift in Sources */,
@@ -443,6 +471,7 @@
 				D800000000000000000000A2 /* PtyTerminalStore.swift in Sources */,
 				A200000000000000000000A4 /* ChatStore.swift in Sources */,
 				A200000000000000000000A5 /* ChatView.swift in Sources */,
+				F7000000000000000000A001 /* ChatImagePreview.swift in Sources */,
 				C9000000000000000000A00B /* ChatContentLayout.swift in Sources */,
 				A200000000000000000000A7 /* NewSessionView.swift in Sources */,
 				A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */,
@@ -480,6 +509,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D610000000000000000000A4 /* DesktopActivityTests.swift in Sources */,
 				E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */,
 				E500000000000000000000A3 /* WorkspaceTaskContractTests.swift in Sources */,
 				E500000000000000000000A4 /* TaskBoardTests.swift in Sources */,
@@ -495,6 +525,8 @@
 				C9000000000000000000A104 /* CommunicationsLiveTests.swift in Sources */,
 				C9000000000000000000A105 /* AvatarComposerParityTests.swift in Sources */,
 				C9000000000000000000A106 /* ChatContentWidthTests.swift in Sources */,
+				C9000000000000000000A107 /* SettingsLayoutTests.swift in Sources */,
+				F7000000000000000000A101 /* ChatImagePreviewTests.swift in Sources */,
 				D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

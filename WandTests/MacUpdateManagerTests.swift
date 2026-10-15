@@ -3,6 +3,12 @@ import Foundation
 import XCTest
 @testable import Wand
 
+private final class UpdateChallengeSender: NSObject, URLAuthenticationChallengeSender {
+    func use(_ credential: URLCredential, for challenge: URLAuthenticationChallenge) {}
+    func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
+    func cancel(_ challenge: URLAuthenticationChallenge) {}
+}
+
 @MainActor
 final class MacUpdateManagerTests: XCTestCase {
     private let testUpdatesDirectory = FileManager.default.temporaryDirectory
@@ -159,6 +165,248 @@ final class MacUpdateManagerTests: XCTestCase {
         link = "/macos/update-download?fileName=wand-v2.0.0.zip"
         guard case .failed = await manager.check(.manual) else { return XCTFail("missing hash must fail") }
     }
+
+    func testCustomBetaAddressIsNormalizedPersistedAndDoesNotChangeStable() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let connected = URL(string: "https://connected.example.test:8443")!
+        var stableRequests = 0, betaRequests = 0
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            dataLoader: { request in
+                stableRequests += 1
+                XCTAssertEqual(request.url?.host, "api.github.com")
+                return Self.response(for: request, body: Self.installableRelease)
+            },
+            betaDataLoader: { request in betaRequests += 1; return Self.response(for: request, body: Self.installableBeta) },
+            connectedServer: { connected }
+        )
+        XCTAssertEqual(manager.betaServerURL, connected)
+        XCTAssertFalse(manager.betaUsesCustomServer)
+        let saved = try await manager.setBetaServerAddress("  HTTPS://Updates.Example.Test:443/\n")
+        XCTAssertNil(saved)
+        XCTAssertEqual(manager.betaServerAddress, "https://updates.example.test")
+        XCTAssertEqual(manager.betaServerURL?.host, "updates.example.test")
+        XCTAssertEqual(stableRequests, 0)
+        XCTAssertEqual(betaRequests, 0)
+        _ = await manager.check(.manual)
+        XCTAssertEqual(stableRequests, 1)
+        XCTAssertEqual(betaRequests, 0)
+        XCTAssertEqual(manager.availableUpdate?.channel, .stable)
+
+        let restored = MacUpdateManager(defaults: defaults, updatesDirectory: testUpdatesDirectory, connectedServer: { connected })
+        XCTAssertEqual(restored.betaServerAddress, manager.betaServerAddress)
+        XCTAssertTrue(restored.betaUsesCustomServer)
+        _ = try await restored.setBetaServerAddress(" \n ")
+        XCTAssertEqual(restored.betaServerURL, connected)
+        XCTAssertFalse(restored.betaUsesCustomServer)
+        XCTAssertNil(defaults.object(forKey: "wand.macUpdate.beta.customServerURL"))
+    }
+
+    func testBetaAddressRejectsInvalidInputBeforeChangingTheSource() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let manager = MacUpdateManager(defaults: defaults, updatesDirectory: testUpdatesDirectory)
+        _ = try await manager.setBetaServerAddress("https://updates.example.test:8443")
+        for address in [
+            "updates.example.test", "file:///tmp/update", "ftp://updates.example.test",
+            "https://user:password@updates.example.test", "https://@updates.example.test",
+            "https://updates.example.test/path", "https://updates.example.test?token=private",
+            "https://updates.example.test#fragment", "https://updates.example.test:0",
+            "http://updates.example.test:65536", "https://up dates.example.test"
+        ] {
+            do {
+                _ = try await manager.setBetaServerAddress(address)
+                XCTFail("Expected invalid update server address to be rejected")
+            } catch {
+                XCTAssertFalse(error.localizedDescription.contains(address), "Validation must not echo potentially sensitive input")
+            }
+            XCTAssertEqual(manager.betaServerAddress, "https://updates.example.test:8443")
+        }
+        XCTAssertEqual(try MacUpdateManager.normalizedBetaServerAddress("http://[::1]:8181/"), "http://[::1]:8181")
+    }
+
+    func testCustomBetaUsesOnlySelectedServerWithoutConnectionOrFallback() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set("beta", forKey: "wand.macUpdate.channel")
+        var connected: URL? = URL(string: "https://connected.example.test")!
+        var requested: [URLRequest] = []
+        var fails = false
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            dataLoader: { _ in XCTFail("Custom Beta must never request GitHub"); throw URLError(.badURL) },
+            betaDataLoader: { request in
+                requested.append(request)
+                if fails { throw URLError(.notConnectedToInternet) }
+                return Self.response(for: request, body: Self.installableBeta)
+            },
+            connectedServer: { connected }
+        )
+        _ = try await manager.setBetaServerAddress("http://custom.example.test:8181")
+        XCTAssertEqual(manager.availableUpdate?.releaseURL, manager.betaServerURL)
+        XCTAssertEqual(manager.availableUpdate?.preferredAsset?.downloadURL.host, "custom.example.test")
+        XCTAssertEqual(manager.availableUpdate?.preferredAsset?.sha256, String(repeating: "a", count: 64))
+        XCTAssertEqual(requested.count, 1)
+        XCTAssertFalse(requested[0].httpShouldHandleCookies)
+        XCTAssertNil(requested[0].value(forHTTPHeaderField: "Cookie"))
+        XCTAssertNil(requested[0].value(forHTTPHeaderField: "Authorization"))
+        connected = nil
+        let throttled = await manager.check(.launch)
+        XCTAssertNil(throttled, "Disconnected chat must not invalidate a custom source or its check throttle")
+        XCTAssertEqual(requested.count, 1)
+        fails = true
+        guard case .failed = await manager.check(.manual) else { return XCTFail("Custom source failure must surface") }
+        XCTAssertTrue(requested.allSatisfy { $0.url?.host == "custom.example.test" })
+        XCTAssertEqual(manager.betaServerAddress, "http://custom.example.test:8181")
+        connected = URL(string: "https://connected.example.test")!
+        fails = false
+        _ = try await manager.setBetaServerAddress("")
+        XCTAssertEqual(requested.last?.url?.host, "connected.example.test")
+        XCTAssertEqual(manager.availableUpdate?.releaseURL, connected)
+    }
+
+    func testInvalidSavedCustomBetaAddressNeverFallsBackToConnectedServer() async {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set("beta", forKey: "wand.macUpdate.channel")
+        defaults.set("file:///tmp/old-update", forKey: "wand.macUpdate.beta.customServerURL")
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            betaDataLoader: { _ in XCTFail("Invalid custom source must not fall back"); throw URLError(.badURL) },
+            connectedServer: { URL(string: "https://connected.example.test") }
+        )
+        XCTAssertTrue(manager.betaUsesCustomServer)
+        XCTAssertNil(manager.betaServerURL)
+        guard case .failed = await manager.check(.manual) else { return XCTFail("Invalid persisted source must surface") }
+    }
+
+    func testCustomSourceChangeIgnoresLateMetadataAndClearsOldCheckThrottle() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set("beta", forKey: "wand.macUpdate.channel")
+        let firstStarted = expectation(description: "first source check started")
+        var continuation: CheckedContinuation<Void, Never>?
+        var requested: [String] = []
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            betaDataLoader: { request in
+                requested.append(request.url!.host!)
+                if request.url?.host == "first.example.test" {
+                    await withCheckedContinuation { continuation = $0; firstStarted.fulfill() }
+                }
+                return Self.response(for: request, body: Self.installableBeta)
+            },
+            connectedServer: { nil }
+        )
+        let first = Task { try await manager.setBetaServerAddress("https://first.example.test") }
+        await fulfillment(of: [firstStarted], timeout: 2)
+        _ = try await manager.setBetaServerAddress("https://second.example.test")
+        let secondState = manager.state
+        continuation?.resume()
+        let staleResult = try await first.value
+        XCTAssertNil(staleResult, "Superseded checks must not surface a reminder for the old source")
+        XCTAssertEqual(manager.state, secondState)
+        XCTAssertEqual(manager.availableUpdate?.releaseURL.host, "second.example.test")
+        XCTAssertEqual(defaults.string(forKey: "wand.macUpdate.beta.serverURL"), "https://second.example.test")
+        XCTAssertEqual(requested, ["first.example.test", "second.example.test"])
+    }
+
+    func testCustomSourceKeepsDownloadAcrossChatDisconnectAndRevokesItOnSourceChange() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        defaults.set("beta", forKey: "wand.macUpdate.channel")
+        var connected: URL? = URL(string: "https://connected.example.test")
+        var callbacks: [UpdateInstaller.ProgressHandler] = []
+        var cancellations = 0
+        let manager = MacUpdateManager(
+            defaults: defaults, updatesDirectory: testUpdatesDirectory,
+            currentVersion: { "1.0.0" },
+            betaDataLoader: { request in Self.response(for: request, body: Self.installableBeta) },
+            connectedServer: { connected },
+            startInstallation: { _, callback in callbacks.append(callback) },
+            cancelInstallation: { cancellations += 1 }
+        )
+        _ = try await manager.setBetaServerAddress("https://first.example.test")
+        XCTAssertNil(manager.installAvailableUpdate())
+        connected = nil
+        _ = await manager.check(.channelChanged)
+        XCTAssertTrue(manager.isInstalling)
+        XCTAssertEqual(cancellations, 0)
+        _ = try await manager.setBetaServerAddress("https://second.example.test")
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(manager.availableUpdate?.releaseURL.host, "second.example.test")
+        let state = manager.state
+        let staleApp = testUpdatesDirectory.appendingPathComponent("staging-old-custom/Wand.app")
+        try FileManager.default.createDirectory(at: staleApp, withIntermediateDirectories: true)
+        callbacks[0](.readyToRelaunch(stagedAppPath: staleApp.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleApp.path))
+        XCTAssertNil(manager.pendingInstall)
+        XCTAssertEqual(manager.state, state)
+    }
+
+    func testPreparedInstallRejectsCustomSourceEditsWithoutLosingTransaction() async throws {
+        let defaults = makeDefaults()
+        defer { clear(defaults) }
+        let manager = MacUpdateManager(defaults: defaults, updatesDirectory: testUpdatesDirectory)
+        _ = try await manager.setBetaServerAddress("https://first.example.test")
+        let app = testUpdatesDirectory.appendingPathComponent("staging-pending-source/Wand.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        manager.handleInstallerStage(.readyToRelaunch(stagedAppPath: app.path), update: makeUpdate(version: "99.0.0"))
+        let pending = try XCTUnwrap(manager.pendingInstall)
+        do {
+            _ = try await manager.setBetaServerAddress("https://second.example.test")
+            XCTFail("Prepared updates must keep their source and transaction")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("更新包已准备好"))
+        }
+        XCTAssertEqual(manager.pendingInstall, pending)
+        XCTAssertEqual(manager.betaServerAddress, "https://first.example.test")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: app.path))
+    }
+
+    func testBetaMetadataAndDownloadsRejectRedirectsAndCredentialsOffline() throws {
+        let configuration = BetaUpdateSession.configuration()
+        XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertNil(configuration.urlCredentialStorage)
+        XCTAssertNil(configuration.urlCache)
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertEqual(configuration.httpCookieAcceptPolicy, .never)
+        let source = URL(string: "https://updates.example.test:8443")!
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: source)
+        let metadata = BetaUpdateSession(serverURL: source)
+        let download = UpdateDownloadDelegate(fileExtension: "zip", trustedBetaServer: source, onProgress: { _, _ in }, onFinish: { _ in })
+        for target in [source, URL(string: "https://foreign.example.test")!] {
+            let redirect = HTTPURLResponse(url: source, statusCode: 302, httpVersion: nil, headerFields: ["Location": target.absoluteString])!
+            let request = URLRequest(url: target)
+            metadata.urlSession(session, task: task, willPerformHTTPRedirection: redirect, newRequest: request) { XCTAssertNil($0) }
+            download.urlSession(session, task: task, willPerformHTTPRedirection: redirect, newRequest: request) { XCTAssertNil($0) }
+            let challenge = URLAuthenticationChallenge(
+                protectionSpace: URLProtectionSpace(host: target.host!, port: target.port ?? 443, protocol: "https", realm: nil, authenticationMethod: NSURLAuthenticationMethodHTTPBasic),
+                proposedCredential: nil, previousFailureCount: 0, failureResponse: nil, error: nil,
+                sender: UpdateChallengeSender()
+            )
+            metadata.urlSession(session, task: task, didReceive: challenge) { disposition, credential in
+                XCTAssertEqual(disposition, .cancelAuthenticationChallenge)
+                XCTAssertNil(credential)
+            }
+            download.urlSession(session, task: task, didReceive: challenge) { disposition, credential in
+                XCTAssertEqual(disposition, .cancelAuthenticationChallenge)
+                XCTAssertNil(credential)
+            }
+        }
+    }
+
+    private static let installableBeta = """
+    {"updateAvailable":true,"latestVersion":"2.0.0","source":"local","channel":"beta",
+     "fileName":"wand-v2.0.0.zip","downloadUrl":"/macos/update-download?fileName=wand-v2.0.0.zip",
+     "size":42,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+    """
 
     func testFailedLaunchCheckDoesNotThrottleRetry() async {
         let defaults = makeDefaults()

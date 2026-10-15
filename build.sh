@@ -13,6 +13,15 @@
 
 set -euo pipefail
 
+# Local opt-in storage policy; unconfigured machines and CI retain normal paths.
+NATIVE_BUILD_ENV="${WAND_NATIVE_BUILD_ENV:-$HOME/.config/wand-build/environment.sh}"
+if [[ -f "$NATIVE_BUILD_ENV" ]]; then
+  source "$NATIVE_BUILD_ENV"
+elif [[ -n "${WAND_NATIVE_BUILD_ENV:-}" ]]; then
+  echo "Native build environment file not found: $NATIVE_BUILD_ENV" >&2
+  exit 1
+fi
+
 if [[ "$(uname)" != "Darwin" ]]; then
   echo "❌ build.sh 只能在 macOS 上运行（当前系统 $(uname)）" >&2
   exit 1
@@ -59,8 +68,18 @@ VERSION_CODE=$(echo "$VERSION" | awk -F. '{patch=$3; sub(/[-+].*/, "", patch); p
 cd "$(dirname "$0")"
 PROJECT_ROOT="$(pwd)"
 bash "$PROJECT_ROOT/scripts/ensure-metal-toolchain.sh"
-BUILD_DIR="${WAND_BUILD_DIR:-$PROJECT_ROOT/build}"
-DIST_DIR="${WAND_DIST_DIR:-$PROJECT_ROOT/dist}"
+DEFAULT_BUILD_DIR="$PROJECT_ROOT/build"
+DEFAULT_DIST_DIR="$PROJECT_ROOT/dist"
+if [[ -n "${WAND_BUILD_STORAGE_ROOT:-}" ]]; then
+  DEFAULT_BUILD_DIR="$WAND_BUILD_STORAGE_ROOT/macos/release/build"
+  DEFAULT_DIST_DIR="$WAND_BUILD_STORAGE_ROOT/macos/release/dist"
+fi
+BUILD_DIR="${WAND_BUILD_DIR:-$DEFAULT_BUILD_DIR}"
+DIST_DIR="${WAND_DIST_DIR:-$DEFAULT_DIST_DIR}"
+if type wand_assert_external_build_path >/dev/null 2>&1; then
+  wand_assert_external_build_path "$BUILD_DIR"
+  wand_assert_external_build_path "$DIST_DIR"
+fi
 # 续接/验收可用全新的隔离输出目录；不清空用户指定的已有目录。
 if [[ -n "${WAND_BUILD_DIR:-}" && ( "$BUILD_DIR" != /* || -e "$BUILD_DIR" ) ]] \
   || [[ -n "${WAND_DIST_DIR:-}" && ( "$DIST_DIR" != /* || -e "$DIST_DIR" ) ]]; then

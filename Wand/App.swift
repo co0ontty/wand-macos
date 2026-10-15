@@ -71,6 +71,8 @@ struct WandApp: App {
 }
 
 final class WandAppDelegate: NSObject, NSApplicationDelegate {
+    private var activitySurface: DesktopActivitySurface?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 测试宿主不得构造共享更新器：其启动恢复会清理真实用户的更新缓存。
         // 更新检查和安装事务由隔离目录、偏好与注入依赖的 XCTest 覆盖。
@@ -82,6 +84,9 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
 
         // helper 只有收到新版启动确认后才删除旧版备份；必须在其他启动任务前确认。
         let launchedAfterUpdate = MacUpdateManager.shared.completeLaunchedUpdateIfNeeded()
+
+        activitySurface = DesktopActivitySurface(monitor: .shared)
+        DesktopActivityMonitor.shared.start(store: .shared)
 
         // 等应用完成激活、主窗口可见后再触发；在 SwiftUI App.init 阶段访问网络时，
         // 系统权限 UI 还没有可靠的呈现上下文，新安装的 App 可能完全不弹框。
@@ -129,7 +134,13 @@ final class WandAppDelegate: NSObject, NSApplicationDelegate {
         acceptanceWindow = window
     }
 
-    func applicationWillTerminate(_ notification: Notification) { NativeAcceptance.cleanup() }
+    func applicationWillTerminate(_ notification: Notification) {
+        if !WandApp.isRunningTests && !NativeAcceptance.enabled {
+            DesktopActivityMonitor.shared.stop()
+            activitySurface?.close()
+        }
+        NativeAcceptance.cleanup()
+    }
 
     func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {
         false

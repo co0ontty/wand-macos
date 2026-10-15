@@ -5,28 +5,17 @@ import XCTest
 @testable import Wand
 
 /// provider 名单与归一规则必须与服务端 `src/provider-catalog.ts` 一致。
-/// 历史回归：macOS 曾另建一份只含 6 个 provider 的枚举，Gemini 整体缺失，
-/// 且未知值兜底成 Claude —— Gemini 会话在界面上被错标成 Claude。
 final class ProviderCatalogTests: XCTestCase {
     func testCatalogCoversEveryServerProvider() throws {
         XCTAssertEqual(
             WandProvider.allCases.map(\.rawValue),
-            ["claude", "codex", "opencode", "grok", "qoder", "pi", "gemini"]
+            ["claude", "codex", "opencode", "grok", "qoder", "pi"]
         )
     }
 
-    func testGeminiNormalizesFromServerAliasesAndKeepsItsRunner() throws {
-        for raw in ["gemini", "Gemini", " gemini-cli ", "gemini-cli-json"] {
-            XCTAssertEqual(WandProvider(normalizing: raw), .gemini, raw)
-            XCTAssertEqual(WandProvider.normalizedID(raw), "gemini", raw)
-        }
-        XCTAssertEqual(WandProvider.gemini.title, "Gemini")
-        XCTAssertEqual(WandProvider.gemini.structuredRunner, "gemini-cli-json")
-    }
 
     func testUnknownProviderIsNotDisguisedAsAKnownOne() throws {
         // 展示路径：认不出来的 provider 不得回落到 Claude 的名字。
-        XCTAssertEqual(WandProvider.title(for: "gemini"), "Gemini")
         XCTAssertEqual(WandProvider.title(for: "qoder"), "Qoder")
         XCTAssertEqual(WandProvider.title(for: "some-future-cli"), "some-future-cli")
         XCTAssertEqual(WandProvider.title(for: nil), "Claude")
@@ -36,32 +25,12 @@ final class ProviderCatalogTests: XCTestCase {
         XCTAssertEqual(WandProvider(normalizing: "some-future-cli"), .claude)
     }
 
-    func testGeminiIsDispatchableAsATaskTarget() throws {
-        XCTAssertEqual(WorkspaceSessionTarget(provider: .gemini), .gemini)
-        XCTAssertEqual(WorkspaceSessionTarget.gemini.provider, .gemini)
-        XCTAssertEqual(WorkspaceSessionTarget.gemini.title, "Gemini")
-    }
 
     /// 档位名单是跨端不变量：macOS / iOS / Web / Android 必须是同一份。
-    /// Gemini 走与 Web `getSupportedModes` 一样的兜底全量，不在客户端单方面收紧。
-    func testModeListsMatchTheCrossClientInvariant() throws {
-        func ids(_ provider: WandProvider) -> Set<String> {
-            Set(NewSessionView.ModeOption.supported(for: provider).map(\.apiValue))
-        }
-        // 与 iOS WandProvider.supportedModeIDs 逐项对齐。
-        XCTAssertEqual(ids(.codex), ["full-access"])
-        XCTAssertEqual(ids(.opencode), ["default", "full-access", "managed"])
-        XCTAssertEqual(ids(.grok), ["default", "full-access", "managed"])
-        XCTAssertEqual(ids(.pi), ["default", "full-access", "managed"])
-        XCTAssertEqual(ids(.qoder), ["default", "full-access", "auto-edit", "managed"])
-        XCTAssertEqual(ids(.claude), ["default", "full-access", "auto-edit", "native", "managed"])
-        XCTAssertEqual(ids(.gemini), ids(.claude))
-    }
 
-    func testBoardCatalogCannotLoseGeminiAndSnapshotLabelsKeepUnknownProviders() throws {
+    func testBoardCatalogSnapshotLabelsKeepUnknownProviders() throws {
         XCTAssertEqual(wandBoardProviders, WandProvider.allCases.map(\.rawValue))
-        XCTAssertEqual(wandBoardProviderLabel("gemini"), "Gemini")
-        for (provider, expected) in [("gemini", "Gemini"), ("future-cli", "future-cli")] {
+        for (provider, expected) in [("future-cli", "future-cli")] {
             let data = Data("{\"id\":\"test\",\"provider\":\"\(provider)\"}".utf8)
             let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: data)
             let summary = try JSONDecoder().decode(WorkspaceSessionSummary.self, from: data)
@@ -129,17 +98,16 @@ final class ProviderCatalogTests: XCTestCase {
         XCTAssertNil(store.snapshot?.teamStep)
         let catalog = try JSONDecoder().decode(ModelsResponse.self, from: Data("""
         {"models":[],"codexModels":[],"piModels":[{"id":"pi-model","label":"Pi Model"}],
-         "geminiModels":[{"id":"gemini-model","label":"Gemini Model"}],
-         "defaultModels":{"pi":"pi-model","gemini":"gemini-model"}}
+         "defaultModels":{"pi":"pi-model"}}
         """.utf8))
         store.modelCatalogForTesting(catalog)
         XCTAssertEqual(store.availableModels.map(\.id), ["pi-model"])
         try receive("""
-        {"type":"status","data":{"provider":"gemini","structuredState":{"engine":"cli"}}}
+        {"type":"status","data":{"provider":"pi","structuredState":{"engine":"cli"}}}
         """)
-        XCTAssertEqual(store.snapshot?.providerLabel, "Gemini")
-        XCTAssertEqual(store.availableModels.map(\.id), ["gemini-model"])
-        XCTAssertEqual(store.defaultModel, "gemini-model")
+        XCTAssertEqual(store.snapshot?.providerLabel, "Pi")
+        XCTAssertEqual(store.availableModels.map(\.id), ["pi-model"])
+        XCTAssertEqual(store.defaultModel, "pi-model")
     }
 
     @MainActor
@@ -204,27 +172,11 @@ final class ProviderCatalogTests: XCTestCase {
         }
     }
 
-    func testGeminiModelsComeFromItsOwnCatalogNotClauses() throws {
-        // 回归：Gemini 曾经落到 default 分支，显示 Claude 的模型列表和默认模型。
-        let payload = """
-        {
-          "models": [{ "id": "claude-model", "label": "Claude Model" }],
-          "codexModels": [],
-          "geminiModels": [{ "id": "gemini-model", "label": "Gemini Model" }],
-          "defaultModels": { "gemini": "gemini-model" }
-        }
-        """
-        let decoded = try JSONDecoder().decode(ModelsResponse.self, from: Data(payload.utf8))
-        XCTAssertEqual(decoded.models(for: "gemini").map(\.id), ["gemini-model"])
-        XCTAssertEqual(decoded.models(for: "claude").map(\.id), ["claude-model"])
-        XCTAssertEqual(decoded.defaultModelId(for: "gemini"), "gemini-model")
-    }
 
     func testLogosNormalizeAliasesWithoutGivingUnknownToolsAClaudeMark() {
         let rect = CGRect(x: 0, y: 0, width: 24, height: 24)
         XCTAssertTrue(BrandLogoShape(provider: "future-cli").path(in: rect).isEmpty)
         XCTAssertEqual(BrandLogoShape(provider: "pi-cli-json").path(in: rect), BrandLogoShape(provider: "pi").path(in: rect))
-        XCTAssertEqual(BrandLogoShape(provider: "gemini-cli-json").path(in: rect), BrandLogoShape(provider: "gemini").path(in: rect))
     }
 
     func testAliasListStillResolvesTheOlderProviders() throws {

@@ -134,6 +134,22 @@ final class DesktopLifecycleTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testSettingsPagePreventsLateCreationReceiptFromNavigating() {
+        let draft = SessionCreationDraft(initialMessage: "保留下一条消息")
+        for showCreation in [false, true] {
+            let visible = SessionCreationDraft.creationIsVisible(showCreation: showCreation,
+                showCommunications: false, showTaskBoard: false, hasSelectedTask: false, hasSelectedSession: false,
+                settingsPresented: true)
+            XCTAssertFalse(visible)
+            XCTAssertFalse(SessionCreationDraft.shouldOpenReceipt(originDraftID: draft.id, currentDraftID: draft.id,
+                creationVisible: visible))
+        }
+        XCTAssertEqual(draft.firstMessage, "保留下一条消息")
+        XCTAssertTrue(SessionCreationDraft.creationIsVisible(showCreation: true, showCommunications: false,
+            showTaskBoard: false, hasSelectedTask: false, hasSelectedSession: false, settingsPresented: false))
+    }
+
     private func withStore(_ body: (ServerStore, UserDefaults) -> Void) {
         let suite = "WandDesktopLifecycleTests-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!

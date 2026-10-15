@@ -3,6 +3,15 @@
 # 用法：DERIVED_DATA=/tmp/wand-macos-tests ./scripts/run-tests.sh [测试名过滤]
 set -euo pipefail
 
+# Local opt-in storage policy; unconfigured machines and CI retain normal paths.
+NATIVE_BUILD_ENV="${WAND_NATIVE_BUILD_ENV:-$HOME/.config/wand-build/environment.sh}"
+if [[ -f "$NATIVE_BUILD_ENV" ]]; then
+  source "$NATIVE_BUILD_ENV"
+elif [[ -n "${WAND_NATIVE_BUILD_ENV:-}" ]]; then
+  echo "Native build environment file not found: $NATIVE_BUILD_ENV" >&2
+  exit 1
+fi
+
 cd "$(dirname "$0")/.."
 if ! xcodebuild -version >/dev/null 2>&1; then
   for candidate in /Applications/Xcode.app /Applications/Xcode-beta.app; do
@@ -14,7 +23,14 @@ if ! xcodebuild -version >/dev/null 2>&1; then
 fi
 xcodebuild -version >/dev/null
 DEVELOPER_DIR_PATH="${DEVELOPER_DIR:-$(xcode-select -p)}"
-DERIVED_DATA="${DERIVED_DATA:-$PWD/.debug-derived-data}"
+DEFAULT_DD="$PWD/.debug-derived-data"
+if [[ -n "${WAND_BUILD_STORAGE_ROOT:-}" ]]; then
+  DEFAULT_DD="$WAND_BUILD_STORAGE_ROOT/macos/tests"
+fi
+DERIVED_DATA="${DERIVED_DATA:-$DEFAULT_DD}"
+if type wand_assert_external_build_path >/dev/null 2>&1; then
+  wand_assert_external_build_path "$DERIVED_DATA"
+fi
 mkdir -p "$DERIVED_DATA"
 DERIVED_DATA="$(cd "$DERIVED_DATA" && pwd)"
 FILTER="${1:-All}"

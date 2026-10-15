@@ -772,7 +772,6 @@ final class WandAPI {
             case "grok": body["defaultGrokModel"] = model
             case "qoder": body["defaultQoderModel"] = model
             case "pi": body["defaultPiModel"] = model
-            case "gemini": body["defaultGeminiModel"] = model
             default: body["defaultModel"] = model
             }
         }

@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// macOS 客户端的视觉 token。
-/// 沿用 Web 登录页的暖纸、墨色与赤陶色，保留原生桌面控件和阅读密度。
+/// 对齐 Web theme-palettes.ts 的默认暖白/深色石墨，保留原生桌面控件。
 /// 颜色与交互反馈在此统一，内容页面不再各自复制一套表面和动效。
 enum Theme {
     private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> NSColor {
@@ -27,52 +27,50 @@ enum Theme {
         }
     }
 
-    // MARK: - iOS-aligned semantic colors (desktop window geometry remains native)
+    // MARK: - Web default warm / graphite semantic colors
     private static func hex(_ value: Int) -> NSColor {
         rgb(Double((value >> 16) & 255) / 255, Double((value >> 8) & 255) / 255, Double(value & 255) / 255)
     }
-    static let wandAccent = dynamic(light: hex(0x0076D6), dark: hex(0x63B4FF))
-    static let accentSolid = Color(nsColor: hex(0x0076D6))
-    static let accentSolidHover = Color(nsColor: hex(0x0068BE))
+    static let wandAccent = dynamic(light: hex(0xB8562F), dark: hex(0x47678E))
+    static let accentSolid = Color(nsColor: hex(0xB8562F))
+    static let accentSolidHover = Color(nsColor: hex(0x9E4B29))
     static let wandAccentStrong = wandAccent
-    static let wandAccentMuted = hex(0x0076D6).withAlphaComponent(0.08)
-    static let wandAccentGlow = hex(0x0076D6).withAlphaComponent(0.18)
+    static let wandAccentMuted = hex(0xB8562F).withAlphaComponent(0.08)
+    static let wandAccentGlow = hex(0xB8562F).withAlphaComponent(0.18)
     static let brand = wandAccent
     static let brandStrong = wandAccentStrong
     static let codex = dynamic(light: hex(0x4A6FA5), dark: hex(0x7E9CC4))
     static let openCode = dynamic(light: hex(0x5568A7), dark: hex(0x8495D2))
     static let grok = dynamic(light: hex(0x51565D), dark: hex(0xB8BCC2))
     static let qoder = dynamic(light: hex(0x5D7466), dark: hex(0x87AC94))
-    static let gemini = dynamic(light: hex(0x3B6FD4), dark: hex(0x7FA6F0))
     static func providerColor(_ provider: String?) -> Color {
         switch WandProvider.normalizedID(provider) {
         case "codex": return codex
         case "opencode": return openCode
         case "grok": return grok
         case "qoder": return qoder
-        case "gemini": return gemini
         default: return wandAccent
         }
     }
-    static let background = dynamic(light: hex(0xF2F3F7), dark: hex(0x101114))
-    static let sidebarBackground = dynamic(light: hex(0xEDEEF2), dark: hex(0x17181C))
+    static let background = dynamic(light: hex(0xFAF8F5), dark: hex(0x191D23))
+    static let sidebarBackground = dynamic(light: hex(0xF4F0E9), dark: hex(0x1E232A))
     static let workspaceBackground = background
-    static let surface = dynamic(light: hex(0xFFFFFF), dark: hex(0x1C1D21))
-    static let surfaceSoft = dynamic(light: hex(0xEDEEF2), dark: hex(0x27282D))
-    static let surfaceElevated = dynamic(light: hex(0xFFFFFF), dark: hex(0x17181C))
-    static let borderSubtle = dynamicNS(light: hex(0xE3E5EB), dark: hex(0x34363D))
-    static let borderDefault = dynamicNS(light: hex(0xC4C7CF), dark: hex(0x50535D))
-    static let border = dynamic(light: hex(0xE3E5EB), dark: hex(0x34363D))
-    static let borderFocus = hex(0x0076D6).withAlphaComponent(0.5)
+    static let surface = dynamic(light: hex(0xFFFDFA), dark: hex(0x232830))
+    static let surfaceSoft = dynamic(light: hex(0xECE6DD), dark: hex(0x2C333E))
+    static let surfaceElevated = surface
+    static let borderSubtle = dynamicNS(light: hex(0xEBE5DD), dark: hex(0x3B4452))
+    static let borderDefault = borderSubtle
+    static let border = dynamic(light: hex(0xEBE5DD), dark: hex(0x3B4452))
+    static let borderFocus = hex(0xB8562F).withAlphaComponent(0.5)
     static let glassHighlight = dynamic(light: NSColor.white.withAlphaComponent(0.72), dark: NSColor.white.withAlphaComponent(0.17))
-    static let textPrimary = dynamic(light: hex(0x1C1D21), dark: hex(0xF4F5F7))
-    static let textSecondary = dynamic(light: hex(0x60636B), dark: hex(0xC4C7CF))
+    static let textPrimary = dynamic(light: hex(0x29241F), dark: hex(0xE5E9EF))
+    static let textSecondary = dynamic(light: hex(0x6B5E54), dark: hex(0xB0B9C7))
     static let textTertiary = textSecondary
     static let textMuted = textSecondary
-    static let textPlaceholder = dynamicNS(light: hex(0x60636B), dark: hex(0xC4C7CF))
+    static let textPlaceholder = dynamicNS(light: hex(0x6B5E54), dark: hex(0xB0B9C7))
     static let success = dynamic(light: hex(0x4F7A58), dark: hex(0x8BBA94))
     static let warning = dynamic(light: hex(0x95652F), dark: hex(0xDEB16F))
-    static let danger = dynamic(light: hex(0xB24F45), dark: hex(0xE4887E))
+    static let danger = Color(nsColor: hex(0xB7342E))
     static let info = dynamic(light: hex(0x4A6FA5), dark: hex(0x94B4DC))
     static let infoMuted = hex(0x4A6FA5).withAlphaComponent(0.14)
 
@@ -86,7 +84,8 @@ enum Theme {
 
     enum Motion {
         static let feedback = Animation.easeOut(duration: 0.12)
-        static let structure = Animation.easeInOut(duration: 0.18)
+        static let structureDuration: TimeInterval = 0.18
+        static let structure = Animation.easeInOut(duration: structureDuration)
     }
 
     // MARK: - 阴影(对齐 web --shadow-*,暖色调)

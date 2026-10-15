@@ -59,6 +59,49 @@ final class CommunicationsVisualTests: XCTestCase {
         XCTAssertEqual(api.posts[0].path, "/api/conversations/dm_e_fixture_default/messages")
     }
 
+    func testPastedImageUploadsThroughNativeConversationEditorAndCleansTemporaryFile() async throws {
+        let (store, api) = try await setup()
+        store.select("dm_e_fixture_default"); await store.waitForDetailForTesting()
+        let scope = ConversationScope(conversationID: "dm_e_fixture_default", target: nil)
+        let owner = store.composer(for: scope)
+        owner.edit("保留正文")
+        let focus = ComposerFocusController(); focus.focus()
+        let host = NSHostingView(rootView: ConversationComposerSurface(owner: owner, store: store, conversation: try XCTUnwrap(store.detail), focus: focus))
+        host.frame = NSRect(x: 0, y: 0, width: 700, height: 230)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); await Task.yield()
+        let editor = try XCTUnwrap(descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus(); NSColor.blue.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); image.unlockFocus()
+        board.writeObjects([image])
+        var temporaryURL: URL?
+        let uploaded = expectation(description: "pasted image upload")
+        api.uploadHandler = { session, urls in
+            XCTAssertEqual(session, "attachment-channel")
+            let url = try XCTUnwrap(urls.first); temporaryURL = url
+            XCTAssertNotNil(NSImage(contentsOf: url))
+            uploaded.fulfill()
+            return [UploadedFile(originalName: url.lastPathComponent, savedPath: "/fixture/pasted.png", size: 10, mimeType: "image/png")]
+        }
+        XCTAssertTrue(editor.pasteAttachment(from: board))
+        XCTAssertTrue(owner.uploading, "The upload gate is acquired before returning to the event loop")
+        XCTAssertTrue(editor.pasteAttachment(from: board))
+        XCTAssertTrue(owner.uploading, "A second paste cannot release an active upload")
+        board.clearContents(); board.setString("后来复制的文字", forType: .string)
+        await fulfillment(of: [uploaded], timeout: 3)
+        for _ in 0..<30 where owner.uploading { await Task.yield() }
+        XCTAssertEqual(owner.attachments.map(\.savedPath), ["/fixture/pasted.png"])
+        XCTAssertEqual(owner.text, "保留正文")
+        XCTAssertEqual(editor.string, "保留正文")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(temporaryURL).path))
+        XCTAssertEqual(api.posts.filter { $0.path.hasSuffix("/channel") }.count, 1)
+        XCTAssertTrue(api.posts.allSatisfy { !$0.path.hasSuffix("/messages") }, "Pasting does not submit a model message")
+    }
+
     func testNativeContactButtonOpensStableDMAndReplyButtonUsesExactSession() async throws {
         let (store, _) = try await setup()
         store.selectContact(try XCTUnwrap(store.contacts.first))

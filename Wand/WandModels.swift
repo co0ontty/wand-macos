@@ -82,7 +82,6 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
     case grok
     case qoder
     case pi
-    case gemini
 
     var id: String { rawValue }
 
@@ -94,8 +93,6 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
         "qodercli": .qoder,
         "pi-cli": .pi,
         "pi-cli-json": .pi,
-        "gemini-cli": .gemini,
-        "gemini-cli-json": .gemini,
     ]
 
     /// 归一后的规范 provider id；未知或空值返回 nil。
@@ -131,7 +128,6 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
         case .grok: return "Grok"
         case .qoder: return "Qoder"
         case .pi: return "Pi"
-        case .gemini: return "Gemini"
         }
     }
 
@@ -143,7 +139,6 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
         case .grok: return "grok-cli-headless"
         case .qoder: return "qoder-cli-print"
         case .pi: return "pi-cli-json"
-        case .gemini: return "gemini-cli-json"
         }
     }
 
@@ -450,6 +445,7 @@ struct StructuredSessionState: Decodable {
     let lastError: String?
     let inFlight: Bool?
     let activeRequestId: String?
+    let turnStartedAt: String?
 }
 
 // MARK: - 会话快照
@@ -497,6 +493,8 @@ struct SessionSnapshot: Decodable, Identifiable {
     var providerCliActive: Bool? = nil
     var providerCliExitCode: Int? = nil
     var ptyBusy: Bool? = nil
+    var ptyTurnStartedAt: String? = nil
+    var ptyCommandRunning: Bool? = nil
     var engine: String? = nil
     var employeeId: String? = nil
     var employeeName: String? = nil
@@ -739,13 +737,19 @@ struct ThinkingEffortOption: Identifiable {
 }
 
 func thinkingEffortOptions(provider: String, selectedModel: String?, defaultModel: String?, models: [ModelInfo]) -> [ThinkingEffortOption] {
-    let legacy = [
-        ThinkingEffortOption(id: "off", label: "关闭", shortLabel: "关", menuLabel: "关闭"),
-        ThinkingEffortOption(id: "standard", label: "低", shortLabel: "低", menuLabel: "低（low）"),
-        ThinkingEffortOption(id: "deep", label: "中", shortLabel: "中", menuLabel: "中（medium）"),
-        ThinkingEffortOption(id: "max", label: "高", shortLabel: "高", menuLabel: "高（max）"),
+    let mapping: [String: (standard: String, deep: String, max: String)] = [
+        "claude": ("low", "medium", "max"), "codex": ("low", "medium", "xhigh"),
+        "opencode": ("low", "high", "max"), "grok": ("low", "high", "xhigh"),
+        "qoder": ("low", "high", "max"), "pi": ("low", "high", "max"),
     ]
-    guard provider == "codex" else { return legacy }
+    let native = mapping[provider]
+    let automatic = ThinkingEffortOption(id: "off", label: "自动", shortLabel: "自动", menuLabel: "自动（模型默认）")
+    func option(_ id: String, _ effort: String) -> ThinkingEffortOption {
+        let label = composerThinkingPreference("\(provider):\(effort)")
+        return ThinkingEffortOption(id: id, label: label, shortLabel: label, menuLabel: "\(label)（\(effort)）")
+    }
+    let legacy = [automatic, option("standard", native?.standard ?? "low"),
+        option("deep", native?.deep ?? "medium"), option("max", native?.max ?? "max")]
     let modelID = selectedModel.flatMap { !$0.isEmpty && $0 != "default" ? $0 : nil }
         ?? defaultModel.flatMap { !$0.isEmpty && $0 != "default" ? $0 : nil }
         ?? "default"
@@ -753,20 +757,10 @@ func thinkingEffortOptions(provider: String, selectedModel: String?, defaultMode
           !levels.isEmpty else { return legacy }
     let dynamic = levels.map { level -> ThinkingEffortOption in
         let effort = level.effort.lowercased()
-        let id = effort == "low" ? "standard" : effort == "medium" ? "deep" : effort == "xhigh" ? "max" : "codex:\(effort)"
-        let label: String
-        switch effort {
-        case "low": label = "低"
-        case "medium": label = "中"
-        case "high": label = "高"
-        case "xhigh": label = "超高"
-        case "max": label = "极高"
-        case "ultra": label = "极限"
-        default: label = effort
-        }
-        return ThinkingEffortOption(id: id, label: label, shortLabel: label, menuLabel: "\(label)（\(effort)）")
-    }
-    return [ThinkingEffortOption(id: "off", label: "自动", shortLabel: "自", menuLabel: "自动（模型默认）")] + dynamic
+        let id = effort == native?.standard ? "standard" : effort == native?.deep ? "deep" : effort == native?.max ? "max" : "\(provider):\(effort)"
+        return option(id, effort)
+    }.filter { $0.id != "\(provider):off" }
+    return [automatic] + dynamic
 }
 
 struct ThinkingEffortSlider: View {
@@ -849,20 +843,18 @@ struct ThinkingEffortSlider: View {
 struct ModelsResponse: Decodable {
     let models: [ModelInfo]
     let codexModels: [ModelInfo]
-    /// OpenCode / Grok / Qoder / Pi / Gemini 是服务端扩展字段；旧服务端没有时仍可创建会话，
+    /// OpenCode / Grok / Qoder / Pi 是服务端扩展字段；旧服务端没有时仍可创建会话，
     /// 仅在模型菜单中回落到“默认”。
     let opencodeModels: [ModelInfo]?
     let grokModels: [ModelInfo]?
     let qoderModels: [ModelInfo]?
     let piModels: [ModelInfo]?
-    let geminiModels: [ModelInfo]?
     let defaultModel: String?
     let defaultCodexModel: String?
     let defaultOpenCodeModel: String?
     let defaultGrokModel: String?
     let defaultQoderModel: String?
     let defaultPiModel: String?
-    let defaultGeminiModel: String?
     let defaultModels: ProviderDefaultModels?
 
     func models(for provider: String) -> [ModelInfo] {
@@ -872,7 +864,6 @@ struct ModelsResponse: Decodable {
         case WandProvider.grok.rawValue: return grokModels ?? []
         case WandProvider.qoder.rawValue: return qoderModels ?? []
         case WandProvider.pi.rawValue: return piModels ?? []
-        case WandProvider.gemini.rawValue: return geminiModels ?? []
         default: return models
         }
     }
@@ -887,7 +878,6 @@ struct ModelsResponse: Decodable {
         case WandProvider.grok.rawValue: return defaultGrokModel ?? ""
         case WandProvider.qoder.rawValue: return defaultQoderModel ?? ""
         case WandProvider.pi.rawValue: return defaultPiModel ?? ""
-        case WandProvider.gemini.rawValue: return defaultGeminiModel ?? ""
         default: return defaultModel ?? ""
         }
     }
@@ -940,7 +930,6 @@ struct ProviderDefaultModels: Decodable {
     let grok: String?
     let qoder: String?
     let pi: String?
-    let gemini: String?
 
     func model(for provider: String) -> String? {
         switch WandProvider.normalizedID(provider) {
@@ -949,7 +938,6 @@ struct ProviderDefaultModels: Decodable {
         case WandProvider.grok.rawValue: return grok
         case WandProvider.qoder.rawValue: return qoder
         case WandProvider.pi.rawValue: return pi
-        case WandProvider.gemini.rawValue: return gemini
         default: return claude
         }
     }
@@ -1028,10 +1016,27 @@ struct ServerConfigInfo: Decodable {
     let defaultGrokModel: String?
     let defaultQoderModel: String?
     let defaultPiModel: String?
-    let defaultGeminiModel: String?
     let defaultModels: ProviderDefaultModels?
     let defaultThinkingEffort: String?
     let currentVersion: String?
+    var userProfile: NativeUserProfile? = nil
+}
+
+/// 展示身份，与员工共用头像格式；user 不是执行员工。
+struct NativeUserProfile: Codable, Equatable {
+    var name: String = ""
+    var avatar: String = ""
+    var displayName: String { name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "我" : name }
+    init(name: String = "", avatar: String = "") { self.name = name; self.avatar = avatar }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
+        avatar = try values.decodeIfPresent(String.self, forKey: .avatar) ?? ""
+    }
+}
+
+extension Notification.Name {
+    static let wandIdentitySaved = Notification.Name("wandIdentitySaved")
 }
 
 // MARK: - Git 快速提交

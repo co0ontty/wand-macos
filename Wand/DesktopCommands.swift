@@ -112,6 +112,18 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
     }
 }
 
+private struct DesktopPageActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// Hidden pages remain mounted, but their notification and AppKit input handlers must stay inert.
+    var desktopPageActive: Bool {
+        get { self[DesktopPageActiveKey.self] }
+        set { self[DesktopPageActiveKey.self] = newValue }
+    }
+}
+
 extension Notification.Name {
     static let wandDesktopCommand = Notification.Name("WandDesktopCommand")
     static let wandRefreshLists = Notification.Name("WandRefreshLists")

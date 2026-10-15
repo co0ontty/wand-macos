@@ -40,9 +40,8 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     @Published var grokModels: [ModelInfo] = []
     @Published var qoderModels: [ModelInfo] = []
     @Published var piModels: [ModelInfo] = []
-    @Published var geminiModels: [ModelInfo] = []
     @Published var serverDefaultModels = ProviderDefaultModels(
-        claude: nil, codex: nil, opencode: nil, grok: nil, qoder: nil, pi: nil, gemini: nil
+        claude: nil, codex: nil, opencode: nil, grok: nil, qoder: nil, pi: nil
     )
     @Published var destination: String
     @Published var taskName = ""
@@ -107,8 +106,8 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
     }
 
     nonisolated static func creationIsVisible(showCreation: Bool, showCommunications: Bool, showTaskBoard: Bool,
-                                             hasSelectedTask: Bool, hasSelectedSession: Bool) -> Bool {
-        !showCommunications && (showCreation || (!showTaskBoard && !hasSelectedTask && !hasSelectedSession))
+                                             hasSelectedTask: Bool, hasSelectedSession: Bool, settingsPresented: Bool = false) -> Bool {
+        !settingsPresented && !showCommunications && (showCreation || (!showTaskBoard && !hasSelectedTask && !hasSelectedSession))
     }
 
     static func shouldOpenReceipt(originDraftID: UUID, currentDraftID: UUID, creationVisible: Bool) -> Bool {
@@ -277,6 +276,7 @@ struct NewSessionView: View {
     let embedded: Bool
     let onCreated: (SessionSnapshot) -> Void
     @StateObject private var draft: SessionCreationDraft
+    @Environment(\.desktopPageActive) private var pageActive
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showBrowser = false
@@ -307,7 +307,6 @@ struct NewSessionView: View {
     private enum NewSessionInput: Hashable { case cwd }
 
     /// provider 名单只保留在 `WandProvider` 一处，这里仅做别名。
-    /// 旧版本文件另建过一份枚举，Gemini 因此整体漏掉、且会被 `title` 兜底成 Claude。
     typealias Provider = WandProvider
 
     enum SessionType: String, CaseIterable, Identifiable, Hashable {
@@ -332,8 +331,6 @@ struct NewSessionView: View {
                 return "Qoder stream-json 结构化聊天界面，支持多轮续聊和工具调用展示。"
             case (.structured, .pi):
                 return "Pi JSON 结构化聊天界面，支持续聊、思考过程和工具调用展示。"
-            case (.structured, .gemini):
-                return "Gemini stream-json 结构化聊天界面，支持多轮续聊和工具调用展示。"
             case (.pty, .codex):
                 return "Codex PTY 终端会话；terminal 是原始输出，chat 是解析后的阅读视图。"
             case (.pty, .claude):
@@ -346,8 +343,6 @@ struct NewSessionView: View {
                 return "Qoder CLI 的原始 PTY 终端会话。"
             case (.pty, .pi):
                 return "Pi TUI 的原始 PTY 终端会话。"
-            case (.pty, .gemini):
-                return "Gemini CLI 的原始 PTY 终端会话。"
             }
         }
     }
@@ -443,21 +438,6 @@ struct NewSessionView: View {
                     ? "Pi 将自动批准工具调用；支持 TUI 与 JSON 结构化会话。"
                     : "Pi 使用自身权限确认；支持 TUI 与 JSON 结构化会话。"
             }
-            if tool == .gemini {
-                // Gemini CLI 只有 --approval-mode yolo/auto_edit/default，
-                // 没有对应 .native 的开关；这里如实说明它退化成什么，
-                // 不要给用户一个「原生输出」的错觉。
-                switch self {
-                case .managed, .fullAccess:
-                    return "Gemini 以 yolo 运行，会自动批准工具调用；支持 TUI 与 stream-json 结构化会话。"
-                case .autoEdit:
-                    return "Gemini 以 auto_edit 运行，自动确认文件修改，其他操作保持 CLI 的权限流程。"
-                case .native:
-                    return "Gemini 没有独立的原生输出开关，这一档与「标准」等价（--approval-mode default）。"
-                default:
-                    return "Gemini 使用自身权限确认；支持 TUI 与 stream-json 结构化会话。"
-                }
-            }
             switch self {
             case .fullAccess:
                 return "自动确认权限请求与高权限操作，适合你确认环境安全后的连续修改。"
@@ -481,7 +461,6 @@ struct NewSessionView: View {
         case .grok: draft.grokModels
         case .qoder: draft.qoderModels
         case .pi: draft.piModels
-        case .gemini: draft.geminiModels
         }
     }
 
@@ -546,7 +525,7 @@ struct NewSessionView: View {
             Text("原请求可能已经成功。请先核对列表；只有确认未创建后才允许重新启动，避免重复任务或执行。此操作只解除提交门禁，不会自动重发。")
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
-            if note.object as? DesktopCommand == .focusComposer { composerFocused = true }
+            if pageActive && note.object as? DesktopCommand == .focusComposer { composerFocused = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandRefreshLists)) { _ in
             Task { await draft.refreshOptions(api: api, invalidated: true) }
@@ -1158,8 +1137,7 @@ struct NewSessionView: View {
             draft.serverDefaultModels = config.defaultModels ?? ProviderDefaultModels(
                 claude: config.defaultModel, codex: config.defaultCodexModel,
                 opencode: config.defaultOpenCodeModel, grok: config.defaultGrokModel,
-                qoder: config.defaultQoderModel, pi: config.defaultPiModel,
-                gemini: config.defaultGeminiModel
+                qoder: config.defaultQoderModel, pi: config.defaultPiModel
             )
             if let models {
                 draft.availableModels = models.models
@@ -1168,7 +1146,6 @@ struct NewSessionView: View {
                 draft.grokModels = models.grokModels ?? []
                 draft.qoderModels = models.qoderModels ?? []
                 draft.piModels = models.piModels ?? []
-                draft.geminiModels = models.geminiModels ?? []
                 if let defaults = models.defaultModels { draft.serverDefaultModels = defaults }
             }
             draft.recentPaths = recent ?? []

@@ -20,6 +20,15 @@
 
 set -euo pipefail
 
+# Local opt-in storage policy; unconfigured machines and CI retain normal paths.
+NATIVE_BUILD_ENV="${WAND_NATIVE_BUILD_ENV:-$HOME/.config/wand-build/environment.sh}"
+if [[ -f "$NATIVE_BUILD_ENV" ]]; then
+  source "$NATIVE_BUILD_ENV"
+elif [[ -n "${WAND_NATIVE_BUILD_ENV:-}" ]]; then
+  echo "Native build environment file not found: $NATIVE_BUILD_ENV" >&2
+  exit 1
+fi
+
 if [[ "$(uname)" != "Darwin" ]]; then
   echo "错误:debug.sh 只能在 macOS 上运行(当前系统 $(uname))。" >&2
   exit 1
@@ -64,7 +73,13 @@ case "$BUILD_CONFIGURATION" in
   Debug)   DEFAULT_DD="$PWD/.debug-derived-data"   ;;
   Release) DEFAULT_DD="$PWD/.release-derived-data" ;;
 esac
+if [[ -n "${WAND_BUILD_STORAGE_ROOT:-}" ]]; then
+  DEFAULT_DD="$WAND_BUILD_STORAGE_ROOT/macos/$BUILD_CONFIGURATION"
+fi
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$DEFAULT_DD}"
+if type wand_assert_external_build_path >/dev/null 2>&1; then
+  wand_assert_external_build_path "$DERIVED_DATA_PATH"
+fi
 
 PROJECT="Wand.xcodeproj"
 SCHEME="Wand"

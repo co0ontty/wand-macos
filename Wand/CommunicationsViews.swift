@@ -5,6 +5,9 @@ import UniformTypeIdentifiers
 
 struct CommunicationsSidebar: View {
     @ObservedObject var store: CommunicationsStore
+    var sessions: [WorkspaceSessionSummary] = []
+    var selectedSessionID: String? = nil
+    private var conversationRows: [NativeConversation] { store.conversationList(sessions: sessions, selectedSessionID: selectedSessionID) }
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -24,6 +27,16 @@ struct CommunicationsSidebar: View {
             if store.section == .contacts {
                 Toggle("显示已归档员工", isOn: $store.includesArchivedContacts)
                     .toggleStyle(.checkbox).font(.system(size: 11)).padding(.horizontal, 14)
+            }
+            if store.section == .conversations {
+                HStack(spacing: 6) {
+                    Picker("对话归档筛选", selection: $store.archiveFilter) {
+                        ForEach(CommunicationsStore.ArchiveFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden()
+                    SidebarActivityFilter(active: store.activityOnly, label: "只看活动对话") { store.activityOnly.toggle() }
+                }.padding(.horizontal, 12)
+                Text("\(conversationRows.count) 个对话").font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14)
             }
             if let error = store.section == .contacts ? store.contactsError : store.conversationsError {
                 Text(error).font(.system(size: 11)).foregroundColor(Theme.danger)
@@ -54,10 +67,11 @@ struct CommunicationsSidebar: View {
                                 .font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(16)
                         }
                     } else {
-                        ForEach(store.filteredConversations) { conversation in
+                        ForEach(conversationRows) { conversation in
                             Button { store.select(conversation.id) } label: {
                                 HStack(spacing: 9) {
-                                    ContactAvatar(id: conversation.peerEmployeeId ?? conversation.id, avatar: store.contact(conversation.peerEmployeeId)?.avatar ?? "", name: conversation.displayTitle, team: conversation.isGroup, size: 44)
+                                    if conversation.isGroup { ContactGroupAvatar(profile: store.userProfile, members: conversation.members, contacts: store.contacts) }
+                                    else { ContactAvatar(id: conversation.peerEmployeeId ?? conversation.id, avatar: store.contact(conversation.peerEmployeeId)?.avatar ?? "", name: conversation.displayTitle, size: 44) }
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(conversation.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
                                         Text(conversation.dissolvedAt != nil ? "已解散 · 历史保留" : conversation.preview ?? "尚无消息")
@@ -72,8 +86,8 @@ struct CommunicationsSidebar: View {
                             .buttonStyle(DesktopNavigationButtonStyle(active: store.selectedID == conversation.id))
                             .accessibilityLabel(conversation.displayTitle)
                         }
-                        if store.filteredConversations.isEmpty && !store.indexLoading {
-                            Text(store.query.isEmpty ? "从通讯录选择员工开始私聊，或在上方加号发起群聊。" : "没有匹配的对话")
+                        if conversationRows.isEmpty && !store.indexLoading {
+                            Text(!store.query.isEmpty ? "没有匹配的对话" : store.activityOnly ? "现在没有符合筛选条件的活动对话。" : store.archiveFilter == .archived ? "还没有已归档的对话。" : store.archiveFilter == .unarchived ? "还没有未归档的对话。" : "从通讯录选择员工开始私聊，或在上方加号发起群聊。")
                                 .font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(16)
                         }
                     }
@@ -85,7 +99,25 @@ struct CommunicationsSidebar: View {
     }
 }
 
+/// Text-only activity toggle shared by the workspace and conversation filters.
+struct SidebarActivityFilter: View {
+    let active: Bool
+    var label = "只看活动会话"
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text("活动").font(.system(size: 11, weight: .medium)).frame(width: 48, height: 28)
+                .foregroundColor(active ? Theme.wandAccent : Theme.textSecondary)
+                .background(Capsule().fill(active ? Theme.wandAccent.opacity(0.12) : .clear))
+                .overlay(Capsule().stroke(active ? Theme.wandAccent.opacity(0.45) : Theme.border, lineWidth: 1))
+        }.buttonStyle(.plain).wandMotion(value: active)
+            .help("在跑、待处理及尚未查看的刚完成内容")
+            .accessibilityLabel(label).accessibilityValue(active ? "已开启" : "已关闭")
+    }
+}
+
 struct CommunicationsContent: View {
+    @Environment(\.desktopPageActive) private var pageActive
     @ObservedObject var store: CommunicationsStore
     let baseURL: URL
     let onOpenSession: (String) -> Void
@@ -97,7 +129,6 @@ struct CommunicationsContent: View {
             HStack(spacing: 12) {
                 Text(store.section == .contacts ? "通讯录" : store.detail?.displayTitle ?? "对话")
                     .font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.textPrimary).lineLimit(1)
-                    .opacity(store.section == .conversations && store.detail != nil ? 0 : 1)
                 Spacer()
                 if store.section == .conversations && store.selectedID != nil { ConversationMessageSearch(store: store) }
                 Button { Task { await store.refreshVisible() } } label: { Image(systemName: "arrow.clockwise") }
@@ -109,20 +140,7 @@ struct CommunicationsContent: View {
                         ConversationGroupEditor(store: store, invitation: nil) { groupEditorOpen = false }
                     }
             }
-            .padding(.horizontal, 24).frame(height: store.section == .conversations && store.detail != nil ? FocusComposerMetrics.normalCompanionClearance : 60)
-            .overlay {
-                if store.section == .conversations, let detail = store.detail {
-                    let employee = store.contact(detail.peerEmployeeId)
-                    let session = detail.turns.reversed().first { ["starting", "running", "waiting_user"].contains($0.sessionPreview?.status ?? "") }?.sessionLink?.sessionId
-                    if let api = store.api as? WandAPI, let session, let employee {
-                        ExecutingConversationCompanion(api: api, sessionID: session, employee: employee).id(session).overlay { companionEditTarget }
-                    } else if let employee {
-                        WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 88).overlay { companionEditTarget }
-                    } else {
-                        ContactAvatar(id: detail.id, name: detail.displayTitle, team: detail.isGroup, size: 88).overlay { companionEditTarget }
-                    }
-                }
-            }
+            .padding(.horizontal, 24).frame(height: 56)
             Divider()
             if store.section == .contacts {
                 if let contact = store.contact(store.selectedContactID) {
@@ -147,20 +165,17 @@ struct CommunicationsContent: View {
         .background(Theme.workspaceBackground)
         .task { await store.refreshVisible() }
         .onReceive(refresh) { _ in Task { await store.refreshVisible() } }
+        .onReceive(NotificationCenter.default.publisher(for: .wandIdentitySaved)) { _ in Task { await store.refreshIndex() } }
         .onChange(of: store.query) { _ in groupEditorOpen = false }
         .onChange(of: store.section) { _ in groupEditorOpen = false }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
-            if note.object as? DesktopCommand == .findConversation && store.section == .conversations && store.selectedID != nil {
+            if pageActive && note.object as? DesktopCommand == .findConversation && store.section == .conversations && store.selectedID != nil {
                 groupEditorOpen = false; store.messageSearchExpanded = true
             }
         }
         .onExitCommand { groupEditorOpen = false }
     }
-    private var companionEditTarget: some View {
-        Color.clear.contentShape(Rectangle()).frame(width: 88, height: 88)
-            .onTapGesture { DesktopCommand.focusComposer.send() }
-            .accessibilityLabel("当前伙伴，点按编辑消息").accessibilityAddTraits(.isButton)
-    }
+
 }
 
 private struct ExecutingConversationCompanion: View {
@@ -174,7 +189,7 @@ private struct ExecutingConversationCompanion: View {
         let active = execution.isResponding && execution.status == "running" && !execution.permissionBlocked
         WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "",
             activity: avatarFileActivity(messages: execution.messages, executing: active),
-            thinking: avatarIsThinking(messages: execution.messages, executing: active), size: 88)
+            thinking: avatarIsThinking(messages: execution.messages, executing: active), size: FocusComposerMetrics.normalCompanionSize)
             .onAppear { execution.start() }.onDisappear { execution.shutdown() }
     }
 }
@@ -305,7 +320,7 @@ struct ConversationPane: View {
                                 .font(.system(size: 14)).foregroundColor(Theme.textSecondary).padding(.vertical, 32)
                         }
                         ForEach(displayed, id: \.id) { item in
-                            CommunicationMessageRow(turn: item.turn, baseURL: baseURL, contacts: store.contacts, members: conversation.members, onOpenSession: onOpenSession,
+                            CommunicationMessageRow(turn: item.turn, baseURL: baseURL, contacts: store.contacts, members: conversation.members, profile: store.userProfile, onOpenSession: onOpenSession,
                                 onSelectTarget: { id, target in store.select(id); store.selectTarget(target) })
                                 .id(item.id)
                         }
@@ -334,8 +349,12 @@ struct ConversationPane: View {
     private var groupContext: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
-                DisclosureGroup("\(conversation.members.count) 位成员", isExpanded: $membersExpanded) {
+                DisclosureGroup("\(conversation.members.count + 1) 位成员", isExpanded: $membersExpanded) {
                     VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            ContactAvatar(id: "user", avatar: store.userProfile.avatar, name: store.userProfile.displayName, size: 28)
+                            Text(store.userProfile.displayName + " · 我").font(.system(size: 12)); Spacer()
+                        }
                         ForEach(conversation.members, id: \.id) { member in
                             HStack(spacing: 8) {
                                 ContactAvatar(id: member.employeeId ?? member.id, avatar: store.contact(member.employeeId)?.avatar ?? member.avatar ?? "", name: member.name, size: 28)
@@ -379,6 +398,7 @@ private struct CommunicationMessageRow: View {
     let baseURL: URL
     let contacts: [EmployeeContact]
     let members: [ConversationRecipient]
+    let profile: NativeUserProfile
     let onOpenSession: (String) -> Void
     let onSelectTarget: (String, ConversationTarget) -> Void
     @State private var previewExpanded = false
@@ -392,9 +412,9 @@ private struct CommunicationMessageRow: View {
                 HStack(spacing: 7) {
                     let employeeID = members.first { $0.id == turn.author?.id }?.employeeId ?? turn.author?.id ?? ""
                     let current = contacts.first { $0.id == employeeID }
-                    ContactAvatar(id: turn.role == "user" ? "" : employeeID, avatar: current?.avatar ?? turn.author?.avatar ?? "",
-                        name: turn.role == "user" ? "" : turn.author?.name ?? "", provider: turn.author?.provider, size: 28)
-                    Text(turn.author?.name ?? (turn.role == "user" ? "我" : "助手"))
+                    ContactAvatar(id: turn.role == "user" ? "user" : employeeID, avatar: turn.role == "user" ? profile.avatar : current?.avatar ?? turn.author?.avatar ?? "",
+                        name: turn.role == "user" ? profile.displayName : current?.name ?? turn.author?.name ?? "", provider: turn.role == "user" ? nil : turn.author?.provider, size: 28)
+                    Text(turn.role == "user" ? profile.displayName : current?.name ?? turn.author?.name ?? "助手")
                         .font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textSecondary)
                     if let createdAt = turn.createdAt { Text(SessionListDateLabel.relative(iso: createdAt)).font(.system(size: 10)).foregroundColor(Theme.textMuted) }
                 }.frame(maxWidth: .infinity, alignment: turn.role == "user" ? .trailing : .leading)
@@ -438,6 +458,7 @@ private struct CommunicationMessageRow: View {
 }
 
 struct ConversationComposerSurface: View {
+    @Environment(\.desktopPageActive) private var pageActive
     @ObservedObject var owner: ConversationComposerState
     @ObservedObject var store: CommunicationsStore
     let conversation: NativeConversation
@@ -463,16 +484,36 @@ struct ConversationComposerSurface: View {
         case .unknown: return .unknown
         }
     }
-    private var candidate: EmployeeExecutionCandidate? { store.contact(conversation.peerEmployeeId)?.candidates.first }
+    private var candidate: EmployeeExecutionCandidate? {
+        if let target = owner.scope.target {
+            return conversation.runs.first { $0.id == target.runId }?.team?.members.first { $0.isLeader == true }?.agent
+        }
+        if conversation.isGroup { return conversation.members.first { $0.isLeader == true }?.agent }
+        return store.contact(conversation.peerEmployeeId)?.candidates.first
+    }
+    private var preferredModel: String {
+        guard let model = candidate?.model, !model.isEmpty else { return "配置未就绪" }
+        let resolved = wandModelDisplayName(provider: candidate?.provider ?? "", model: model, catalog: store.modelCatalog)
+        return resolved.isEmpty ? "工具默认模型（待解析）" : resolved
+    }
+    private var preferredThinking: String {
+        guard let candidate, let effort = candidate.thinkingEffort else { return "未取得" }
+        if effort == "off" { return "自动（模型默认）" }
+        return thinkingEffortOptions(provider: candidate.provider, selectedModel: candidate.model,
+            defaultModel: store.modelCatalog?.defaultModelId(for: candidate.provider),
+            models: store.modelCatalog?.models(for: candidate.provider) ?? []).first { $0.id == effort }?.label
+            ?? composerThinkingPreference(effort)
+    }
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             if !owner.feedback.isEmpty || blockReason != nil {
                 Text(owner.feedback.isEmpty ? blockReason ?? "" : owner.feedback)
                     .font(.system(size: 12)).foregroundColor(owner.unknownID != nil ? Theme.warning : failed ? Theme.danger : Theme.textSecondary)
-                    .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 6)
             }
+            companion
             FocusComposerSurface(expanded: expanded, hasDraft: !owner.text.isEmpty || !owner.attachments.isEmpty,
-                summary: owner.attachments.isEmpty ? (owner.text.isEmpty ? "发消息…" : "草稿 · \(owner.text.count) 字") : "草稿 · \(owner.attachments.count) 附件", onFocus: { focus.focus() },
+                summary: owner.attachments.isEmpty ? (owner.text.isEmpty ? "输入消息…" : "草稿 · \(owner.text.count) 字") : "草稿 · \(owner.attachments.count) 附件", onFocus: { focus.focus() },
                 editor: {
                     VStack(spacing: 4) {
                         if !owner.attachments.isEmpty {
@@ -494,13 +535,14 @@ struct ConversationComposerSurface: View {
                                 focus.focused = value; if value { focus.editing = true }
                             }, onCompositionChange: { composing = $0 }, onSubmit: send,
                             onHeightChange: { height = min(max($0, 34), FocusComposerMetrics.maximumTextHeight) },
-                            onEscape: { if menuOpen { menuOpen = false } else { focus.collapse() } })
+                            onEscape: { if menuOpen { menuOpen = false } else { focus.collapse() } },
+                            onPasteAttachment: { store.importAttachments(from: $0, scope: owner.scope) })
                             .frame(height: height).frame(maxWidth: .infinity)
                     }
                 }, add: {
                     Button { focus.borrow("menu", open: true); menuOpen.toggle() } label: {
-                        Image(systemName: "plus").font(.system(size: 18)).frame(width: 48, height: 48)
-                    }.buttonStyle(.plain).accessibilityLabel("添加附件与对话操作").disabled(owner.isSending || owner.uploading)
+                        Image(systemName: "plus").font(.system(size: 18))
+                    }.buttonStyle(ComposerControlStyle()).accessibilityLabel("添加附件与对话操作").disabled(owner.isSending || owner.uploading)
                         .popover(isPresented: $menuOpen, arrowEdge: .bottom) { menu }
                 }, send: {
                     NativeComposerActionButton(phase: phase,
@@ -508,16 +550,9 @@ struct ConversationComposerSurface: View {
                         menuOpen = false
                         Task { if owner.unknownID != nil { await store.reconcile(owner.scope) } else { await store.send(owner.scope) } }
                     }
-                }, settings: {
-                    HStack(spacing: 2) {
-                        setting("模型", value: candidate?.model == "default" ? "跟随服务端模型" : candidate?.model ?? "未取得")
-                        setting("权限", value: candidate?.mode ?? "未取得")
-                        setting("思考", value: candidate?.thinkingEffort ?? "未取得")
-                    }
-                }, primaryVisible: nativeComposerPrimaryVisible(text: owner.text, hasAttachments: !owner.attachments.isEmpty,
-                    turnRunning: false, phase: phase))
+                }, isFocused: focus.focused)
         }
-        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 6)
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
         .onChange(of: owner.isSending) { value in if value { focus.submit() } }
         .onChange(of: menuOpen) { if !$0 { focus.resume("menu") } }
         .onChange(of: settingsOpen) { if !$0 { focus.resume("settings") } }
@@ -529,10 +564,10 @@ struct ConversationComposerSurface: View {
         }
         .popover(isPresented: $settingsOpen, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("员工默认配置").font(.headline)
-                Text("以下配置影响后续新工作，不支持仅覆盖本条消息；不改变历史会话或自动修改员工配置。").font(.system(size: 13))
-                Text("\(candidate?.toolLabel ?? "配置不可用") · \(candidate?.model ?? "首选模型未取得")")
-                Text("权限：\(candidate?.mode ?? "未取得")；思考：\(candidate?.thinkingEffort ?? "未取得")")
+                ComposerPopoverHeader(title: owner.scope.target == nil ? "新工作的首选配置" : "本轮负责人的首选配置") { settingsOpen = false }
+                Text(owner.scope.target == nil ? "以下为新工作的首选配置；降级后以实际执行会话为准，不改变历史会话或自动修改员工配置。" : "以下为此轮负责人保存的首选配置；补充消息沿用原执行会话，降级后以实际会话为准。").font(.system(size: 13))
+                Text("\(candidate?.toolLabel ?? "配置不可用") · \(preferredModel)")
+                Text("权限：\(candidate?.mode ?? "未取得")；思考：\(preferredThinking)")
                 Button("完成") { settingsOpen = false }
             }.padding(20).frame(width: 340)
         }
@@ -541,17 +576,47 @@ struct ConversationComposerSurface: View {
             focus.resume("files")
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { notification in
-            if notification.object as? DesktopCommand == .focusComposer { menuOpen = false; focus.focus() }
+            if pageActive && notification.object as? DesktopCommand == .focusComposer { menuOpen = false; focus.focus() }
         }
         .onExitCommand { if menuOpen { menuOpen = false } else { focus.collapse() } }
     }
-    private func setting(_ label: String, value: String) -> some View {
-        Button { focus.borrow("settings", open: true); settingsOpen = true } label: {
-            ComposerSettingLabel(title: label == "模型" ? value : "\(label)：\(value)")
-        }.buttonStyle(.plain).accessibilityLabel("\(label)：\(value)，员工默认配置，影响后续新工作")
+    private var companion: some View {
+        ComposerIdentityHeader(kind: .conversation, portrait: {
+            let employee = store.contact(conversation.peerEmployeeId)
+            let session = conversation.turns.reversed().first { ["starting", "running", "waiting_user"].contains($0.sessionPreview?.status ?? "") }?.sessionLink?.sessionId
+            ComposerCompanion(focus: focus.focus) {
+                if let api = store.api as? WandAPI, let session, let employee {
+                    ExecutingConversationCompanion(api: api, sessionID: session, employee: employee).id(session)
+                } else if let employee {
+                    WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: FocusComposerMetrics.normalCompanionSize)
+                } else {
+                    if conversation.isGroup { ContactGroupAvatar(profile: store.userProfile, members: conversation.members, contacts: store.contacts, size: FocusComposerMetrics.normalCompanionSize) }
+                    else { ContactAvatar(id: conversation.id, name: conversation.displayTitle, size: FocusComposerMetrics.normalCompanionSize) }
+                }
+            }
+        }, identity: { Text(conversation.displayTitle).foregroundColor(Theme.textPrimary) }, runtime: {
+            HStack(spacing: 8) {
+                Text(preferredModel).lineLimit(1).truncationMode(.tail)
+                Text("·").accessibilityHidden(true)
+                Text("思考：" + preferredThinking).lineLimit(1).fixedSize()
+            }.font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                .help("首选模型：\(preferredModel)；思考：\(preferredThinking)。降级后以实际执行会话为准。")
+        })
+    }
+
+    private func setting(_ label: String, value: String, icon: String) -> some View {
+        Button { focus.borrow("settings", open: expanded); settingsOpen = true } label: {
+            ComposerSettingLabel(title: value, icon: icon)
+        }.buttonStyle(.plain).help("\(label)：\(value)")
+            .accessibilityLabel("\(label)：\(value)，首选配置，不代表降级后的实际执行")
     }
     private var menu: some View {
         VStack(alignment: .leading, spacing: 10) {
+            ComposerPopoverHeader(title: "对话操作") { menuOpen = false }
+            setting("首选模型", value: preferredModel, icon: "cpu")
+            setting("权限", value: candidate?.mode.map(composerPermissionLabel) ?? "未取得", icon: "shield")
+            setting("思考", value: preferredThinking, icon: "brain")
+            Divider()
             Button("添加附件") { focus.borrow("files", open: true); menuOpen = false; importFiles = true }.buttonStyle(WandSecondaryButtonStyle())
             if conversation.isGroup {
                 ForEach(conversation.members, id: \.id) { member in

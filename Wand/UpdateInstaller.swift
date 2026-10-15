@@ -3,7 +3,7 @@ import Combine
 import CryptoKit
 import Foundation
 
-/// 下载 Stable Release / 所连服务端 Beta 的 ZIP/DMG，校验后在进程退出时原位替换。
+/// 下载 Stable Release / 所选服务端 Beta 的 ZIP/DMG，校验后在进程退出时原位替换。
 ///
 /// ZIP 是首选格式；已有 Release 只有 DMG 时也能直接解包更新。真正替换由临时 helper
 /// 完成，因此不需要用户重新挂载 DMG 或把 app 拖进 Applications。
@@ -86,7 +86,7 @@ final class UpdateInstaller {
         progressHandler = progress
         stateLock.unlock()
 
-        let configuration = URLSessionConfiguration.default
+        let configuration = isServerBeta ? BetaUpdateSession.configuration() : URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 600
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -110,6 +110,7 @@ final class UpdateInstaller {
         )
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         var request = URLRequest(url: asset.downloadURL)
+        if isServerBeta { request.httpShouldHandleCookies = false }
         request.setValue("Wand-macOS-UpdateInstaller", forHTTPHeaderField: "User-Agent")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
         let task = session.downloadTask(with: request)
@@ -951,7 +952,7 @@ private final class UpdateProgressWindow: NSWindowController {
     }
 }
 
-private final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate {
 
     private let fileExtension: String
     private let trustedBetaServer: URL?
@@ -971,23 +972,26 @@ private final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate
         self.onFinish = onFinish
     }
 
-    // Beta 服务端可能使用自签 HTTPS；仅原始连接的同源证书可放行，绝不信任跨站跳转。
+    // Beta 仅放行原站自签证书；HTTP 认证不借用系统或当前连接的凭据。
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        let space = challenge.protectionSpace
-        guard let server = trustedBetaServer,
-              server.scheme?.lowercased() == "https",
-              space.host.lowercased() == server.host?.lowercased(),
-              space.port == (server.port ?? 443),
-              space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = space.serverTrust else {
+        guard let server = trustedBetaServer else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        completionHandler(.useCredential, URLCredential(trust: trust))
+        BetaUpdateSession.handleChallenge(challenge, serverURL: server, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        urlSession(session, didReceive: challenge, completionHandler: completionHandler)
     }
 
     func urlSession(

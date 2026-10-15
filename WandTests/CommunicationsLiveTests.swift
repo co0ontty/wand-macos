@@ -1,10 +1,66 @@
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Wand
 
 /// Opt-in metadata-only acceptance against the installed service. No model input or knowledge route.
 @MainActor
 final class CommunicationsLiveTests: XCTestCase {
+    private func verifyNativeImagePaste(api: WandAPI, origin: URL, group: NativeConversation) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("wand-paste-live-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let suite = "WandPasteLive.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let store = CommunicationsStore(api: api, serverURL: origin, defaults: defaults)
+        store.select(group.id); await store.waitForDetailForTesting()
+        let scope = ConversationScope(conversationID: group.id, target: nil)
+        let owner = store.composer(for: scope)
+        owner.editCwd(directory.path); owner.edit("未发送的图片草稿")
+        let focus = ComposerFocusController(); focus.focus()
+        let host = NSHostingView(rootView: ConversationComposerSurface(owner: owner, store: store, conversation: group, focus: focus))
+        host.frame = NSRect(x: 0, y: 0, width: 740, height: 280)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); await Task.yield()
+        func editor(in view: NSView) -> ComposerNSTextView? {
+            if let found = view as? ComposerNSTextView { return found }
+            return view.subviews.compactMap { editor(in: $0) }.first
+        }
+        let input = try XCTUnwrap(editor(in: host))
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let image = NSImage(size: NSSize(width: 8, height: 8))
+        image.lockFocus(); NSColor.orange.setFill(); NSRect(x: 0, y: 0, width: 8, height: 8).fill(); image.unlockFocus()
+        board.writeObjects([image])
+        XCTAssertTrue(input.pasteAttachment(from: board))
+        for _ in 0..<200 {
+            if !owner.uploading { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertFalse(owner.uploading)
+        let file = try XCTUnwrap(owner.attachments.first, "Installed service must accept the pasted image")
+        XCTAssertEqual(owner.attachments.count, 1)
+        XCTAssertEqual(file.mimeType, "image/png")
+        XCTAssertEqual(owner.text, "未发送的图片草稿")
+        XCTAssertTrue(file.savedPath.hasPrefix(directory.path + "/"))
+        XCTAssertNotNil(NSImage(contentsOfFile: file.savedPath))
+        let loaded = try await api.conversation(id: group.id)
+        XCTAssertEqual(loaded.turns.count, 0, "Upload is not a model submission")
+        host.layoutSubtreeIfNeeded()
+        if let output = ProcessInfo.processInfo.environment["WAND_COMPOSER_PASTE_VISUAL_DIR"],
+           let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+            try png.write(to: URL(fileURLWithPath: output).appendingPathComponent("installed-paste.png"))
+        }
+    }
+
     func testInstalledServiceMetadataVirtualDMGroupAndRejectedEmptyInput() async throws {
         guard ProcessInfo.processInfo.environment["WAND_COMMUNICATIONS_LIVE"] == "1" else {
             throw XCTSkip("installed-service metadata acceptance is opt-in")
@@ -50,6 +106,9 @@ final class CommunicationsLiveTests: XCTestCase {
             XCTAssertTrue(group.isGroup)
             XCTAssertEqual(group.members.count, 1)
             XCTAssertEqual(group.memberVersion, 1)
+            if ProcessInfo.processInfo.environment["WAND_COMPOSER_PASTE_LIVE"] == "1" {
+                try await verifyNativeImagePaste(api: api, origin: origin, group: group)
+            }
             let emptyID = UUID().uuidString
             do {
                 _ = try await api.postConversation(path: "/api/conversations/\(api.percentEncodePathComponent(group.id))/messages",

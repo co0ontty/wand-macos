@@ -16,10 +16,12 @@ private enum ChatLayoutMetrics {
 /// 原生聊天视图：结构化消息渲染 + 原生输入栏 + 权限审批卡片。
 /// 输入栏放在 safeAreaInset(edge: .bottom)。
 struct ChatView: View {
+    @Environment(\.desktopPageActive) private var pageActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let sessionId: String
     private let api: WandAPI
+    private let onSnapshotViewed: ((SessionSnapshot) -> Void)?
     @ObservedObject private var gitStatusStore: GitStatusStore
 
     @StateObject private var store: ChatStore
@@ -48,14 +50,17 @@ struct ChatView: View {
     @State private var inputFocused = false
     @StateObject private var composerFocus = ComposerFocusController()
     @State private var sendPresentationPhase: NativeComposerPhase = .idle
+    @State private var showComposerActions = false
     @State private var showThinkingPanel = false
     @State private var showModePanel = false
     @State private var proposedMode: String?
     @State private var confirmModeChange = false
 
-    init(sessionId: String, api: WandAPI, gitStatusStore: GitStatusStore) {
+    init(sessionId: String, api: WandAPI, gitStatusStore: GitStatusStore,
+         onSnapshotViewed: ((SessionSnapshot) -> Void)? = nil) {
         self.sessionId = sessionId
         self.api = api
+        self.onSnapshotViewed = onSnapshotViewed
         self.gitStatusStore = gitStatusStore
         _store = StateObject(wrappedValue: ChatStore(sessionId: sessionId, api: api))
         _attachments = StateObject(wrappedValue: ComposerAttachmentController(sessionId: sessionId, api: api))
@@ -64,11 +69,6 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             sessionActionBar
-            WorkingAvatar(id: store.snapshot?.employeeId ?? sessionId, name: store.displayEmployeeName, avatar: store.displayEmployeeAvatar,
-                activity: avatarFileActivity(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked),
-                thinking: avatarIsThinking(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked), size: 88)
-                .frame(height: FocusComposerMetrics.normalCompanionClearance)
-                .overlay { Color.clear.contentShape(Rectangle()).frame(width: 88, height: 88).onTapGesture { composerFocus.focus(); inputFocused = true } }
             if showingFind { conversationFindBar }
             if !store.connected && !store.loading { reconnectBanner }
             ZStack {
@@ -101,6 +101,12 @@ struct ChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
+        // Confirm only once the loaded result is projected, not on list polling.
+        .task(id: "\(store.loading)-\(store.snapshot?.completionRevision ?? 0)-\(store.isResponding)-\(pageActive)") {
+            guard pageActive, !store.loading, store.loadError == nil,
+                  let snapshot = store.snapshot else { return }
+            onSnapshotViewed?(snapshot)
+        }
         .sheet(isPresented: $showQuickCommit) {
             GitQuickCommitView(
                 sessionId: sessionId,
@@ -160,9 +166,10 @@ struct ChatView: View {
             store.toast = "上一条消息发送失败，已恢复到输入框。"
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { notification in
-            guard let command = notification.object as? DesktopCommand else { return }
+            guard pageActive, let command = notification.object as? DesktopCommand else { return }
             switch command {
             case .focusComposer:
+                showComposerActions = false
                 closeFind()
                 composerFocus.focus(); inputFocused = true
             case .findConversation:
@@ -200,7 +207,7 @@ struct ChatView: View {
                     ForEach(Array(groupedMessageItems.enumerated()), id: \.offset) { _, item in
                         let absoluteIndex = store.loadedOffset + messageItemTurnIndex(item)
                         messageItemView(item, proxy: proxy)
-                            .padding(4)
+                            .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: Theme.Radius.md)
                                     .fill(selectedFindResult == absoluteIndex && showingFind
@@ -557,7 +564,8 @@ struct ChatView: View {
     }
 
     private func thinkingShortLabel(_ id: String) -> String {
-        thinkingLevels.first { $0.id == id }?.shortLabel ?? "关"
+        if id == "off" { return "自动" }
+        return thinkingLevels.first { $0.id == id }?.label ?? composerThinkingPreference(id)
     }
 
     // MARK: - 底部栏（权限卡 + 队列 + 输入框）
@@ -577,7 +585,7 @@ struct ChatView: View {
         VStack(spacing: 0) {
             if !visibleTodos.isEmpty {
                 TodoProgressBar(todos: visibleTodos)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
                     .padding(.bottom, 6)
             }
             if store.pendingEscalation != nil || store.legacyPermissionPrompt != nil {
@@ -586,12 +594,12 @@ struct ChatView: View {
                     legacy: store.legacyPermissionPrompt,
                     onResolve: { store.resolvePermission($0) }
                 )
-                .padding(.horizontal, 12)
+                .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
                 .padding(.bottom, 8)
             }
             if !store.queuedMessages.isEmpty {
                 QueueBar(store: store)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
                     .padding(.bottom, 6)
             }
             inputBar
@@ -604,28 +612,35 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            ComposerIdentityHeader(hasPortrait: store.snapshot?.employeeId != nil, portrait: {
+                ComposerCompanion(focus: { composerFocus.focus(); inputFocused = true }) {
+                    WorkingAvatar(id: store.snapshot?.employeeId ?? sessionId, name: store.displayEmployeeName, avatar: store.displayEmployeeAvatar,
+                        activity: avatarFileActivity(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked),
+                        thinking: avatarIsThinking(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked),
+                        size: FocusComposerMetrics.normalCompanionSize)
+                }
+            }, identity: { Text(store.displayEmployeeName + "：").foregroundColor(Theme.textPrimary) }, runtime: {
+                HStack(spacing: 6) {
+                    modelThinkingChip(inMenu: false)
+                    Text("·").accessibilityHidden(true)
+                    thinkingChip(inMenu: false).fixedSize(horizontal: true, vertical: false)
+                }
+            })
             FocusComposerSurface(expanded: composerFocus.editing || composerFocus.recovery || store.sending || attachments.isUploading,
                 hasDraft: !draft.isEmpty || !attachments.attachments.isEmpty,
-                summary: attachments.attachments.isEmpty ? (draft.isEmpty ? "发消息…" : "草稿 · \(draft.count) 字") : "草稿 · \(attachments.attachments.count) 附件",
+                summary: attachments.attachments.isEmpty ? (draft.isEmpty ? (store.isResponding ? "回复中，可继续输入" : "输入消息…") : "草稿 · \(draft.count) 字") : "草稿 · \(attachments.attachments.count) 附件",
                 onFocus: { composerFocus.focus(); inputFocused = true }, editor: { composerInputContent },
-                add: { composerActionsMenu }, send: { trailingButtons }, settings: {
-                    HStack(spacing: 2) {
-                        modelThinkingChip
-                        Button { composerFocus.borrow("mode", open: true); inputFocused = false; showModePanel = true } label: {
-                            ComposerSettingLabel(title: "权限：\(store.mode)")
-                        }.buttonStyle(.plain).popover(isPresented: $showModePanel, arrowEdge: .bottom) { modePanel }
-                        Button { composerFocus.borrow("thinking", open: true); inputFocused = false; showThinkingPanel = true } label: {
-                            ComposerSettingLabel(title: "思考：\(thinkingShortLabel(store.thinkingEffort))")
-                        }.buttonStyle(.plain).popover(isPresented: $showThinkingPanel, arrowEdge: .bottom) {
-                            ThinkingEffortSlider(options: thinkingLevels, selection: store.thinkingEffort, accent: thinkingTint, onSelect: store.setThinkingEffort)
-                                .padding(16).frame(width: 300)
-                        }
-                    }
-                }, primaryVisible: nativeComposerPrimaryVisible(text: draft, hasAttachments: !attachments.attachments.isEmpty,
-                    turnRunning: store.isResponding, phase: sendPresentationPhase))
+                add: { composerActionsMenu }, send: { trailingButtons },
+                isFocused: inputFocused, showsAdvancedSettings: store.snapshot?.provider == "pi")
         }
-        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 6)
+        .padding(.horizontal, ChatLayoutMetrics.horizontalInset).padding(.top, 8).padding(.bottom, 8)
+        .onChange(of: showComposerActions) {
+            if !$0 {
+                showModelThinkingPanel = false; showThinkingPanel = false; showModePanel = false
+                composerFocus.resume("actions")
+            }
+        }
         .onChange(of: composerFocus.focused) { inputFocused = $0 }
         .onChange(of: showThinkingPanel) { if !$0 { composerFocus.resume("thinking") } }
         .onChange(of: showModePanel) { if !$0 && proposedMode == nil { composerFocus.resume("mode") } }
@@ -648,11 +663,12 @@ struct ChatView: View {
 
     private var modePanel: some View {
         VStack(alignment: .leading, spacing: 10) {
+            ComposerPopoverHeader(title: "权限") { showModePanel = false }
             if store.snapshot?.provider == "codex" {
                 Text("Codex 当前权限固定为 \(store.mode)，此处不会提升权限。")
             } else {
                 ForEach(["default", "auto-edit", "full-access", "managed", "native"], id: \.self) { mode in
-                    Button(mode) {
+                    Button(composerPermissionLabel(mode)) {
                         if ["auto-edit", "full-access", "managed"].contains(mode), mode != store.mode {
                             proposedMode = mode; showModePanel = false; confirmModeChange = true
                         } else { store.setMode(mode); showModePanel = false }
@@ -672,22 +688,12 @@ struct ChatView: View {
                 )
             }
             growingTextField
-                .padding(.horizontal, 6)
-                .padding(.vertical, 5)
                 .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                 .contentShape(Rectangle())
                 .accessibilityHint("可按 Command-V 粘贴剪贴板中的图片")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // macOS 12 尚没有可靠的 SwiftUI 图片粘贴回调。局部事件拦截器只在本输入框
-        // 聚焦时处理图片 / Finder 文件 URL，纯文本仍由系统 TextField 原样粘贴。
-        .background(
-            ComposerPasteInterceptor(
-                attachments: attachments,
-                isInputFocused: inputFocused
-            )
-            .frame(width: 0, height: 0)
-        )
+
     }
 
     private var trailingButtons: some View {
@@ -696,31 +702,17 @@ struct ChatView: View {
             onSend: sendDraft, onStop: { showStopConfirm = true })
     }
 
-    private var modelThinkingChip: some View {
+    private func modelThinkingChip(inMenu: Bool) -> some View {
         Button {
-            composerFocus.borrow("model", open: true); inputFocused = false
+            composerFocus.borrow("model", open: composerFocus.editing); inputFocused = false
             showModelThinkingPanel = true
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "cpu")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(modelThinkingText)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 116)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .opacity(0.65)
-            }
-            .foregroundColor(Theme.textSecondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 7)
-            .frame(minHeight: ComposerMetrics.actionTouchSize)
+            ComposerSettingLabel(title: modelThinkingText)
         }
-        .accessibilityLabel("模型与思考深度")
-        .buttonStyle(DesktopNavigationButtonStyle())
-        .popover(isPresented: $showModelThinkingPanel, arrowEdge: .bottom) {
+        .help("模型：\(defaultModelRowLabel)；思考深度：\(thinkingShortLabel(store.thinkingEffort))")
+        .accessibilityLabel("模型：\(defaultModelRowLabel)，思考深度：\(thinkingShortLabel(store.thinkingEffort))")
+        .buttonStyle(.plain)
+        .popover(isPresented: Binding(get: { showModelThinkingPanel && showComposerActions == inMenu }, set: { showModelThinkingPanel = $0 }), arrowEdge: .bottom) {
             modelThinkingPanel
         }
         .onChange(of: showModelThinkingPanel) { open in
@@ -728,30 +720,20 @@ struct ChatView: View {
         }
     }
 
-    private var modelThinkingText: String {
-        shortModelLabel
+    private func thinkingChip(inMenu: Bool) -> some View {
+        Button { composerFocus.borrow("thinking", open: composerFocus.editing); inputFocused = false; showThinkingPanel = true } label: {
+            ComposerSettingLabel(title: "思考：" + thinkingShortLabel(store.thinkingEffort))
+        }.buttonStyle(.plain).help("思考深度：" + thinkingShortLabel(store.thinkingEffort))
+            .popover(isPresented: Binding(get: { showThinkingPanel && showComposerActions == inMenu }, set: { showThinkingPanel = $0 }), arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ComposerPopoverHeader(title: "思考深度") { showThinkingPanel = false }
+                    ThinkingEffortSlider(options: thinkingLevels, selection: store.thinkingEffort, accent: thinkingTint, onSelect: store.setThinkingEffort)
+                }.padding(16).frame(width: 300)
+            }
     }
 
-    private var shortModelLabel: String {
-        // 哨兵解析出的具体模型名走下面同一套压缩，所以「默认 opus」和显式选 opus 长得一样。
-        let picked = store.selectedModel
-        let selected = (picked?.isEmpty == false && picked != "default") ? picked! : resolvedModelName
-        guard !selected.isEmpty else { return "默认" }
-        let full = store.availableModels.first(where: { $0.id == selected })?.label ?? selected
-        let base: String
-        if let idx = full.firstIndex(where: { $0 == "（" || $0 == "(" }) {
-            base = String(full[..<idx]).trimmingCharacters(in: .whitespaces)
-        } else {
-            base = full
-        }
-        let leaf = base.split(separator: "/").last.map(String.init) ?? base
-        let lower = leaf.lowercased()
-        if lower.contains("opus") { return "Opus" }
-        if lower.contains("sonnet") { return "Sonnet" }
-        if lower.contains("haiku") { return "Haiku" }
-        if lower.contains("gpt-5") { return "GPT-5" }
-        if lower.contains("gpt-4") { return "GPT-4" }
-        return leaf.count > 12 ? String(leaf.prefix(10)) + "…" : leaf
+    private var modelThinkingText: String {
+        store.loading ? "模型加载中…" : defaultModelRowLabel
     }
 
     private var thinkingTint: Color {
@@ -814,9 +796,7 @@ struct ChatView: View {
 
     private var modelThinkingPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("模型")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Theme.textSecondary)
+            ComposerPopoverHeader(title: "模型") { showModelThinkingPanel = false }
             SessionModelSearchField(query: $modelQuery)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
@@ -890,49 +870,47 @@ struct ChatView: View {
     }
 
     private var composerActionsMenu: some View {
-        Menu {
-            Button {
-                attachments.showFileImporter = true
-            } label: {
-                Label("选择图片或文件…", systemImage: "paperclip")
-            }
-            .disabled(attachments.isUploading || attachments.isFull)
-
-            Button {
-                _ = attachments.importFromPasteboard(.general)
-            } label: {
-                Label("粘贴剪贴板中的图片", systemImage: "photo.on.rectangle")
-            }
-            .disabled(attachments.isUploading || attachments.isFull)
-
-            Divider()
-
-            Text("附件会先上传到当前 Wand 服务，点击发送后才会加入本条消息。")
+        Button {
+            if showComposerActions { showComposerActions = false }
+            else { composerFocus.borrow("actions", open: composerFocus.editing); inputFocused = false; showComposerActions = true }
         } label: {
-            if attachments.isUploading {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(Theme.textSecondary)
-                    .frame(
-                        width: ComposerMetrics.actionVisualSize,
-                        height: ComposerMetrics.actionVisualSize
-                    )
-            } else {
-                Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(Theme.textSecondary)
-                    .frame(
-                        width: ComposerMetrics.actionVisualSize,
-                        height: ComposerMetrics.actionVisualSize
-                    )
-                    .background(Circle().fill(Theme.surface))
-                    .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+            ZStack {
+                Image(systemName: "plus").opacity(showComposerActions ? 0 : 1)
+                    .scaleEffect(reduceMotion || !showComposerActions ? 1 : 0.9)
+                Image(systemName: "xmark").opacity(showComposerActions ? 1 : 0)
+                    .scaleEffect(reduceMotion || showComposerActions ? 1 : 0.9)
             }
+            .font(.system(size: 16, weight: .medium))
+            .frame(width: FocusComposerMetrics.touch, height: FocusComposerMetrics.touch)
+            .contentShape(Rectangle())
         }
-        .frame(width: ComposerMetrics.actionTouchSize, height: ComposerMetrics.actionTouchSize)
-        .buttonStyle(.plain)
-        .accessibilityLabel("添加附件和更多操作")
-        .help("选择图片或文件；也可在输入框按 Command-V 粘贴图片")
+        .buttonStyle(ComposerControlStyle())
+        .wandMotion(value: showComposerActions)
+        .accessibilityLabel("添加附件和执行配置")
+        .help("附件、模型、权限与思考深度")
+        .popover(isPresented: $showComposerActions, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 12) {
+                ComposerPopoverHeader(title: "执行配置") { showComposerActions = false }
+                modelThinkingChip(inMenu: true)
+                Button { composerFocus.borrow("mode", open: composerFocus.editing); showModePanel = true } label: {
+                    ComposerSettingLabel(title: "权限：" + composerPermissionLabel(store.mode), icon: "shield")
+                }.buttonStyle(.plain).popover(isPresented: $showModePanel, arrowEdge: .trailing) { modePanel }
+                thinkingChip(inMenu: true)
+                Divider()
+                Button {
+                    showComposerActions = false; attachments.showFileImporter = true
+                } label: { Label("选择图片或文件…", systemImage: "paperclip") }
+                    .buttonStyle(.plain).disabled(attachments.isUploading || attachments.isFull)
+                Button {
+                    _ = attachments.importFromPasteboard(.general); showComposerActions = false
+                } label: { Label("粘贴剪贴板中的图片", systemImage: "photo.on.rectangle") }
+                    .buttonStyle(.plain).disabled(attachments.isUploading || attachments.isFull)
+                Text("附件上传后，点击发送才会加入本条消息。")
+                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+            }
+            .padding(16).frame(width: 280, alignment: .leading)
+            .onExitCommand { showComposerActions = false }
+        }
     }
 
     /// AppKit 原生多行输入器。Return 命令先经过 NSTextInputContext / markedText，
@@ -950,13 +928,14 @@ struct ChatView: View {
             onCompositionChange: { composerIsComposing = $0 },
             onSubmit: handleReturnKey,
             onHeightChange: { composerInputHeight = $0 },
-            onEscape: { composerFocus.collapse(); inputFocused = false }
+            onEscape: { composerFocus.collapse(); inputFocused = false },
+            onPasteAttachment: { attachments.importFromPasteboard($0) }
         )
         .frame(height: composerInputHeight)
     }
 
     private var composerPlaceholder: String {
-        store.isResponding ? "继续补充，消息会加入队列…" : "向助手发送消息…"
+        store.isResponding ? "回复中，可继续输入" : "输入消息…"
     }
 
     private func handleReturnKey() {
@@ -973,6 +952,7 @@ struct ChatView: View {
 
     private func sendDraft() {
         guard canSend else { return }
+        showComposerActions = false
         // 多行 TextField 触发的 onSubmit 可能在草稿末尾多带一个换行(回车字符先于 onSubmit
         // 提交落进 draft),trim 一下避免发出去的消息带尾换行。
         let text = buildAttachmentPrompt(attachments.attachments, body: draft)
@@ -1257,12 +1237,14 @@ private struct ConversationScrollObserver: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ScrollObservationView {
         let view = ScrollObservationView()
+        view.pageActive = context.environment.desktopPageActive
         view.onUserScroll = onUserScroll
         view.onReachedBottom = onReachedBottom
         return view
     }
 
     func updateNSView(_ nsView: ScrollObservationView, context: Context) {
+        nsView.pageActive = context.environment.desktopPageActive
         nsView.onUserScroll = onUserScroll
         nsView.onReachedBottom = onReachedBottom
     }
@@ -1272,6 +1254,7 @@ private struct ConversationScrollObserver: NSViewRepresentable {
     }
 
     final class ScrollObservationView: NSView {
+        var pageActive = true
         var onUserScroll: () -> Void = {}
         var onReachedBottom: () -> Void = {}
         private var observer: NSObjectProtocol?
@@ -1295,7 +1278,7 @@ private struct ConversationScrollObserver: NSViewRepresentable {
                 queue: .main
             ) { [weak self] _ in self?.reportBottom() }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self, let scroll = self.observedScrollView,
+                guard let self, self.pageActive, let scroll = self.observedScrollView,
                       event.window === scroll.window,
                       scroll.bounds.contains(scroll.convert(event.locationInWindow, from: nil)) else { return event }
                 self.onUserScroll()
@@ -1305,7 +1288,7 @@ private struct ConversationScrollObserver: NSViewRepresentable {
         }
 
         private func reportBottom() {
-            guard let scroll = observedScrollView, let document = scroll.documentView else { return }
+            guard pageActive, let scroll = observedScrollView, let document = scroll.documentView else { return }
             let distance = document.bounds.maxY - scroll.contentView.bounds.maxY
             if distance <= 48 { onReachedBottom() }
         }
@@ -1325,10 +1308,13 @@ private struct ConversationScrollObserver: NSViewRepresentable {
 /// 原生 AppKit 终端直接订阅 Wand /ws，不加载网页或创建本地 shell。
 /// 键盘、中文输入、选择、复制粘贴、查找与滚动由 SwiftTerm / AppKit 处理。
 struct PtySessionView: View {
+    @Environment(\.desktopPageActive) private var pageActive
     @StateObject private var store: PtyTerminalStore
     @State private var showStopConfirm = false
+    private let onViewed: (() -> Void)?
 
-    init(sessionId: String, api: WandAPI) {
+    init(sessionId: String, api: WandAPI, onViewed: (() -> Void)? = nil) {
+        self.onViewed = onViewed
         _store = StateObject(wrappedValue: PtyTerminalStore(sessionId: sessionId, api: api))
     }
 
@@ -1372,9 +1358,14 @@ struct PtySessionView: View {
         }
         .background(Color(nsColor: NativeTerminalView.canvasColor))
         .onAppear { store.start() }
+        .task(id: "\(store.loading)-\(store.ready)-\(store.sessionEnded)-\(pageActive)") {
+            guard pageActive, !store.loading, store.loadError == nil,
+                  store.ready || store.sessionEnded else { return }
+            onViewed?()
+        }
         .onDisappear { store.shutdown() }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { notification in
-            guard let command = notification.object as? DesktopCommand else { return }
+            guard pageActive, let command = notification.object as? DesktopCommand else { return }
             switch command {
             case .focusComposer: store.terminal.focusTerminal()
             case .findConversation: store.terminal.showFind()
@@ -1562,7 +1553,7 @@ private func isImageAttachment(_ file: UploadedFile) -> Bool {
     return composerImageExtensions.contains(ext)
 }
 
-private func isImageAttachmentPath(_ path: String) -> Bool {
+func isImageAttachmentPath(_ path: String) -> Bool {
     let clean = path.split(whereSeparator: { $0 == "?" || $0 == "#" }).first.map(String.init) ?? path
     return composerImageExtensions.contains((clean as NSString).pathExtension.lowercased())
 }
@@ -1583,8 +1574,37 @@ private func pastedFileURLs(from pasteboard: NSPasteboard) -> [URL] {
     return (pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]) ?? []
 }
 
-private func pasteboardHasImportableAttachment(_ pasteboard: NSPasteboard) -> Bool {
-    !pastedFileURLs(from: pasteboard).isEmpty || NSImage(pasteboard: pasteboard) != nil
+/// Snapshot clipboard data synchronously so an upload cannot read a later clipboard value.
+struct ComposerPasteboardAttachment {
+    let urls: [URL]
+    let temporaryURLs: [URL]
+
+    static func containsAttachment(_ pasteboard: NSPasteboard) -> Bool {
+        !pastedFileURLs(from: pasteboard).isEmpty || NSImage(pasteboard: pasteboard) != nil
+    }
+
+    init?(pasteboard: NSPasteboard) throws {
+        let files = pastedFileURLs(from: pasteboard)
+        if !files.isEmpty {
+            urls = files
+            temporaryURLs = []
+            return
+        }
+        guard let image = NSImage(pasteboard: pasteboard) else { return nil }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wand-pasted-attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let tiff = image.tiffRepresentation else { throw CocoaError(.fileReadCorruptFile) }
+        let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        let url = directory.appendingPathComponent("clipboard-\(UUID().uuidString.lowercased()).\(png == nil ? "tiff" : "png")")
+        try (png ?? tiff).write(to: url, options: .atomic)
+        urls = [url]
+        temporaryURLs = [url]
+    }
+
+    func removeTemporaryFiles() {
+        for url in temporaryURLs { try? FileManager.default.removeItem(at: url) }
+    }
 }
 
 @MainActor
@@ -1641,19 +1661,12 @@ private final class ComposerAttachmentController: ObservableObject {
             return true
         }
 
-        let urls = pastedFileURLs(from: pasteboard)
-        if !urls.isEmpty {
-            upload(urls, cleanupAfterUpload: false)
-            return true
-        }
-
-        guard let image = NSImage(pasteboard: pasteboard) else {
-            showToast("剪贴板中没有可上传的图片或文件。")
-            return false
-        }
         do {
-            let url = try writePastedImage(image)
-            upload([url], cleanupAfterUpload: true)
+            guard let content = try ComposerPasteboardAttachment(pasteboard: pasteboard) else {
+                showToast("剪贴板中没有可上传的图片或文件。")
+                return false
+            }
+            upload(content.urls, cleanupAfterUpload: !content.temporaryURLs.isEmpty)
         } catch {
             showToast("无法读取剪贴板中的图片：\(error.localizedDescription)")
         }
@@ -1720,99 +1733,6 @@ private final class ComposerAttachmentController: ObservableObject {
         }
     }
 
-    /// 剪贴板图片先写入 app 的临时目录，上传结束（成功、失败或取消）立即删除。
-    /// 不会访问或扫描剪贴板以外的任何本机文件。
-    private func writePastedImage(_ image: NSImage) throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wand-pasted-attachments", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let id = UUID().uuidString.lowercased()
-        if let tiff = image.tiffRepresentation,
-           let bitmap = NSBitmapImageRep(data: tiff),
-           let png = bitmap.representation(using: .png, properties: [:]) {
-            let url = directory.appendingPathComponent("clipboard-\(id).png")
-            try png.write(to: url, options: .atomic)
-            return url
-        }
-        guard let tiff = image.tiffRepresentation else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        let url = directory.appendingPathComponent("clipboard-\(id).tiff")
-        try tiff.write(to: url, options: .atomic)
-        return url
-    }
-}
-
-/// macOS 12 没有能稳定捕获图片粘贴的 SwiftUI API；这个零尺寸 NSView 只在
-/// composer 可见时注册本地键盘监听。它不会拦截纯文本，也不会监听全局键盘事件。
-private struct ComposerPasteInterceptor: NSViewRepresentable {
-    let attachments: ComposerAttachmentController
-    let isInputFocused: Bool
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        context.coordinator.update(attachments: attachments, isInputFocused: isInputFocused)
-        context.coordinator.start()
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.update(attachments: attachments, isInputFocused: isInputFocused)
-    }
-
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.stop()
-    }
-
-    final class Coordinator {
-        private weak var attachments: ComposerAttachmentController?
-        private var isInputFocused = false
-        private var monitor: Any?
-
-        func update(attachments: ComposerAttachmentController, isInputFocused: Bool) {
-            self.attachments = attachments
-            self.isInputFocused = isInputFocused
-        }
-
-        func start() {
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-                guard let self,
-                      self.isInputFocused,
-                      Self.isPasteShortcut(event),
-                      pasteboardHasImportableAttachment(.general) else {
-                    return event
-                }
-                // 拦截后立即消费图片 / file URL，防止系统把二进制内容或路径意外写进草稿。
-                let attachments = self.attachments
-                Task { @MainActor in
-                    _ = attachments?.importFromPasteboard(.general)
-                }
-                return nil
-            }
-        }
-
-        func stop() {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-            }
-            monitor = nil
-        }
-
-        deinit { stop() }
-
-        private static func isPasteShortcut(_ event: NSEvent) -> Bool {
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard flags.contains(.command), !flags.contains(.option), !flags.contains(.control),
-                  let characters = event.charactersIgnoringModifiers?.lowercased() else {
-                return false
-            }
-            return characters == "v"
-        }
-    }
 }
 
 /// NSTextView keeps marked-text handling inside AppKit's text-input pipeline.
@@ -1829,6 +1749,7 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
     let onHeightChange: (CGFloat) -> Void
     var submitActionName = "发送"
     var onEscape: (() -> Void)? = nil
+    var onPasteAttachment: ((NSPasteboard) -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -1844,6 +1765,9 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
 
         let textView = ComposerNSTextView(frame: .zero)
         textView.delegate = context.coordinator
+        if onPasteAttachment != nil {
+            textView.onPasteAttachment = { context.coordinator.parent.onPasteAttachment?($0) ?? false }
+        }
         textView.string = text
         textView.placeholder = placeholder
         textView.onMarkedTextChange = { active in
@@ -1855,7 +1779,7 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
                 context.coordinator.parent.onFocusChange(focused)
             }
         }
-        textView.isEditable = context.environment.isEnabled
+        textView.isEditable = context.environment.isEnabled && context.environment.desktopPageActive
         textView.isRichText = false
         textView.importsGraphics = false
         // Chat prompts and PTY commands must stay byte-for-byte as typed.
@@ -1868,10 +1792,15 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
         textView.isGrammarCheckingEnabled = false
         textView.drawsBackground = false
         textView.backgroundColor = .clear
-        textView.font = .systemFont(ofSize: 16)
-        textView.textColor = .labelColor
+        textView.font = .systemFont(ofSize: 14)
+        textView.textColor = NSColor(Theme.textPrimary)
         textView.insertionPointColor = NSColor(Theme.wandAccent)
-        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = 21; paragraph.maximumLineHeight = 21
+        textView.defaultParagraphStyle = paragraph
+        textView.typingAttributes[.paragraphStyle] = paragraph
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
@@ -1900,8 +1829,13 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
+        if onPasteAttachment != nil {
+            textView.onPasteAttachment = { context.coordinator.parent.onPasteAttachment?($0) ?? false }
+        } else {
+            textView.onPasteAttachment = nil
+        }
 
-        textView.isEditable = context.environment.isEnabled
+        textView.isEditable = context.environment.isEnabled && context.environment.desktopPageActive
         textView.placeholder = placeholder
         textView.setAccessibilityHelp(sendWithCommandEnter
             ? "按 Command-Return \(submitActionName)，按 Return 换行"
@@ -1951,6 +1885,7 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
             textView.onMarkedTextChange = nil
             textView.onCommandReturn = nil
             textView.onFocusChange = nil
+            textView.onPasteAttachment = nil
             textView.delegate = nil
         }
     }
@@ -1987,6 +1922,7 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard textView.isEditable else { return false }
             if commandSelector == #selector(NSResponder.cancelOperation(_:)), !textView.hasMarkedText(), let close = parent.onEscape {
                 close(); return true
             }
@@ -2034,8 +1970,32 @@ struct IMEAwareComposerTextView: NSViewRepresentable {
 
 final class ComposerNSTextView: NSTextView {
     var onFocusChange: ((Bool) -> Void)?
+    var onPasteAttachment: ((NSPasteboard) -> Bool)?
+
+    /// Command-V, Edit > Paste and the context menu all use this responder-chain entry.
+    /// Keep the editor plain text and send images through its owner's attachment pipeline.
+    override func paste(_ sender: Any?) {
+        guard isEditable else { return }
+        if pasteAttachment(from: .general) { return }
+        super.paste(sender)
+    }
+
+    @discardableResult
+    func pasteAttachment(from pasteboard: NSPasteboard) -> Bool {
+        guard isEditable, ComposerPasteboardAttachment.containsAttachment(pasteboard) else { return false }
+        return onPasteAttachment?(pasteboard) ?? false
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), isEditable, onPasteAttachment != nil,
+           ComposerPasteboardAttachment.containsAttachment(.general) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override var acceptsFirstResponder: Bool { isEditable && super.acceptsFirstResponder }
 
     override func becomeFirstResponder() -> Bool {
+        guard isEditable else { return false }
         let accepted = super.becomeFirstResponder()
         if accepted { onFocusChange?(true) }
         return accepted
@@ -2055,7 +2015,7 @@ final class ComposerNSTextView: NSTextView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if window?.firstResponder === self,
+        if isEditable, window?.firstResponder === self,
            (event.keyCode == 36 || event.keyCode == 76),
            modifiers.contains(.command),
            ConversationSendPolicy.shouldSubmit(modifiers: modifiers, commandEnter: true, composing: hasMarkedText()) {
@@ -2097,11 +2057,11 @@ final class ComposerNSTextView: NSTextView {
         super.draw(dirtyRect)
         guard string.isEmpty, !hasMarkedText(), !placeholder.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: font ?? NSFont.systemFont(ofSize: 16),
+            .font: font ?? NSFont.systemFont(ofSize: 14),
             .foregroundColor: Theme.textPlaceholder
         ]
         let origin = NSPoint(
-            x: textContainerInset.width + 1,
+            x: textContainerInset.width,
             y: textContainerInset.height
         )
         placeholder.draw(at: origin, withAttributes: attributes)
@@ -2137,7 +2097,7 @@ private struct PendingAttachmentsPreview: View {
                         RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                             .stroke(Theme.border, lineWidth: 1)
                     )
-                    .accessibilityLabel("图片附件 \(attachmentDisplayName(file))")
+                    .accessibilityElement(children: .contain)
             } else {
                 HStack(spacing: 7) {
                     Image(systemName: "doc")
@@ -2198,14 +2158,16 @@ private struct ComposerAttachmentImage: View {
     var body: some View {
         Group {
             if let image {
-                if fill {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
+                ChatImageOpenButton(image: image, label: (path as NSString).lastPathComponent) {
+                    if fill {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                    }
                 }
             } else if failed {
                 imagePlaceholder(icon: "photo")
@@ -2257,10 +2219,11 @@ private struct ComposerAttachmentImage: View {
 }
 
 /// 工具结果内联图片：服务端取图 URL（/api/sessions/…/tool-images/…，按 baseURL 补全）
-/// 或 data URI。只读缩略图，对齐 Web 端 inline-tool-image；加载失败不占位。
+/// 或 data URI。缩略图可点击打开预览，对齐 Web / Android 的查看大图；加载失败不占位。
 private struct ToolResultImageThumbnail: View {
-    let baseURL: URL
+    var baseURL: URL?
     let source: String
+    var label = ""
     var maxWidth: CGFloat = 240
     var maxHeight: CGFloat = 200
 
@@ -2271,15 +2234,18 @@ private struct ToolResultImageThumbnail: View {
     var body: some View {
         Group {
             if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Theme.border, lineWidth: 1)
-                    )
+                ChatImageOpenButton(image: image, label: displayLabel) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Theme.border, lineWidth: 1)
+                        )
+                }
+                .fixedSize(horizontal: true, vertical: true)
             } else if failed {
                 Button("图片加载失败，重试") { retryCount += 1 }
                     .font(.system(size: 11))
@@ -2289,6 +2255,12 @@ private struct ToolResultImageThumbnail: View {
             }
         }
         .task(id: "\(source):\(retryCount)") { await load() }
+    }
+
+    private var displayLabel: String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return chatImageLabel(source: source, fallback: "工具返回图片")
     }
 
     private func load() async {
@@ -3104,8 +3076,8 @@ private struct ActivityFoldCard<Content: View>: View {
             HStack(spacing: 8) {
                 if !group.meta.isEmpty {
                     Text(group.meta)
-                        .font(.system(size: 10))
-                        .foregroundColor(Theme.textMuted.opacity(0.85))
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3491,7 +3463,7 @@ struct TurnView: View {
                             RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                                 .stroke(Theme.border, lineWidth: 1)
                         )
-                        .accessibilityLabel("图片附件 \((path as NSString).lastPathComponent)")
+                        .accessibilityElement(children: .contain)
                 } else {
                     HStack(spacing: 7) {
                         Image(systemName: "doc")
@@ -3725,7 +3697,7 @@ private struct BlockView: View {
                     if showSubagentTag {
                         subagentTag(subagent)
                     }
-                    MarkdownText(text: text)
+                    MarkdownText(text: text, baseURL: baseURL)
                 }
             }
         case .thinking(let thinking, _):
@@ -3831,6 +3803,7 @@ private struct ConversationCopyButton: View {
 
 private struct MarkdownText: View {
     let text: String
+    var baseURL: URL? = nil
     @Environment(\.activityFoldCompact) private var compact
 
     var body: some View {
@@ -3854,9 +3827,9 @@ private struct MarkdownText: View {
     @ViewBuilder private func blockView(_ block: Block) -> some View {
         switch block {
         case .paragraph(let content):
-            inlineText(content, size: compact ? 12 : 16, color: compact ? Theme.textMuted : Theme.textPrimary)
+            richInline(content, size: compact ? 12 : 15, color: compact ? Theme.textMuted : Theme.textPrimary)
         case .heading(let level, let content):
-            inlineText(content, size: headingSize(level) - (compact ? 3 : 0), weight: .semibold, color: compact ? Theme.textMuted : Theme.textPrimary)
+            richInline(content, size: headingSize(level) - (compact ? 3 : 0), weight: .semibold, color: compact ? Theme.textMuted : Theme.textPrimary)
                 .padding(.top, level <= 2 ? 3 : 1)
         case .listItem(let marker, let content, let indent, let checked):
             HStack(alignment: .top, spacing: 7) {
@@ -3872,7 +3845,7 @@ private struct MarkdownText: View {
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 14)
                     .padding(.top, 2)
-                inlineText(content, size: compact ? 12 : 16, color: compact ? Theme.textMuted : Theme.textPrimary)
+                richInline(content, size: compact ? 12 : 15, color: compact ? Theme.textMuted : Theme.textPrimary)
             }
             .padding(.leading, CGFloat(indent * 14))
         case .quote(let content):
@@ -3880,7 +3853,7 @@ private struct MarkdownText: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Theme.brand)
                     .frame(width: 3)
-                inlineText(content, size: 15, color: Theme.textSecondary)
+                richInline(content, size: 15, color: Theme.textSecondary)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -3958,6 +3931,49 @@ private struct MarkdownText: View {
         return row + Array(repeating: "", count: count - row.count)
     }
 
+    @ViewBuilder private func richInline(
+        _ content: String,
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        color: Color = Theme.textPrimary
+    ) -> some View {
+        let pieces = splitMarkdownImages(content)
+        let hasImage = pieces.contains {
+            if case .image = $0 { return true }
+            return false
+        }
+        if !hasImage {
+            inlineText(content, size: size, weight: weight, color: color)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+                    switch piece {
+                    case .text(let value):
+                        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            inlineText(trimmed, size: size, weight: weight, color: color)
+                        }
+                    case .image(let alt, let source):
+                        markdownImage(alt: alt, source: source, size: size, color: color)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func markdownImage(alt: String, source: String, size: CGFloat, color: Color) -> some View {
+        let trimmedAlt = alt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let resolved = resolvedChatImageSource(source) {
+            ToolResultImageThumbnail(
+                baseURL: baseURL,
+                source: resolved,
+                label: trimmedAlt.isEmpty ? chatImageLabel(source: resolved, fallback: "图片") : trimmedAlt
+            )
+        } else {
+            inlineText(trimmedAlt.isEmpty ? source : trimmedAlt, size: size, color: color)
+        }
+    }
+
     private func inlineText(
         _ content: String,
         size: CGFloat,
@@ -3966,6 +3982,7 @@ private struct MarkdownText: View {
     ) -> some View {
         Text(attributed(content))
             .font(.system(size: size, weight: weight))
+            .lineSpacing(compact ? 2 : 5)
             .foregroundColor(color)
             .tint(Theme.brand)
             .textSelection(.enabled)

@@ -34,6 +34,7 @@ struct ConversationRecipient: Decodable {
     let avatar: String?
     let duty: String?
     let isLeader: Bool?
+    var agent: EmployeeExecutionCandidate? = nil
 }
 
 struct ConversationRoster: Decodable {
@@ -51,6 +52,7 @@ struct ConversationRun: Decodable, Identifiable {
     let objective: String?
     let roundNumber: Int?
     let stepLimit: Int?
+    var team: ConversationRoster? = nil
     var isActive: Bool { ["running", "awaiting_approval", "waiting_user"].contains(status) }
 }
 
@@ -60,9 +62,12 @@ struct ConversationTaskRecord: Decodable {
         let title: String
         let description: String?
         let workspaceId: String?
+        var status: String? = nil
     }
+    struct Startup: Decodable { let state: String }
     let task: TaskRecord
     let runs: [ConversationRun]
+    var startup: Startup? = nil
 }
 
 struct ConversationRunDetail: Decodable { let run: ConversationRun }
@@ -85,6 +90,23 @@ struct NativeConversation: Decodable, Identifiable {
     let messages: [ConversationTurn]?
     let tasks: [ConversationTaskRecord]?
     let runDetails: [ConversationRunDetail]?
+    var sessionId: String? = nil
+    var communicationSessionId: String? = nil
+    var historySessionIds: [String]? = nil
+
+    var isArchived: Bool { dissolvedAt?.isEmpty == false || (tasks ?? []).contains { $0.task.status == "archived" } }
+    func isActivity(sessions: [WorkspaceSessionSummary], selectedConversationID: String?, selectedSessionID: String?) -> Bool {
+        let linkedIDs = Set(([sessionId, communicationSessionId] + runs.map(\.chatSessionId)).compactMap { $0 } + (historySessionIds ?? []))
+        if sessions.contains(where: { session in
+            let belongs = kind == "dm" ? session.employeeId == peerEmployeeId && session.teamChat == nil : linkedIDs.contains(session.id)
+            return belongs && TaskListPresentation.isActive(session, selectedSessionId: selectedSessionID)
+        }) { return true }
+        return (tasks ?? []).contains { entry in
+            guard entry.task.status != "archived" else { return false }
+            if let run = entry.runs.first { return run.isActive || run.status == "failed" }
+            return ["pending", "failed"].contains(entry.startup?.state ?? "")
+        }
+    }
 
     var displayTitle: String { title?.isEmpty == false ? title! : name?.isEmpty == false ? name! : "对话" }
     var isGroup: Bool { kind == "group" }

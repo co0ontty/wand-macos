@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -6,8 +7,15 @@ final class CommunicationsStore: ObservableObject {
     enum Section { case conversations, contacts }
     @Published var section: Section = .conversations
     @Published var query = ""
+    enum ArchiveFilter: String, CaseIterable { case all, unarchived, archived
+        var label: String { switch self { case .all: return "全部"; case .unarchived: return "未归档"; case .archived: return "已归档" } }
+    }
+    @Published var archiveFilter: ArchiveFilter = .all { didSet { preferences.set(archiveFilter.rawValue, forKey: "wand.desktop.conversationArchiveFilter") } }
+    @Published var activityOnly = false { didSet { preferences.set(activityOnly, forKey: "wand.desktop.conversationActivityOnly") } }
+    private let preferences: UserDefaults
     @Published var includesArchivedContacts = false
     @Published private(set) var contacts: [EmployeeContact] = []
+    @Published private(set) var userProfile = NativeUserProfile()
     @Published private(set) var items: [NativeConversation] = []
     @Published private(set) var contactsError: String?
     @Published private(set) var conversationsError: String?
@@ -18,6 +26,7 @@ final class CommunicationsStore: ObservableObject {
     @Published private(set) var detail: NativeConversation?
     @Published private(set) var detailError: String?
     @Published private(set) var detailLoading = false
+    @Published private(set) var modelCatalog: ModelsResponse?
     @Published private(set) var defaultCwd = ""
     @Published private(set) var defaultCwdError: String?
     @Published var target: ConversationTarget?
@@ -36,6 +45,9 @@ final class CommunicationsStore: ObservableObject {
 
     init(api: CommunicationsServing, serverURL: URL, defaults: UserDefaults = .standard) {
         self.api = api
+        preferences = defaults
+        archiveFilter = ArchiveFilter(rawValue: defaults.string(forKey: "wand.desktop.conversationArchiveFilter") ?? "") ?? .all
+        activityOnly = defaults.bool(forKey: "wand.desktop.conversationActivityOnly")
         ledger = ConversationRequestLedger(api: api, serverURL: serverURL, defaults: defaults)
     }
 
@@ -43,8 +55,13 @@ final class CommunicationsStore: ObservableObject {
     var filteredContacts: [EmployeeContact] {
         contacts.filter { (includesArchivedContacts || !$0.isArchived) && matches([$0.name, $0.duty] + ($0.tags ?? [])) }
     }
-    var filteredConversations: [NativeConversation] {
-        items.filter { matches([$0.displayTitle, $0.preview ?? ""]) }.sorted {
+    var filteredConversations: [NativeConversation] { conversationList() }
+    func conversationList(sessions: [WorkspaceSessionSummary] = [], selectedSessionID: String? = nil) -> [NativeConversation] {
+        items.filter { item in
+            if archiveFilter == .archived && !item.isArchived || archiveFilter == .unarchived && item.isArchived { return false }
+            if activityOnly && !item.isActivity(sessions: sessions, selectedConversationID: selectedID, selectedSessionID: selectedSessionID) { return false }
+            return matches([item.displayTitle, item.preview ?? ""] + (item.tasks ?? []).map { $0.task.title })
+        }.sorted {
             if ($0.pinnedAt != nil) != ($1.pinnedAt != nil) { return $0.pinnedAt != nil }
             if $0.messageAt != $1.messageAt { return ($0.messageAt ?? "") > ($1.messageAt ?? "") }
             return $0.id < $1.id
@@ -63,6 +80,8 @@ final class CommunicationsStore: ObservableObject {
         defer { if indexGeneration == captured { indexLoading = false } }
         async let employeeResult = api.employeeContacts()
         async let conversationResult = api.conversations()
+        async let catalogResult = api.communicationsModels()
+        async let profileResult = api.communicationsUserProfile()
         do {
             let value = try await employeeResult
             if captured == indexGeneration { contacts = value; contactsError = nil }
@@ -74,6 +93,8 @@ final class CommunicationsStore: ObservableObject {
                 for item in value { metadata[item.id] = item }
             }
         } catch { if captured == indexGeneration { conversationsError = error.localizedDescription } }
+        if let catalog = try? await catalogResult, captured == indexGeneration { modelCatalog = catalog }
+        if let profile = try? await profileResult, captured == indexGeneration { userProfile = profile }
         if !loadedDefaults {
             do {
                 let value = try await api.communicationsDefaultCwd()
@@ -151,11 +172,50 @@ final class CommunicationsStore: ObservableObject {
         if receipt?.isTerminal == true { await refreshIndex() }
         if selectedID == scope.conversationID { refreshDetail() }
     }
+    /// Capture both clipboard content and scope before starting any asynchronous work.
+    @discardableResult
+    func importAttachments(from pasteboard: NSPasteboard, scope: ConversationScope) -> Bool {
+        let owner = composer(for: scope)
+        if let reason = sendBlockReason(for: scope) {
+            owner.reportAttachmentBlocked(reason)
+            return true
+        }
+        guard !owner.uploading, !owner.isSending, owner.unknownID == nil else {
+            owner.reportAttachmentBlocked("正在处理消息或附件，请先等待或核对上一份请求。")
+            return true
+        }
+        guard owner.attachments.count < 5 else {
+            owner.reportAttachmentBlocked("最多添加 5 个附件。")
+            return true
+        }
+        do {
+            guard let content = try ComposerPasteboardAttachment(pasteboard: pasteboard) else { return false }
+            guard content.urls.count + owner.attachments.count <= 5 else {
+                content.removeTemporaryFiles()
+                owner.reportAttachmentBlocked("最多添加 5 个附件。")
+                return true
+            }
+            guard let revision = owner.beginUpload() else {
+                content.removeTemporaryFiles()
+                return true
+            }
+            Task { @MainActor in
+                defer { content.removeTemporaryFiles() }
+                await uploadAttachments(content.urls, scope: scope, owner: owner, revision: revision)
+            }
+        } catch { owner.failUpload(error) }
+        return true
+    }
+
     func addAttachments(_ urls: [URL], scope: ConversationScope) async {
         let owner = composer(for: scope)
         guard sendBlockReason(for: scope) == nil, !urls.isEmpty else { return }
         guard urls.count + owner.attachments.count <= 5 else { owner.failUpload(ConversationDeliveryError.notSent("最多添加 5 个附件。")); return }
-        guard let capturedRevision = owner.beginUpload() else { return }
+        guard let revision = owner.beginUpload() else { return }
+        await uploadAttachments(urls, scope: scope, owner: owner, revision: revision)
+    }
+
+    private func uploadAttachments(_ urls: [URL], scope: ConversationScope, owner: ConversationComposerState, revision capturedRevision: UInt64) async {
         do {
             var body: [String: Any] = [:]
             if !owner.cwd.isEmpty { body["cwd"] = owner.cwd }

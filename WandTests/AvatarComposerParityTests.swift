@@ -4,6 +4,49 @@ import WebKit
 import XCTest
 @testable import Wand
 
+private struct RuntimeSettingsProbe: View {
+    @ObservedObject var focus: ComposerFocusController
+    var model = "Ultimate"
+    var body: some View {
+        VStack(spacing: 0) {
+            ComposerIdentityHeader(portrait: {
+                Image(nsImage: NSImage(named: "plush_cat_silver")!).resizable().scaledToFit()
+                    .background(ComposerGeometryProbe(id: "runtime-avatar"))
+            }, identity: { Text("赛博虎妞：") }, runtime: {
+                HStack(spacing: 6) {
+                    ComposerSettingLabel(title: model)
+                    Text("·")
+                    ComposerSettingLabel(title: "思考：高").fixedSize()
+                }.background(ComposerGeometryProbe(id: "runtime-settings"))
+            })
+            FocusComposerSurface(expanded: focus.editing, hasDraft: false, summary: "输入消息…", onFocus: focus.focus,
+            editor: {
+                Text("帮我检查这次修改的界面与交互。\n保留输入内容，确认后再发送。")
+                    .font(.system(size: 14)).foregroundColor(Theme.textPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 80, alignment: .topLeading)
+                    .background(ComposerGeometryProbe(id: "runtime-editor"))
+            }, add: {
+                Image(systemName: "plus").font(.system(size: 16))
+                    .frame(width: 32, height: 32)
+                    .background(ComposerGeometryProbe(id: "runtime-add"))
+            }, send: {
+                NativeComposerActionButton(phase: .idle, turnRunning: true, canSubmit: false, onSend: {})
+                    .background(ComposerGeometryProbe(id: "runtime-send"))
+            })
+            .background(ComposerGeometryProbe(id: "runtime-surface"))
+        }
+        .background(Theme.workspaceBackground)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    }
+}
+private struct ComposerGeometryProbe: NSViewRepresentable {
+    let id: String
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(); view.identifier = NSUserInterfaceItemIdentifier(id); return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+
 @MainActor
 final class AvatarComposerParityTests: XCTestCase {
     func testLatestAndroidIdentityPriorityAndTokens() {
@@ -31,6 +74,128 @@ final class AvatarComposerParityTests: XCTestCase {
         } }
         for asset in ["plush_cat_silver", "plush_cat_orange", "plush_dog_shiba_red"] { XCTAssertNotNil(NSImage(named: asset)) }
         XCTAssertNotNil(Bundle.main.url(forResource: "scene", withExtension: "html", subdirectory: "PlushScene"))
+    }
+
+    func testCompactComposerIsOneRowAndActionsStayAnchoredWhileEditorGrows() async throws {
+        let focus = ComposerFocusController()
+        let host = NSHostingView(rootView: RuntimeSettingsProbe(focus: focus))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func rect(_ id: String) throws -> NSRect {
+            let view = try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id })
+            return view.convert(view.bounds, to: host)
+        }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
+        let add = try rect("runtime-add"), send = try rect("runtime-send")
+        XCTAssertEqual(add.height, 32, accuracy: 1)
+        XCTAssertEqual(send.midY, add.midY, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-surface").height, 47, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-settings").maxX, host.bounds.maxX, accuracy: 1)
+        XCTAssertLessThan(try rect("runtime-settings").midY, add.midY)
+        XCTAssertEqual(try rect("runtime-avatar").minX, 0, accuracy: 1)
+        focus.focus()
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(try rect("runtime-surface").height, 120)
+        XCTAssertEqual(try rect("runtime-add").minY, add.minY, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-send").minY, send.minY, accuracy: 1)
+        focus.collapse()
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try rect("runtime-surface").height, 47, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-send"), send)
+    }
+
+    func testCompactComposerFitsNarrowWidthsAndLongSummaries() async throws {
+        let focus = ComposerFocusController()
+        let host = NSHostingView(rootView: RuntimeSettingsProbe(focus: focus))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 220)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func rect(_ id: String) throws -> NSRect {
+            let view = try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id })
+            return view.convert(view.bounds, to: host)
+        }
+        for model in ["发消息…", String(repeating: "保留长草稿摘要", count: 20)] {
+            host.rootView = RuntimeSettingsProbe(focus: focus, model: model)
+            for dark in [false, true] { for width: CGFloat in [320, 896] { for expanded in [false, true] {
+                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                window.setContentSize(NSSize(width: width, height: 220))
+                host.frame.size.width = width
+                if expanded { focus.focus() } else { focus.collapse() }
+                host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 250_000_000)
+                host.layoutSubtreeIfNeeded()
+                let add = try rect("runtime-add"), send = try rect("runtime-send")
+                XCTAssertEqual(add.minX, 0, accuracy: 0.5)
+                XCTAssertEqual(send.maxX, width, accuracy: 0.5)
+                XCTAssertEqual(send.width, 32, accuracy: 0.5)
+                XCTAssertEqual(try rect("runtime-settings").maxX, width, accuracy: 1)
+                XCTAssertGreaterThanOrEqual(try rect("runtime-settings").minX, 84)
+                XCTAssertLessThan(try rect("runtime-settings").maxY, send.minY)
+                if expanded { XCTAssertEqual(try rect("runtime-editor").width, width, accuracy: 1) }
+                XCTAssertEqual(add.midY, send.midY, accuracy: 0.5)
+                if let directory = ProcessInfo.processInfo.environment["WAND_COMPOSER_OUTPUT"] {
+                    let output = URL(fileURLWithPath: directory, isDirectory: true)
+                    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let name = "composer-\(model == "发消息…" ? "short" : "long")-\(dark ? "dark" : "light")-\(Int(width))-\(expanded ? "expanded" : "collapsed").png"
+                    try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name))
+                }
+            } } }
+        }
+    }
+
+    func testPopoverEscapeIsWindowScopedAndKeepsIMECancellationLocal() async throws {
+        var closes = 0
+        let host = NSHostingView(rootView: ComposerPopoverHeader(title: "执行配置") { closes += 1 })
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 90)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let other = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); other.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); await Task.yield()
+        func escape(_ target: NSWindow) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: target.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(event)
+        }
+        try escape(other)
+        XCTAssertEqual(closes, 0, "another window's Escape cannot close this popover")
+        let editor = NSTextView(frame: NSRect(x: 10, y: 40, width: 260, height: 36))
+        host.addSubview(editor); XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        try escape(window)
+        XCTAssertEqual(closes, 0, "Escape during IME belongs to the input context")
+        editor.unmarkText()
+        try escape(window)
+        XCTAssertEqual(closes, 1)
+        window.contentView = nil
+        try escape(window)
+        XCTAssertEqual(closes, 1, "unmounted popovers release their local event monitor")
+    }
+
+    func testPermissionDisplayDoesNotChangeProtocolValues() {
+        XCTAssertEqual(composerPermissionLabel("managed"), "托管")
+        XCTAssertEqual(composerPermissionLabel("full-access"), "完全访问")
+        XCTAssertEqual(composerPermissionLabel("default"), "标准")
+        XCTAssertEqual(composerPermissionLabel("future-mode"), "future-mode")
+    }
+
+    func testComposerThinkingPreferencesDoNotPretendUnknownLevelsAreOff() {
+        XCTAssertEqual(composerThinkingPreference("pi:xhigh"), "超高")
+        XCTAssertEqual(composerThinkingPreference("off"), "自动（模型默认）")
+        XCTAssertEqual(composerThinkingPreference("pi:new-level"), "new-level")
+        XCTAssertEqual(composerThinkingPreference("pi:max"), "极高")
+        let pi = thinkingEffortOptions(provider: "pi", selectedModel: nil, defaultModel: nil, models: [])
+        XCTAssertEqual(pi.first { $0.id == "deep" }?.label, "高")
+        XCTAssertEqual(pi.first { $0.id == "off" }?.label, "自动")
+        let codex = thinkingEffortOptions(provider: "codex", selectedModel: nil, defaultModel: nil, models: [])
+        XCTAssertEqual(codex.first { $0.id == "max" }?.label, "超高")
     }
 
     func testFocusBorrowingExplicitDismissAckAndRecoveryMatchAndroid() {
@@ -136,7 +301,7 @@ final class AvatarComposerParityTests: XCTestCase {
             NSApp.postEvent(up, atStart: false); window.sendEvent(down); await Task.yield()
         }
         let emptySlot = rect()
-        XCTAssertEqual(emptySlot.width, 48, accuracy: 0.5)
+        XCTAssertEqual(emptySlot.width, 32, accuracy: 0.5)
         XCTAssertEqual(emptySlot.maxX, host.bounds.maxX, accuracy: 0.5)
         try await click(); XCTAssertEqual(probe.submissions, 0, "hidden empty action cannot dispatch")
         probe.text = "保留草稿"; try await settle()
@@ -168,7 +333,7 @@ final class AvatarComposerParityTests: XCTestCase {
                 let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
                 host.cacheDisplay(in: host.bounds, to: bitmap)
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("\(dark ? "dark" : "light")-\(Int(width))-\(expanded ? "expanded" : "collapsed").png"))
-                XCTAssertEqual(rect().width, 48, accuracy: 0.5)
+                XCTAssertEqual(rect().width, 32, accuracy: 0.5)
                 XCTAssertEqual(rect().maxX, host.bounds.maxX, accuracy: 0.5)
             } } }
         }
@@ -290,7 +455,7 @@ final class AvatarComposerParityTests: XCTestCase {
                 NativeComposerActionButton(phase: probe.phase, turnRunning: probe.running,
                     canSubmit: !probe.composing && (!probe.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || probe.hasAttachments),
                     onSend: { probe.submissions += 1 }, onStop: { probe.stops += 1 }).background(MouseSendMarker())
-            }, settings: { Color.clear.frame(height: 44) },
+            },
                 primaryVisible: nativeComposerPrimaryVisible(text: probe.text, hasAttachments: probe.hasAttachments,
                     turnRunning: probe.running, phase: probe.phase))
         }
@@ -302,7 +467,7 @@ final class AvatarComposerParityTests: XCTestCase {
             FocusComposerSurface(expanded: focus.editing, hasDraft: !probe.text.isEmpty, onFocus: focus.focus, editor: {
                 IMEAwareComposerTextView(text: $probe.text, placeholder: "发消息…", isFocused: focus.focused, sendWithCommandEnter: false,
                     onFocusChange: { if $0 { focus.focus() } }, onCompositionChange: { _ in }, onSubmit: { probe.submissions += 1 }, onHeightChange: { _ in }, onEscape: focus.collapse).frame(height: 48)
-            }, add: { Text("+").frame(width: 48, height: 48) }, send: { Text("发送") }, settings: { Text("模型 · 权限 · 思考").frame(height: 44) })
+            }, add: { Text("+").frame(width: 32, height: 32) }, send: { Text("发送") })
         }
     }
 }

@@ -28,7 +28,6 @@ enum WorkspaceSessionTarget: String, CaseIterable, Codable, Identifiable {
     case grok
     case qoder
     case pi
-    case gemini
     case shell
 
     var id: String { rawValue }
@@ -49,7 +48,6 @@ enum WorkspaceSessionTarget: String, CaseIterable, Codable, Identifiable {
         case .grok: return "Grok Build CLI"
         case .qoder: return "Qoder CLI"
         case .pi: return "Pi coding agent"
-        case .gemini: return "Gemini CLI"
         case .shell: return "不启动 Agent 的交互式 Shell"
         }
     }
@@ -687,7 +685,6 @@ enum TaskListPresentation {
     }
 
     static func isActive(_ session: WorkspaceSessionSummary, selectedSessionId: String?) -> Bool {
-        if session.id == selectedSessionId { return true }
         guard session.archived != true else { return false }
         return session.ptyBusy == true || session.inFlight == true || session.isJustCompleted
             || (session.sessionKind == "pty" && ["", "shell"].contains(session.provider ?? "") && session.providerCliActive == true)
@@ -730,7 +727,7 @@ enum TaskListPresentation {
             return TaskDirectoryGroup(workspaceId: result.workspaceId, workspaceName: result.workspaceName,
                 workspaceCwd: result.workspaceCwd, synthetic: result.synthetic,
                 tasks: result.tasks.filter { task in
-                    task.id == selectedTaskId || task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }
+                    task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }
                 }, standaloneSessions: [], global: result.global)
         }.sorted { !$0.isGlobal && $1.isGlobal }
     }
@@ -933,14 +930,14 @@ enum TaskListPresentation {
 
     /// 占位标题（空 / 会话 / 裸 CLI 名 / 「CLI N」）不是会话标题。
     private static let placeholderSessionTitles: Set<String> = [
-        "会话", "wand 会话", "claude", "codex", "opencode", "grok", "qoder", "pi", "gemini", "终端",
+        "会话", "wand 会话", "claude", "codex", "opencode", "grok", "qoder", "pi", "终端",
     ]
 
     static func isPlaceholderSessionTitle(_ title: String) -> Bool {
         let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized.isEmpty || placeholderSessionTitles.contains(normalized) { return true }
         return normalized.range(
-            of: #"^(claude|codex|opencode|grok|qoder|pi|gemini|终端)\s+\d+$"#,
+            of: #"^(claude|codex|opencode|grok|qoder|pi|终端)\s+\d+$"#,
             options: .regularExpression
         ) != nil
     }

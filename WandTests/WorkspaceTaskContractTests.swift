@@ -156,7 +156,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         let matched = TaskListPresentation.recentGroups(groups, query: "wand payments", activeOnly: false, selectedSessionId: nil)
         XCTAssertEqual(matched.flatMap(\.entries).map(\.id), ["payment-review"])
         let active = TaskListPresentation.recentGroups(groups, query: "", activeOnly: true, selectedSessionId: "payment-review")
-        XCTAssertEqual(active.flatMap(\.entries).map(\.id), ["payment-review"], "The selected idle session remains visible")
+        XCTAssertTrue(active.flatMap(\.entries).isEmpty, "Selection is not activity")
         let duplicate = TaskListPresentation.recentGroups(groups + groups, query: "", activeOnly: false, selectedSessionId: nil)
         XCTAssertEqual(duplicate.flatMap(\.entries).count, 4)
     }
@@ -177,6 +177,24 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertFalse(TaskListPresentation.isActive(sessions[5], selectedSessionId: nil))
     }
 
+    func testViewedCompletionLeavesActivityEvenWhileSelected() throws {
+        func completed(_ viewed: Int, inFlight: Bool = false) throws -> WorkspaceSessionSummary {
+            try JSONDecoder().decode(WorkspaceSessionSummary.self, from: Data("""
+            {"id":"finished","status":"idle","completionRevision":2,"viewedCompletionRevision":\(viewed),"inFlight":\(inFlight)}
+            """.utf8))
+        }
+        let unread = try completed(1), seen = try completed(2)
+        XCTAssertTrue(TaskListPresentation.isActive(unread, selectedSessionId: unread.id))
+        XCTAssertFalse(TaskListPresentation.isActive(seen, selectedSessionId: seen.id))
+        XCTAssertTrue(TaskListPresentation.isActive(try completed(2, inFlight: true), selectedSessionId: seen.id))
+        let group = TaskDirectoryGroup(workspaceId: "w", workspaceName: "W", workspaceCwd: "/tmp",
+            synthetic: false, tasks: [], standaloneSessions: [seen])
+        XCTAssertTrue(TaskListPresentation.recentGroups([group], query: "", activeOnly: true,
+            selectedSessionId: seen.id).isEmpty)
+        XCTAssertEqual(TaskListPresentation.recentGroups([group], query: "", activeOnly: false,
+            selectedSessionId: seen.id).flatMap(\.entries).map(\.id), [seen.id])
+    }
+
     func testGlobalGroupMetadataAndActiveDirectoryProjection() throws {
         let source = try searchGroups()
         let global = TaskDirectoryGroup(workspaceId: "global", workspaceName: "全局", workspaceCwd: "/tmp",
@@ -188,7 +206,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(groups.flatMap(\.tasks).count, 4)
         let active = TaskListPresentation.sidebarDirectoryGroups(source, workspaces: [], query: "",
             activeOnly: true, selectedSessionId: "layout", selectedTaskId: nil)
-        XCTAssertEqual(active.first?.tasks.map(\.id), ["checkout"])
+        XCTAssertTrue(active.flatMap(\.tasks).isEmpty)
         XCTAssertEqual(active.map(\.id), source.map(\.id), "Activity filtering retains directory roots")
     }
 
@@ -719,21 +737,6 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertFalse(draft.refreshingOptions)
     }
 
-    func testGeminiCreationUsesItsOwnRunnerRatherThanClaude() async throws {
-        let api = makeAPI { request in
-            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
-            XCTAssertEqual(request.httpMethod, "POST")
-            let body = try Self.requestBody(request)
-            XCTAssertEqual(body["provider"] as? String, "gemini")
-            XCTAssertEqual(body["runner"] as? String, "gemini-cli-json")
-            XCTAssertNil(body["prompt"], "测试不能提交模型输入")
-            return Data(#"{"id":"fixture","provider":"gemini"}"#.utf8)
-        }
-        let session = try await api.createStructuredSession(
-            provider: "gemini", cwd: "/fixture", mode: nil, prompt: nil
-        )
-        XCTAssertEqual(session.providerLabel, "Gemini")
-    }
 
     @MainActor
     func testPromptCreationReturnsAcceptedRunningSessionWithoutWaitingForTurn() async throws {

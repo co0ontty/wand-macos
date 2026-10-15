@@ -20,6 +20,40 @@ final class CommunicationsTests: XCTestCase {
         ConversationScope(conversationID: id, target: target)
     }
 
+    func testConversationActivityAndArchiveFiltersAreIndependent() async throws {
+        let api = CommunicationsStub()
+        api.items = try JSONDecoder().decode([NativeConversation].self, from: JSONSerialization.data(withJSONObject: [
+            ["id":"a", "kind":"dm", "peerEmployeeId":"a", "title":"活动"],
+            ["id":"b", "kind":"dm", "peerEmployeeId":"b", "title":"空闲"],
+            ["id":"c", "kind":"group", "dissolvedAt":"2026-10-01", "title":"归档", "tasks":[["task":["id":"t","title":"任务","status":"archived"],"runs":[]]]]
+        ]))
+        let storage = defaults()
+        let store = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: storage)
+        await store.refreshIndex()
+        let sessions = try JSONDecoder().decode([WorkspaceSessionSummary].self, from: JSONSerialization.data(withJSONObject: [
+            ["id":"s1", "employeeId":"a", "status":"running", "inFlight":true],
+            ["id":"s2", "employeeId":"b", "status":"running", "provider":"pi", "providerCliActive":true]
+        ]))
+        XCTAssertEqual(store.conversationList(sessions: sessions).count, 3)
+        store.activityOnly = true
+        XCTAssertEqual(store.conversationList(sessions: sessions).map(\.id), ["a"])
+        store.archiveFilter = .archived
+        XCTAssertTrue(store.conversationList(sessions: sessions).isEmpty)
+        store.activityOnly = false
+        XCTAssertEqual(store.conversationList(sessions: sessions).map(\.id), ["c"])
+        let restored = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: storage)
+        XCTAssertEqual(restored.archiveFilter, .archived)
+        XCTAssertFalse(restored.activityOnly)
+    }
+
+    func testGroupAndRunKeepTheirOwnLeaderModelPreferences() throws {
+        let json = #"{"id":"g1","kind":"group","team":{"members":[{"id":"m1","name":"负责人","isLeader":true,"agent":{"provider":"pi","model":"openai/gpt-5.4-mini","thinkingEffort":"pi:xhigh"}}]},"tasks":[{"task":{"id":"t1","title":"任务"},"runs":[{"id":"r1","taskId":"t1","status":"idle","team":{"members":[{"id":"m2","name":"旧负责人","isLeader":true,"agent":{"provider":"pi","model":"anthropic/claude-opus-4-6","thinkingEffort":"deep"}}]}}]}]}"#
+        let detail = try JSONDecoder().decode(NativeConversation.self, from: Data(json.utf8))
+        XCTAssertEqual(detail.members.first?.agent?.model, "openai/gpt-5.4-mini")
+        XCTAssertEqual(detail.runs.first?.team?.members.first?.agent?.model, "anthropic/claude-opus-4-6")
+        XCTAssertEqual(detail.members.first?.agent?.thinkingEffort, "pi:xhigh")
+    }
+
     func testOpeningEmployeeUsesStableVirtualDMAndNeverPosts() async throws {
         let api = CommunicationsStub()
         api.contacts = [try contact("e_first")]

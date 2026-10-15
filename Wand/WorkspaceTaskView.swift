@@ -10,6 +10,7 @@ struct WorkspaceTaskView: View {
     @ObservedObject var gitStatusStore: GitStatusStore
     var preferredSessionId: String? = nil
     var onRequestNewSession: (() -> Void)? = nil
+    var onSnapshotViewed: ((SessionSnapshot) -> Void)? = nil
     @State private var creationDraft: SessionCreationDraft?
     @State private var pendingDeleteSession: WorkspaceSessionSummary?
     @State private var deleteSessionBusy = false
@@ -203,7 +204,8 @@ struct WorkspaceTaskView: View {
                 provider: snapshot.provider ?? "claude",
                 session: snapshot,
                 gitStatusStore: gitStatusStore,
-                showsHeader: false
+                showsHeader: false,
+                onSnapshotViewed: onSnapshotViewed
             )
             .id(snapshot.id)
         } else if store.sessionLoading {

@@ -69,6 +69,8 @@ final class ConversationComposerState: ObservableObject {
     func failUpload(_ error: Error) {
         uploading = false; handle(error, restoringSubmission: false)
     }
+    /// A second paste must not release an upload or message already in flight.
+    func reportAttachmentBlocked(_ message: String) { feedback = message }
 
     func submit(ledger: ConversationRequestLedger) async -> ConversationReceipt? {
         guard canSubmit else { return nil }

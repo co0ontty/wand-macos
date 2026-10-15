@@ -8,6 +8,15 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
     var onInput: ((String, Bool) -> Void)?
     var onSizeChange: ((Int, Int) -> Void)?
     var onScaleChange: ((Double?) -> Void)?
+    var inputEnabled = true {
+        didSet {
+            if !inputEnabled, window?.firstResponder === self { window?.makeFirstResponder(nil) }
+        }
+    }
+    // SwiftTerm's acceptsFirstResponder/becomeFirstResponder are not open;
+    // exclude inactive terminals from AppKit traversal and gate explicit focus below.
+    override var canBecomeKeyView: Bool { inputEnabled && super.canBecomeKeyView }
+
     private var feeding = false
     private var restoring = false
     private var interpretingComposition = false
@@ -112,7 +121,7 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
 
     /// Keep paste distinct from key/IME events (including negotiated keyboard protocols).
     func pasteText(_ text: String) {
-        guard !text.isEmpty else { return }
+        guard inputEnabled, !text.isEmpty else { return }
         unmarkText()
         let bracketed = getTerminal().bracketedPasteMode
         if bracketed { send(txt: "\u{1B}[200~") }
@@ -143,6 +152,7 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
     }
 
     func handleCompositionEvent(_ event: NSEvent) -> NSEvent? {
+        guard inputEnabled else { return event }
         // Application shortcuts (copy/paste/find/settings) must still reach the responder chain.
         if event.modifierFlags.contains(.command) { return event }
         if event.type == .keyUp {
@@ -177,17 +187,19 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
     }
 
     func focusTerminal() {
-        guard let window, window.attachedSheet == nil else { return }
+        guard inputEnabled, let window, window.attachedSheet == nil else { return }
         window.makeFirstResponder(self)
     }
 
     func showFind() {
+        guard inputEnabled else { return }
         let item = NSMenuItem()
         item.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
         performFindPanelAction(item)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard inputEnabled else { return false }
         guard window?.firstResponder === self,
               event.modifierFlags.intersection([.command, .control, .option]) == .command else {
             return super.performKeyEquivalent(with: event)
@@ -229,7 +241,7 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
     }
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        guard !restoring, !data.isEmpty else { return }
+        guard inputEnabled, !restoring, !data.isEmpty else { return }
         // An input method may fall back to doCommand during interpretKeyEvents. Such
         // candidate keys must not become remote input; only the committed text may pass.
         guard committingComposition || (!interpretingComposition && !hasMarkedText()) else { return }
@@ -261,9 +273,12 @@ struct NativeTerminalSurface: NSViewRepresentable {
     let terminal: NativeTerminalView
 
     func makeNSView(context: Context) -> NativeTerminalView {
+        terminal.inputEnabled = context.environment.isEnabled && context.environment.desktopPageActive
         DispatchQueue.main.async { [weak terminal] in terminal?.focusTerminal() }
         return terminal
     }
 
-    func updateNSView(_ nsView: NativeTerminalView, context: Context) {}
+    func updateNSView(_ nsView: NativeTerminalView, context: Context) {
+        nsView.inputEnabled = context.environment.isEnabled && context.environment.desktopPageActive
+    }
 }

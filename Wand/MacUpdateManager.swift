@@ -83,7 +83,15 @@ final class MacUpdateManager: ObservableObject {
     }
 
     @Published private(set) var channel: Channel
+    @Published private(set) var betaServerAddress: String
     @Published private(set) var lastSuccessfulCheck: Date?
+
+    var betaUsesCustomServer: Bool { !betaServerAddress.isEmpty }
+    var betaServerURL: URL? {
+        guard betaUsesCustomServer else { return connectedServer() }
+        guard let address = try? Self.normalizedBetaServerAddress(betaServerAddress) else { return nil }
+        return URL(string: address)
+    }
 
     var isChecking: Bool {
         if case .checking = state { return true }
@@ -129,6 +137,7 @@ final class MacUpdateManager: ObservableObject {
     private static let pendingInstallLifetime: TimeInterval = 7 * 24 * 60 * 60
     private static let channelKey = "wand.macUpdate.channel"
     private static let betaServerKey = "wand.macUpdate.beta.serverURL"
+    private static let betaServerAddressKey = "wand.macUpdate.beta.customServerURL"
     private static let pendingInstallKey = "wand.macUpdate.pendingInstall"
     private static let legacyLastCheckKey = "wand.githubRelease.lastCheckAt"
     private static let legacyCachedUpdateKey = "wand.githubRelease.cachedUpdate"
@@ -158,7 +167,7 @@ final class MacUpdateManager: ObservableObject {
             try await URLSession.shared.data(for: request)
         },
         betaDataLoader: @escaping DataLoader = { request in
-            try await SelfSignedSession.shared.session.data(for: request)
+            try await BetaUpdateSession.data(for: request)
         },
         connectedServer: @escaping () -> URL? = { ServerStore.shared.serverURL },
         startInstallation: @escaping (Update, @escaping UpdateInstaller.ProgressHandler) -> Void = {
@@ -177,6 +186,7 @@ final class MacUpdateManager: ObservableObject {
         self.startInstallation = startInstallation
         self.cancelInstallation = cancelInstallation
         self.channel = Channel(rawValue: defaults.string(forKey: Self.channelKey) ?? "") ?? .stable
+        self.betaServerAddress = defaults.string(forKey: Self.betaServerAddressKey) ?? ""
 
         migrateLegacyKeysIfNeeded()
         restorePersistedState()
@@ -195,7 +205,7 @@ final class MacUpdateManager: ObservableObject {
                 return nil
             }
         }
-        let checkedServer = channel == .beta ? connectedServer() : nil
+        let checkedServer = channel == .beta ? betaServerURL : nil
         if trigger == .launch,
            let lastSuccessfulCheck,
            (channel == .stable || defaults.string(forKey: Self.betaServerKey) == checkedServer?.absoluteString),
@@ -209,7 +219,11 @@ final class MacUpdateManager: ObservableObject {
             activeCheckID = nil
         }
         if let activeCheck {
-            return await activeCheck.value
+            let waitingChannel = channel
+            let result = await activeCheck.value
+            guard !Task.isCancelled, !activeCheck.isCancelled, waitingChannel == channel,
+                  waitingChannel != .beta || checkedServer == betaServerURL else { return nil }
+            return result
         }
 
         let checkedChannel = channel
@@ -227,14 +241,14 @@ final class MacUpdateManager: ObservableObject {
         activeCheckServerURL = checkedServer
         let result = await task.value
         // 通道/服务器切换会取消旧任务；旧响应不得覆盖新连接状态。
-        guard activeCheckID == checkID else { return result }
+        guard activeCheckID == checkID else { return nil }
         activeCheck = nil
         activeCheckID = nil
         activeCheckServerURL = nil
-        guard checkedChannel == channel else { return result }
-        if checkedChannel == .beta, checkedServer != connectedServer() {
+        guard checkedChannel == channel else { return nil }
+        if checkedChannel == .beta, checkedServer != betaServerURL {
             restoreAvailability(for: channel)
-            return result
+            return nil
         }
         persist(result, channel: checkedChannel, previousUpdate: previousUpdate)
         return result
@@ -255,6 +269,57 @@ final class MacUpdateManager: ObservableObject {
         clearReminderDeferral()
         restoreAvailability(for: newChannel)
         return await check(.channelChanged)
+    }
+
+    /// 空地址沿用会话服务器；自定义来源只参与 Beta，不转发会话凭据。
+    @discardableResult
+    func setBetaServerAddress(_ address: String) async throws -> CheckResult? {
+        let normalized = try Self.normalizedBetaServerAddress(address)
+        guard pendingInstall == nil else {
+            throw managerError(code: 42, message: "更新包已准备好，请完成本次更新后再修改 Beta 更新服务器。")
+        }
+        guard normalized != betaServerAddress else {
+            return channel == .beta ? await check(.manual) : nil
+        }
+        betaServerAddress = normalized
+        if normalized.isEmpty { defaults.removeObject(forKey: Self.betaServerAddressKey) }
+        else { defaults.set(normalized, forKey: Self.betaServerAddressKey) }
+
+        // Stable 的检查和下载不参与 Beta 来源选择。
+        guard channel == .beta else { return nil }
+        activeCheck?.cancel()
+        activeCheck = nil
+        activeCheckID = nil
+        activeCheckServerURL = nil
+        if isInstalling { cancelInstall() }
+        clearReminderDeferral()
+        restoreAvailability(for: .beta)
+        return await check(.channelChanged)
+    }
+
+    static func normalizedBetaServerAddress(_ address: String) throws -> String {
+        let value = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return "" }
+        guard !value.contains(where: { $0.isWhitespace || $0.isNewline }),
+              var components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = components.host, !host.isEmpty,
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              components.path.isEmpty || components.path == "/",
+              components.port.map({ (1...65535).contains($0) }) ?? true else {
+            throw NSError(domain: "Wand.MacUpdateManager", code: 41, userInfo: [
+                NSLocalizedDescriptionKey: "请输入完整的 http:// 或 https:// Wand 服务器地址，可包含端口；不要填写登录信息、路径、查询参数或片段。"
+            ])
+        }
+        components.scheme = scheme
+        components.host = host.lowercased()
+        components.path = ""
+        if components.port == (scheme == "https" ? 443 : 80) { components.port = nil }
+        guard let url = components.url, let normalized = URLComponents(url: url, resolvingAgainstBaseURL: false)?.string else {
+            throw NSError(domain: "Wand.MacUpdateManager", code: 41, userInfo: [NSLocalizedDescriptionKey: "服务器地址无效。"])
+        }
+        return normalized
     }
 
     /// 返回 nil 表示安装任务已启动；否则返回可直接展示给用户的原因。
@@ -424,7 +489,9 @@ final class MacUpdateManager: ObservableObject {
         guard let serverURL,
               ["http", "https"].contains(serverURL.scheme?.lowercased() ?? ""),
               serverURL.host != nil, serverURL.user == nil, serverURL.password == nil else {
-            return .failed(message: "请先连接 Wand 服务端，再检查 Beta 更新。")
+            return .failed(message: betaUsesCustomServer
+                ? "Beta 更新服务器地址无效，请在设置中重新填写。"
+                : "请先连接 Wand 服务端，或填写 Beta 更新服务器地址。")
         }
         do {
             let path = "/api/macos-app-update?currentVersion=\(percentEncode(currentVersionProvider()))"
@@ -434,6 +501,7 @@ final class MacUpdateManager: ObservableObject {
             var request = URLRequest(url: url)
             request.timeoutInterval = 15
             request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.httpShouldHandleCookies = false
             let (data, response) = try await betaDataLoader(request)
             guard let http = response as? HTTPURLResponse,
                   http.statusCode == 200,
@@ -446,7 +514,7 @@ final class MacUpdateManager: ObservableObject {
                 return .failed(message: "服务端返回了无效的 Beta 更新来源。")
             }
             guard let version = info.latestVersion else {
-                return .failed(message: "当前连接的服务端尚未提供 macOS Beta 更新包。")
+                return .failed(message: "所选服务器尚未提供 macOS Beta 更新包。")
             }
             let current = currentVersionProvider()
             guard ParsedVersion(version) != nil else {
@@ -483,7 +551,7 @@ final class MacUpdateManager: ObservableObject {
         } catch is CancellationError {
             return .failed(message: "更新检查已取消。")
         } catch {
-            return .failed(message: "检查当前服务端 Beta 更新失败：\(error.localizedDescription)")
+            return .failed(message: "检查所选服务器 Beta 更新失败：\(error.localizedDescription)")
         }
     }
 
@@ -507,7 +575,7 @@ final class MacUpdateManager: ObservableObject {
 
     private func isCurrentSource(_ update: Update) -> Bool {
         guard update.channel == .beta else { return true }
-        guard let server = connectedServer(),
+        guard let server = betaServerURL,
               update.releaseURL == server,
               let asset = update.preferredAsset,
               asset.sha256 != nil else { return false }
@@ -672,7 +740,7 @@ final class MacUpdateManager: ObservableObject {
         let date = now()
         lastSuccessfulCheck = date
         defaults.set(date.timeIntervalSince1970, forKey: lastCheckKey(channel))
-        if channel == .beta { defaults.set(connectedServer()?.absoluteString, forKey: Self.betaServerKey) }
+        if channel == .beta { defaults.set(betaServerURL?.absoluteString, forKey: Self.betaServerKey) }
     }
 
     private func restorePersistedState() {
@@ -737,7 +805,7 @@ final class MacUpdateManager: ObservableObject {
     private func restoreAvailability(for channel: Channel) {
         let timestamp = defaults.double(forKey: lastCheckKey(channel))
         lastSuccessfulCheck = timestamp > 0
-            && (channel == .stable || defaults.string(forKey: Self.betaServerKey) == connectedServer()?.absoluteString)
+            && (channel == .stable || defaults.string(forKey: Self.betaServerKey) == betaServerURL?.absoluteString)
             ? Date(timeIntervalSince1970: timestamp) : nil
         if let update = cachedUpdate(for: channel) {
             state = .available(update)
@@ -838,6 +906,76 @@ final class MacUpdateManager: ObservableObject {
 
     private func managerError(code: Int, message: String) -> NSError {
         NSError(domain: "Wand.MacUpdateManager", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
+
+/// Beta 元数据与下载都不借用登录会话、系统 cookie 或凭据；只信任用户选择的原站。
+final class BetaUpdateSession: NSObject, URLSessionTaskDelegate {
+    private let serverURL: URL
+
+    init(serverURL: URL) { self.serverURL = serverURL }
+
+    static func configuration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
+    static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        guard let serverURL = request.url else { throw URLError(.badURL) }
+        let delegate = BetaUpdateSession(serverURL: serverURL)
+        let session = URLSession(configuration: configuration(), delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        return try await session.data(for: request)
+    }
+
+    static func handleChallenge(
+        _ challenge: URLAuthenticationChallenge,
+        serverURL: URL,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let space = challenge.protectionSpace
+        guard serverURL.scheme?.lowercased() == "https",
+              space.host.lowercased() == serverURL.host?.lowercased(),
+              space.port == (serverURL.port ?? 443),
+              space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = space.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        Self.handleChallenge(challenge, serverURL: serverURL, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        Self.handleChallenge(challenge, serverURL: serverURL, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
 

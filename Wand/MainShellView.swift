@@ -31,6 +31,7 @@ enum SidebarSection: String {
 struct MainShellView: View {
     let serverURL: URL
     let token: String?
+    private let makeSettings: (@escaping () -> Void) -> SettingsView
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -58,6 +59,8 @@ struct MainShellView: View {
     /// 「用户明确打开了这个会话」。只有带 intent 的那次打开才允许确认完成代次：
     /// 自动选中最近会话、后台轮询、重连、切任务都不算（对齐 Web completionViewIntent）。
     @State private var completionViewIntentSessionId: String?
+    @State private var displayedCompletionSessionId: String?
+    @State private var displayedCompletionRevision = 0
     @State private var acknowledgedCompletionRevision: Int?
     @State private var creationDraft = SessionCreationDraft()
     @State private var creationDrafts: [CreationDraftKey: SessionCreationDraft] = [:]
@@ -71,9 +74,12 @@ struct MainShellView: View {
     @StateObject private var gitStatusStore = GitStatusStore()
     @StateObject private var workspaceStore: WorkspaceStore
 
-    init(serverURL: URL, token: String?) {
+    init(serverURL: URL, token: String?, makeSettings: ((@escaping () -> Void) -> SettingsView)? = nil) {
         self.serverURL = serverURL
         self.token = token
+        self.makeSettings = makeSettings ?? { close in
+            SettingsView(serverURL: serverURL, token: token, onClose: close, titlebarLeadingInset: 40)
+        }
         _communicationsStore = StateObject(wrappedValue: CommunicationsStore(
             api: WandAPI(baseURL: serverURL, token: token), serverURL: serverURL
         ))
@@ -88,9 +94,9 @@ struct MainShellView: View {
         let section: SidebarSection
     }
 
-    /// 260 会话栏 + 600 可读聊天区 + 320 Inspector + 间距与边距。
+    /// 导航轨 + 260 会话栏 + 600 阅读区 + 320 Inspector + 间距。
     /// 低于该值时右栏覆盖在内容之上，保持主任务宽度稳定。
-    private let persistentRightPanelMinimumWidth: CGFloat = 1_220
+    private let persistentRightPanelMinimumWidth: CGFloat = 1_280
 
     private var api: WandAPI { WandAPI(baseURL: serverURL, token: token) }
 
@@ -144,18 +150,16 @@ struct MainShellView: View {
         nativeShell
         .focusedSceneValue(\.wandDesktopCommandsEnabled, !hasPresentedSheet)
         .focusedSceneValue(\.wandDesktopDisabledCommands, unavailableCommands)
-        .sheet(isPresented: $presentSettings) {
-            SettingsView(serverURL: serverURL, token: token)
-                .environmentObject(ServerStore.shared)
-        }
         .sheet(isPresented: $showCommandPalette, onDismiss: openPendingDestination) {
             DesktopCommandPalette(api: api, onCommand: { command in
                 pendingCommand = command
                 showCommandPalette = false
             }, onSession: { session in
                 showCommandPalette = false
+                closeSettings()
                 presentSession(session)
             }, onWorkspace: { workspace in
+                closeSettings()
                 showCommunications = false
                 showCommandPalette = false
                 sidebarVisible = true
@@ -187,10 +191,22 @@ struct MainShellView: View {
         }
         .task {
             await checkConnectionAsync()
+            openPendingActivitySession()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wandOpenActivitySession)) { _ in
+            openPendingActivitySession()
+        }
+        .onChange(of: hasPresentedSheet) { presented in
+            if !presented { openPendingActivitySession() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { note in
             guard let command = note.object as? DesktopCommand else { return }
             handle(command)
+        }
+        .onChange(of: settingsPresented) { presented in
+            guard !presented, let session = selectedSession,
+                  !showCreation, !showCommunications, !showTaskBoard else { return }
+            acknowledgeCompletionIfViewed(session)
         }
         .onChange(of: selectedSessionId) { id in
             if id == nil {
@@ -211,7 +227,6 @@ struct MainShellView: View {
             }
             selectedSessionId = snapshot.id
             selectedSessionProvider = snapshot.provider ?? "claude"
-            acknowledgeCompletionIfViewed(snapshot)
             selectedSession = snapshot
             selectedSessionCwdHint = nil
         }
@@ -224,7 +239,7 @@ struct MainShellView: View {
     }
 
     private var nativeShell: some View {
-        // 标题区与正文同色；侧栏首行保留窗口操作，品牌置于下方，连接和设置留在底部。
+        // 品牌与窗口操作共用一行；导航轨固定，列表和工作页分别保留自己的滚动。
         GeometryReader { geo in
                 content(width: geo.size.width)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -295,6 +310,23 @@ struct MainShellView: View {
         }
     }
 
+    private func openPendingActivitySession() {
+        guard !hasPresentedSheet, let id = DesktopActivityMonitor.shared.pendingOpenSessionID else { return }
+        let connection = DesktopActivityMonitor.shared.connectionID
+        DesktopActivityMonitor.shared.consumeOpenSession(id)
+        closeSettings()
+        Task {
+            do {
+                let session = try await api.getSession(id: id)
+                guard connection == DesktopActivityMonitor.shared.connectionID else { return }
+                presentSession(session)
+            } catch {
+                guard connection == DesktopActivityMonitor.shared.connectionID else { return }
+                connectionState = .failure(error)
+            }
+        }
+    }
+
     private func openSessionFromMissions(_ sessionId: String) {
         showCommunications = false
         selectedWorkspaceTask = nil
@@ -331,16 +363,35 @@ struct MainShellView: View {
     private func openCompletionIntent(_ sessionId: String) {
         completionViewIntentSessionId = sessionId
         acknowledgedCompletionRevision = nil
+        if displayedCompletionSessionId == sessionId, let session = selectedSession {
+            acknowledgeCompletionIfViewed(session)
+        } else {
+            displayedCompletionSessionId = nil
+            displayedCompletionRevision = 0
+        }
     }
 
     private func clearCompletionIntent() {
         completionViewIntentSessionId = nil
+        displayedCompletionSessionId = nil
+        displayedCompletionRevision = 0
         acknowledgedCompletionRevision = nil
+    }
+
+    private func completionSnapshotDisplayed(_ session: SessionSnapshot) {
+        guard selectedSessionId == session.id else { return }
+        displayedCompletionSessionId = session.id
+        displayedCompletionRevision = session.completionRevision ?? 0
+        selectedSession = session
+        acknowledgeCompletionIfViewed(session)
     }
 
     /// 只在「明确打开 + 这一代结果真的在屏幕上 + 没有任何弹层挡着」时确认完成代次。
     /// 同一代次只发一次；失败保留未读提示，下一次明确打开还能重试。
     private func acknowledgeCompletionIfViewed(_ session: SessionSnapshot) {
+        guard !settingsPresented, !showCreation, !showCommunications, !showTaskBoard,
+              displayedCompletionSessionId == session.id,
+              (session.completionRevision ?? 0) <= displayedCompletionRevision else { return }
         let isJustCompleted = SessionCompletion.isJustCompleted(
             completion: session.completionRevision,
             viewed: session.viewedCompletionRevision,
@@ -368,8 +419,10 @@ struct MainShellView: View {
                     completionRevision: revision
                 )
             } catch {
-                // 保留未读提示，让下一次明确打开重试。
-                acknowledgedCompletionRevision = nil
+                // A late failure must not unlock another session/generation's request.
+                if completionViewIntentSessionId == session.id, acknowledgedCompletionRevision == revision {
+                    acknowledgedCompletionRevision = nil
+                }
             }
         }
     }
@@ -424,7 +477,8 @@ struct MainShellView: View {
 
     private var creationDestinationVisible: Bool {
         SessionCreationDraft.creationIsVisible(showCreation: showCreation, showCommunications: showCommunications,
-            showTaskBoard: showTaskBoard, hasSelectedTask: selectedWorkspaceTask != nil, hasSelectedSession: selectedSessionId != nil)
+            showTaskBoard: showTaskBoard, hasSelectedTask: selectedWorkspaceTask != nil,
+            hasSelectedSession: selectedSessionId != nil, settingsPresented: settingsPresented)
     }
 
     private func openCreatedSession(_ session: SessionSnapshot, originDraftID: UUID) {
@@ -452,7 +506,7 @@ struct MainShellView: View {
                   let workspace = workspaceStore.workspaces.first(where: {
                       $0.id == (session.workspaceId ?? detail.workspaceId)
                   }),
-                  !showCreation, !showTaskBoard, selectedSessionId == session.id else { return }
+                  !settingsPresented, !showCreation, !showTaskBoard, selectedSessionId == session.id else { return }
             let task = WorkspaceTask(
                 id: detail.id,
                 workspaceId: detail.workspaceId,
@@ -469,25 +523,33 @@ struct MainShellView: View {
         }
     }
 
-    // MARK: - 状态
+    // MARK: - 页面与三栏
 
-    @State private var presentSettings: Bool = false
+    @State private var settingsPresented = false
 
-    // MARK: - 三栏
+    private var sidebarListVisible: Bool { sidebarVisible && !settingsPresented }
 
     private func content(width: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            sidebarColumn
+                .background(Theme.sidebarBackground)
+            Rectangle().fill(Theme.border.opacity(0.5)).frame(width: 0.5)
+            DesktopPageStack(settingsPresented: settingsPresented,
+                workspaceWidth: max(0, width - Theme.LayoutMetrics.navigationRailWidth
+                    - (sidebarVisible ? Theme.LayoutMetrics.sidebarWidth : 0) - 0.5)) {
+                workspaceContent(width: width)
+            } settings: {
+                makeSettings(closeSettings)
+            }
+        }
+    }
+
+    private func workspaceContent(width: CGFloat) -> some View {
         let usesPersistentRightPanel = width >= persistentRightPanelMinimumWidth
         let compactPanelWidth = min(380, max(320, width * 0.42))
 
         return ZStack(alignment: .trailing) {
             HStack(spacing: 0) {
-                if sidebarVisible {
-                    sidebarColumn
-                        .frame(width: Theme.LayoutMetrics.sidebarWidth)
-                        .background(Theme.sidebarBackground)
-                        .transition(reduceMotion ? .identity : .move(edge: .leading).combined(with: .opacity))
-                    Rectangle().fill(Theme.border.opacity(0.5)).frame(width: 0.5)
-                }
                 VStack(spacing: 0) {
                     desktopToolbar
                     if let message = disconnectedMessage, selectedSessionId != nil || selectedWorkspaceTask != nil {
@@ -534,61 +596,67 @@ struct MainShellView: View {
     }
 
     private var sidebarColumn: some View {
-        VStack(spacing: 0) {
-            sidebarTitleBar
-            sidebarBrand
-            sidebarChrome
-            if showCommunications {
-                CommunicationsSidebar(store: communicationsStore)
-            } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        workspaceSidebar.id(SidebarSection.workspaces)
-                        if !sidebarRecent {
-                        sidebarSectionBreak
-                        SidebarColumn(
-                            api: api,
-                            selectedSessionId: Binding(
-                                get: {
-                                    showTaskBoard || showCreation || showCommunications || selectedWorkspaceTask != nil
-                                        ? nil : selectedSessionId
-                                },
-                                set: { selectedSessionId = $0 }
-                            ),
-                            query: sidebarQuery,
-                            activeOnly: sidebarActiveOnly,
-                            taskGroups: workspaceStore.taskGroups,
-                            taskGroupsAvailable: workspaceStore.taskGroupsLoaded,
-                            presentNewSession: .constant(false),
-                            onSessionSelected: { presentSession($0) },
-                            onRequestNewSession: { cwd in
-                                beginCreation(context: SessionCreationContext(cwd: cwd, startsNewTask: false))
+        DesktopSidebarLayout(listVisible: sidebarListVisible, onToggle: { handle(.toggleSidebar) }) {
+            DesktopNavigationRail(selection: settingsPresented ? .settings : showTaskBoard ? .taskBoard
+                : showCommunications ? (communicationsStore.section == .contacts ? .contacts : .conversations) : .workspaces,
+                onCommand: handle)
+        } list: {
+            VStack(spacing: 0) {
+                sidebarChrome
+                if showCommunications {
+                    CommunicationsSidebar(store: communicationsStore,
+                        sessions: workspaceStore.taskGroups.flatMap { $0.tasks.flatMap(\.sessions) + $0.standaloneSessions },
+                        selectedSessionID: selectedSessionId)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                workspaceSidebar.id(SidebarSection.workspaces)
+                                if !sidebarRecent {
+                                    sidebarSectionBreak
+                                    SidebarColumn(
+                                        api: api,
+                                        selectedSessionId: Binding(
+                                            get: {
+                                                showTaskBoard || showCreation || showCommunications || selectedWorkspaceTask != nil
+                                                    ? nil : selectedSessionId
+                                            },
+                                            set: { selectedSessionId = $0 }
+                                        ),
+                                        query: sidebarQuery,
+                                        activeOnly: sidebarActiveOnly,
+                                        taskGroups: workspaceStore.taskGroups,
+                                        taskGroupsAvailable: workspaceStore.taskGroupsLoaded,
+                                        presentNewSession: .constant(false),
+                                        onSessionSelected: { presentSession($0) },
+                                        onRequestNewSession: { cwd in
+                                            beginCreation(context: SessionCreationContext(cwd: cwd, startsNewTask: false))
+                                        }
+                                    )
+                                    .id(SidebarSection.sessions)
+                                    .transition(reduceMotion ? .identity : .asymmetric(
+                                        insertion: .opacity.animation(Theme.Motion.structure),
+                                        removal: .opacity.animation(Theme.Motion.feedback)))
+                                }
                             }
-                        )
-                        .id(SidebarSection.sessions)
-                        .transition(reduceMotion ? .identity : .asymmetric(
-                            insertion: .opacity.animation(Theme.Motion.structure),
-                            removal: .opacity.animation(Theme.Motion.feedback)))
+                            .wandMotion(value: sidebarRecent)
+                            .padding(.top, 4)
+                            .padding(.bottom, 16)
+                        }
+                        .onChange(of: sidebarScrollRequest?.id) { _ in
+                            if let request = sidebarScrollRequest {
+                                proxy.scrollTo(request.section, anchor: .top)
+                            }
+                        }
+                        .onAppear {
+                            if let request = sidebarScrollRequest {
+                                proxy.scrollTo(request.section, anchor: .top)
+                            }
                         }
                     }
-                    .wandMotion(value: sidebarRecent)
-                    .padding(.top, 4)
-                    .padding(.bottom, 16)
                 }
-                .onChange(of: sidebarScrollRequest?.id) { _ in
-                    if let request = sidebarScrollRequest {
-                        proxy.scrollTo(request.section, anchor: .top)
-                    }
-                }
-                .onAppear {
-                    if let request = sidebarScrollRequest {
-                        proxy.scrollTo(request.section, anchor: .top)
-                    }
-                }
+                sidebarFooter
             }
-            }
-            sidebarFooter
         }
     }
 
@@ -668,32 +736,6 @@ struct MainShellView: View {
         )
     }
 
-    // Leave the first row clear for the macOS traffic lights and sidebar toggle.
-    private var sidebarTitleBar: some View {
-        HStack(spacing: 8) {
-            WindowDragRegion().frame(maxWidth: .infinity).frame(height: 52)
-            Button { handle(.toggleSidebar) } label: {
-                Image(systemName: "sidebar.left").frame(width: 28, height: 28)
-            }.buttonStyle(WandIconButtonStyle()).help("隐藏侧栏 · ⌃⌘S")
-                .accessibilityLabel("隐藏侧栏")
-        }
-        .padding(.leading, 82).padding(.trailing, 12)
-        .frame(height: 52)
-        .windowDrag()
-    }
-
-    private var sidebarBrand: some View {
-        HStack(spacing: 10) {
-            WandBrandMark(size: 36)
-            Text("Wand")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(Theme.textPrimary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 56)
-    }
-
     private var filePanelToggleButton: some View {
         Button {
             withAnimation(structuralAnimation) { filePanelOpen.toggle() }
@@ -707,15 +749,6 @@ struct MainShellView: View {
         .buttonStyle(WandIconButtonStyle(isActive: filePanelOpen))
         .help(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
         .accessibilityLabel(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
-    }
-
-    private var settingsMenu: some View {
-        Button { handle(.settings) } label: {
-            Image(systemName: "gearshape").frame(width: 28, height: 28)
-        }
-        .buttonStyle(WandIconButtonStyle())
-        .help("设置 · ⌘,")
-        .accessibilityLabel("设置")
     }
 
     /// 底部连接状态和服务器地址保持可点击，可直接恢复连接或切换服务器。
@@ -822,14 +855,18 @@ struct MainShellView: View {
 
     private var sidebarChrome: some View {
         VStack(spacing: 8) {
-            navigationRow(.newSession, active: showCreation && !showCommunications && selectedWorkspaceTask == nil)
-            HStack(spacing: 4) {
-                sidebarNavigationTool(.taskBoard, title: "看板", active: showTaskBoard)
-                sidebarNavigationTool(.conversations, title: "对话", active: showCommunications && communicationsStore.section == .conversations)
-                sidebarNavigationTool(.contacts, title: "通讯录", active: showCommunications && communicationsStore.section == .contacts)
-                sidebarNavigationTool(.search, title: "命令")
-            }
-            if !showCommunications {
+            if showCommunications {
+                HStack {
+                    Text(communicationsStore.section == .contacts ? "通讯录" : "对话")
+                        .font(.system(size: 14, weight: .semibold)).foregroundColor(Theme.textPrimary)
+                    Spacer()
+                    commandSearchButton
+                }.frame(height: 32)
+            } else {
+                HStack(spacing: 4) {
+                    navigationRow(.newSession, active: showCreation && selectedWorkspaceTask == nil)
+                    commandSearchButton
+                }
                 HStack(spacing: 4) {
                     ZStack(alignment: .leading) {
                         Text("执行会话").font(.system(size: 13, weight: .semibold))
@@ -874,13 +911,7 @@ struct MainShellView: View {
                         Text("按工作区").tag(false)
                         Text("最近会话").tag(true)
                     }.pickerStyle(.segmented).labelsHidden()
-                    Button { sidebarActiveOnly.toggle() } label: {
-                        Label("活动", systemImage: "bolt").font(.system(size: 11, weight: .medium))
-                            .frame(height: 28).padding(.horizontal, 5)
-                    }.buttonStyle(DesktopNavigationButtonStyle(active: sidebarActiveOnly))
-                        .help("只看在跑、待处理、刚完成及正在查看的会话")
-                        .accessibilityLabel("只看活动会话")
-                        .accessibilityValue(sidebarActiveOnly ? "已开启" : "已关闭")
+                    SidebarActivityFilter(active: sidebarActiveOnly) { sidebarActiveOnly.toggle() }
                 }
             }
         }.padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 10)
@@ -892,16 +923,11 @@ struct MainShellView: View {
         sidebarSearchFocused = false
     }
 
-    private func sidebarNavigationTool(_ command: DesktopCommand, title: String, active: Bool = false) -> some View {
-        Button { handle(command) } label: {
-            VStack(spacing: 4) {
-                Image(systemName: command.symbol).font(.system(size: 14))
-                Text(title).font(.system(size: 10, weight: .medium))
-            }.foregroundColor(active ? Theme.wandAccent : Theme.textSecondary)
-                .frame(maxWidth: .infinity).frame(height: 44).contentShape(Rectangle())
-        }.buttonStyle(DesktopNavigationButtonStyle(active: active))
-            .help(command.subtitle).accessibilityLabel(command.title)
-            .accessibilityAddTraits(active ? .isSelected : [])
+    private var commandSearchButton: some View {
+        Button { handle(.search) } label: {
+            Image(systemName: DesktopCommand.search.symbol).frame(width: 28, height: 28)
+        }.buttonStyle(WandIconButtonStyle())
+            .help("搜索与命令 · ⇧⌘P").accessibilityLabel("搜索与命令")
     }
 
     /// 操作区结束之后，用一条短分隔把工作空间树和单独会话切开。
@@ -936,7 +962,6 @@ struct MainShellView: View {
             Divider()
             HStack(spacing: 10) {
                 identityMenu
-                settingsMenu
             }.padding(.horizontal, 4).padding(.vertical, 4)
         }.padding(12)
     }
@@ -972,7 +997,7 @@ struct MainShellView: View {
                 filePanelToggleButton
             }
         }
-        .padding(.leading, sidebarVisible ? 24 : 86).padding(.trailing, 20).frame(height: 52)
+        .padding(.leading, sidebarListVisible ? 20 : 40).padding(.trailing, 20).frame(height: 52)
         .background(Theme.workspaceBackground)
         .windowDrag()
     }
@@ -990,7 +1015,7 @@ struct MainShellView: View {
     }
 
     private var hasPresentedSheet: Bool {
-        presentSettings || showCommandPalette || showTroubleshooting || showCreateWorkspace
+        showCommandPalette || showTroubleshooting || showCreateWorkspace
     }
 
     /// 任意模态弹层（含子视图挂的快捷提交、文件预览、重命名等）都挡住完成确认：
@@ -1001,6 +1026,7 @@ struct MainShellView: View {
     }
 
     private var unavailableCommands: Set<DesktopCommand> {
+        if settingsPresented { return [.toggleInspector, .findConversation, .focusComposer] }
         guard showCommunications else { return [] }
         if communicationsStore.section == .contacts || communicationsStore.selectedID == nil {
             return [.toggleInspector, .findConversation, .focusComposer]
@@ -1008,15 +1034,28 @@ struct MainShellView: View {
         return [.toggleInspector]
     }
 
+    private func closeSettings() {
+        guard settingsPresented else { return }
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        settingsPresented = false
+    }
+
     private func handle(_ command: DesktopCommand) {
-        guard !unavailableCommands.contains(command) else { return }
+        guard !anyModalSheetPresented, !unavailableCommands.contains(command) else { return }
+        switch command {
+        case .newSession, .newTask, .workspaces, .sessions, .taskBoard, .conversations, .contacts:
+            closeSettings()
+        default: break
+        }
         switch command {
         case .newSession:
             beginCreation()
         case .newTask:
             beginNewTask(NewTaskSheetRequest(cwd: "", projectHint: nil))
         case .search: showCommandPalette = true
-        case .toggleSidebar: withAnimation(structuralAnimation) { sidebarVisible.toggle() }
+        case .toggleSidebar:
+            if settingsPresented { closeSettings() }
+            else { withAnimation(structuralAnimation) { sidebarVisible.toggle() } }
         case .toggleInspector: withAnimation(structuralAnimation) { filePanelOpen.toggle() }
         case .workspaces, .sessions:
             showCommunications = false
@@ -1032,7 +1071,11 @@ struct MainShellView: View {
             showCommunications = true; showCreation = false; showTaskBoard = false
             communicationsStore.section = command == .contacts ? .contacts : .conversations
             sidebarVisible = true
-        case .settings: presentSettings = true
+        case .settings:
+            guard !settingsPresented else { return }
+            sidebarSearchFocused = false
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            settingsPresented = true
         case .reconnect: recoverConnection()
         case .focusComposer, .findConversation: break
         }
@@ -1064,7 +1107,8 @@ struct MainShellView: View {
                 preferredSessionId: selectedSessionId,
                 onRequestNewSession: {
                     beginTaskSession(workspace: selection.workspace, task: selection.task)
-                }
+                },
+                onSnapshotViewed: completionSnapshotDisplayed
             )
             .id(selection.task.id)
         } else if let sessionId = selectedSessionId {
@@ -1074,7 +1118,8 @@ struct MainShellView: View {
                 provider: selectedSessionProvider,
                 session: selectedSession,
                 gitStatusStore: gitStatusStore,
-                showsHeader: false
+                showsHeader: false,
+                onSnapshotViewed: completionSnapshotDisplayed
             )
         } else {
             creationView
@@ -1236,6 +1281,7 @@ struct MainColumn: View {
     let session: SessionSnapshot?
     @ObservedObject var gitStatusStore: GitStatusStore
     var showsHeader: Bool = true
+    var onSnapshotViewed: ((SessionSnapshot) -> Void)? = nil
 
     var body: some View {
         if session?.isStructured == false {
@@ -1249,7 +1295,9 @@ struct MainColumn: View {
                         engine: session?.engine ?? session?.structuredState?.engine
                     )
                 }
-                PtySessionView(sessionId: sessionId, api: api)
+                PtySessionView(sessionId: sessionId, api: api, onViewed: {
+                    if let session { onSnapshotViewed?(session) }
+                })
                 .id(sessionId)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -1268,7 +1316,8 @@ struct MainColumn: View {
                 // 复用 MainColumn 节点,只换参数。SwiftUI 默认保留子视图的 @StateObject,
                 // 切换会话时 ChatStore 仍指向上一个会话(socket 不重连、快照不重拉),
                 // 表现为「切了会话,内容不变」。.id(sessionId) 强制整个子树按新身份重建。
-                ChatView(sessionId: sessionId, api: api, gitStatusStore: gitStatusStore)
+                ChatView(sessionId: sessionId, api: api, gitStatusStore: gitStatusStore,
+                         onSnapshotViewed: onSnapshotViewed)
                     .id(sessionId)
             }
         }
@@ -1346,10 +1395,116 @@ struct SessionHeaderView: View {
     }
 }
 
+/// Page changes alter visibility, never the lifetime of the current chat, terminal or draft.
+struct DesktopPageStack<Workspace: View, Settings: View>: View {
+    let settingsPresented: Bool
+    var workspaceWidth: CGFloat? = nil
+    @ViewBuilder let workspace: () -> Workspace
+    @ViewBuilder let settings: () -> Settings
+    @State private var settingsVisited = false
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // Settings borrows the list's space, not the retained terminal's geometry.
+            workspace().frame(width: workspaceWidth).desktopPage(active: !settingsPresented)
+            if settingsVisited || settingsPresented {
+                settings().desktopPage(active: settingsPresented)
+            }
+        }
+        .onChange(of: settingsPresented) { if $0 { settingsVisited = true } }
+        .onAppear { if settingsPresented { settingsVisited = true } }
+    }
+}
+
+extension View {
+    func desktopPage(active: Bool) -> some View {
+        opacity(active ? 1 : 0)
+            .allowsHitTesting(active)
+            .accessibilityHidden(!active)
+            .disabled(!active)
+            .environment(\.desktopPageActive, active)
+    }
+}
+
+/// The navigation rail stays reachable while settings borrows the list's space.
+struct DesktopSidebarLayout<Rail: View, List: View>: View {
+    let listVisible: Bool
+    let onToggle: () -> Void
+    @ViewBuilder let rail: () -> Rail
+    @ViewBuilder let list: () -> List
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                if listVisible {
+                    WandBrandMark(size: 22)
+                    Text("Wand").font(.system(size: 14, weight: .semibold)).foregroundColor(Theme.textPrimary)
+                    WindowDragRegion().frame(maxWidth: .infinity)
+                    Button(action: onToggle) {
+                        Image(systemName: "sidebar.left").frame(width: 28, height: 28)
+                    }.buttonStyle(WandIconButtonStyle()).help("隐藏列表 · ⌃⌘S")
+                        .accessibilityLabel("隐藏列表")
+                } else {
+                    WindowDragRegion()
+                }
+            }
+            .padding(.leading, listVisible ? 82 : 0).padding(.trailing, listVisible ? 12 : 0)
+            .frame(height: 52).windowDrag().sidebarPresence("desktop-sidebar-header")
+            HStack(spacing: 0) {
+                rail().frame(width: Theme.LayoutMetrics.navigationRailWidth)
+                list()
+                    .frame(width: Theme.LayoutMetrics.sidebarWidth)
+                    .desktopPage(active: listVisible)
+                    .frame(width: listVisible ? Theme.LayoutMetrics.sidebarWidth : 0, alignment: .leading)
+                    .clipped()
+            }
+            .frame(maxHeight: .infinity)
+            .sidebarPresence("desktop-sidebar-body")
+        }
+        .frame(width: Theme.LayoutMetrics.navigationRailWidth + (listVisible ? Theme.LayoutMetrics.sidebarWidth : 0))
+    }
+}
+
+struct DesktopNavigationRail: View {
+    let selection: DesktopCommand
+    let onCommand: (DesktopCommand) -> Void
+
+    var body: some View {
+        VStack(spacing: 4) {
+            item(.conversations, title: "对话")
+            item(.workspaces, title: "工作区")
+            item(.taskBoard, title: "任务")
+            item(.contacts, title: "通讯录")
+            Spacer(minLength: 12)
+            item(.settings, title: "设置")
+        }
+        .padding(.horizontal, 6).padding(.top, 4).padding(.bottom, 12)
+        .sidebarPresence("desktop-navigation-rail")
+    }
+
+    private func item(_ command: DesktopCommand, title: String) -> some View {
+        let active = selection == command
+        return Button { onCommand(command) } label: {
+            VStack(spacing: 4) {
+                Image(systemName: command.symbol).font(.system(size: 17, weight: .medium))
+                Text(title).font(.system(size: 10, weight: .medium))
+            }
+            .foregroundColor(active ? Theme.wandAccent : Theme.textSecondary)
+            .frame(width: 44, height: 48).contentShape(Rectangle())
+        }
+        .buttonStyle(DesktopNavigationButtonStyle(active: active))
+        .help(command.title + " · " + command.shortcutLabel)
+        .accessibilityLabel(command.title)
+        .accessibilityAddTraits(active ? .isSelected : [])
+        .sidebarPresence("desktop-navigation-\(command.rawValue)")
+    }
+}
+
 // MARK: - 布局尺寸
 
 extension Theme {
     enum LayoutMetrics {
+        static let navigationRailWidth: CGFloat = 56
         static let sidebarWidth: CGFloat = 260
         static let filePanelWidth: CGFloat = 320
     }

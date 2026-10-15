@@ -6,7 +6,7 @@ enum ChatContentWidth: String, CaseIterable, Identifiable {
     case column
 
     static let storageKey = "wand.desktop.chatContentWidth"
-    static let columnMaxWidth: CGFloat = 840
+    static let columnMaxWidth: CGFloat = 940
     var id: String { rawValue }
     var title: String { self == .full ? "铺满" : "居中" }
     var maxWidth: CGFloat { self == .full ? .infinity : Self.columnMaxWidth }
@@ -14,7 +14,7 @@ enum ChatContentWidth: String, CaseIterable, Identifiable {
 
 /// 复用原生分段选择器；所有已打开的内容区通过 AppStorage 立即响应。
 struct ChatContentWidthPicker: View {
-    @AppStorage(ChatContentWidth.storageKey) private var width: ChatContentWidth = .full
+    @AppStorage(ChatContentWidth.storageKey) private var width: ChatContentWidth = .column
 
     var body: some View {
         Picker("会话内容宽度", selection: $width) {
@@ -28,7 +28,7 @@ struct ChatContentWidthPicker: View {
 }
 
 private struct ChatContentWidthModifier: ViewModifier {
-    @AppStorage(ChatContentWidth.storageKey) private var width: ChatContentWidth = .full
+    @AppStorage(ChatContentWidth.storageKey) private var width: ChatContentWidth = .column
 
     func body(content: Content) -> some View {
         content
