@@ -323,6 +323,7 @@ struct TaskBoardView: View {
             WandBoardDetailView(
                 task: task,
                 allTasks: tasks,
+                loadComments: { try await api.boardTaskComments(id: $0) },
                 onOpenTask: { selectedId = $0 },
                 workspaces: workspaces,
                 milestones: milestones,
@@ -491,8 +492,17 @@ struct TaskBoardView: View {
         await loadSupporting()
     }
 
+    private func loadWorkspaceChoices() async {
+        guard let next = try? await api.listWorkspaces() else { return }
+        workspaces = next
+        if !workspaceFilter.isEmpty && !next.contains(where: { $0.id == workspaceFilter }) {
+            workspaceFilter = ""
+            notice = "原筛选目录已不存在，已返回所有目录；请重新确认整理范围。"
+        }
+    }
+
     private func loadSupporting() async {
-        workspaces = (try? await api.listWorkspaces()) ?? workspaces
+        await loadWorkspaceChoices()
         catalog = try? await api.models()
         milestones = (try? await api.listBoardMilestones()) ?? milestones
         if let agent = try? await api.boardTaskAgentDefaults() {
@@ -537,7 +547,7 @@ struct TaskBoardView: View {
         createStatus = status
         showCreate = true
         Task {
-            workspaces = (try? await api.listWorkspaces()) ?? workspaces
+            await loadWorkspaceChoices()
             milestones = (try? await api.listBoardMilestones()) ?? milestones
             catalog = try? await api.models()
         }

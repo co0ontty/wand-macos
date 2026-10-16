@@ -7,6 +7,7 @@ import SwiftUI
 struct WandBoardDetailView: View {
     let task: WandBoardTask
     let allTasks: [WandBoardTask]
+    let loadComments: (String) async throws -> [WandTaskComment]
     let onOpenTask: ((String) -> Void)?
     let workspaces: [Workspace]
     let milestones: [WandBoardMilestone]
@@ -21,9 +22,11 @@ struct WandBoardDetailView: View {
     let onOpenSession: (String) -> Void
     let onCreateMilestone: (String) async throws -> WandBoardMilestone
 
+    @StateObject private var commentsStore = TaskCommentsStore()
     @State private var title: String
     @State private var description: String
-    @State private var savedDescription: String
+    @State private var editingDescription = false
+    @State private var submittedDescription: String?
     @State private var agent: WandBoardTaskAgent
     @State private var composeOpen: Bool
     @State private var composePrompt: String
@@ -32,6 +35,7 @@ struct WandBoardDetailView: View {
     init(
         task: WandBoardTask,
         allTasks: [WandBoardTask] = [],
+        loadComments: @escaping (String) async throws -> [WandTaskComment] = { _ in [] },
         onOpenTask: ((String) -> Void)? = nil,
         workspaces: [Workspace],
         milestones: [WandBoardMilestone],
@@ -47,6 +51,7 @@ struct WandBoardDetailView: View {
     ) {
         self.task = task
         self.allTasks = allTasks
+        self.loadComments = loadComments
         self.onOpenTask = onOpenTask
         self.workspaces = workspaces
         self.milestones = milestones
@@ -61,7 +66,6 @@ struct WandBoardDetailView: View {
         self.onCreateMilestone = onCreateMilestone
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.description)
-        _savedDescription = State(initialValue: task.description)
         _agent = State(initialValue: task.agent ?? .default)
         let assigned = !task.sessions.isEmpty
         _composeOpen = State(initialValue: !assigned)
@@ -80,8 +84,11 @@ struct WandBoardDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            HStack(alignment: .top, spacing: 24) {
+        GeometryReader { geometry in
+          let compact = geometry.size.width < 820
+          let columns = compact ? [GridItem(.flexible(), alignment: .topLeading)] : [GridItem(.flexible(), alignment: .topLeading), GridItem(.fixed(250), alignment: .topLeading)]
+          ScrollView {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("ID: \(task.identifier.isEmpty ? String(task.id.prefix(8)) : task.identifier)")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -89,6 +96,9 @@ struct WandBoardDetailView: View {
                         .textSelection(.enabled)
                     titleField
                     descriptionSection
+                    TaskCommentsSection(comments: commentsStore.comments, loading: commentsStore.loading, failed: commentsStore.failed) {
+                        Task { await commentsStore.load(taskId: task.id, fetch: loadComments) }
+                    }
                     taskRelationships
                     WandBoardAgentSessionList(
                         sessions: task.sessions,
@@ -101,15 +111,25 @@ struct WandBoardDetailView: View {
                 .frame(maxWidth: 760, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 properties
-                    .frame(width: 250)
+                    .frame(width: compact ? nil : 250)
             }
-            .padding(28)
+            .padding(compact ? 16 : 28)
+          }
         }
         .background(Theme.workspaceBackground)
+        .task(id: task.id + ":" + task.updatedAt) { await commentsStore.load(taskId: task.id, fetch: loadComments) }
+        .onChange(of: task.description) { value in
+            if !editingDescription || submittedDescription == value {
+                description = value
+                editingDescription = false
+                submittedDescription = nil
+            }
+        }
         .onChange(of: task.id) { _ in
             title = task.title
             description = task.description
-            savedDescription = task.description
+            editingDescription = false
+            submittedDescription = nil
             agent = task.agent ?? .default
             let assigned = !task.sessions.isEmpty
             composeOpen = !assigned
@@ -197,20 +217,16 @@ struct WandBoardDetailView: View {
     private var descriptionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                WandBoardSectionTitle(title: "任务描述", detail: "留空时派发用标题作为指令")
-                if description != savedDescription {
-                    Button("保存描述") {
-                        let value = description
-                        Task {
-                            await onPatch(["description": value])
-                            savedDescription = value
-                        }
-                    }
-                    .buttonStyle(WandSecondaryButtonStyle())
-                    .disabled(busy)
+                WandBoardSectionTitle(title: "任务描述")
+                Button(editingDescription ? "取消编辑" : "编辑描述") {
+                    description = task.description
+                    editingDescription.toggle()
                 }
+                .buttonStyle(WandSecondaryButtonStyle())
+                .disabled(busy)
             }
-            TextEditor(text: $description)
+            if editingDescription {
+              TextEditor(text: $description)
                 .font(.system(size: 13))
                 .lineSpacing(4)
                 .focused($focusedField, equals: "description")
@@ -228,7 +244,38 @@ struct WandBoardDetailView: View {
                     }
                 }
                 .disabled(busy)
-                .accessibilityLabel("任务描述")
+                .accessibilityLabel("编辑任务描述")
+              HStack {
+                  Text("仅保存描述，不会启动执行。")
+                      .font(.system(size: 11)).foregroundColor(Theme.textTertiary)
+                  Spacer()
+                  Button(busy ? "正在保存…" : "保存描述") {
+                      let value = description
+                      submittedDescription = value
+                      if value == task.description { editingDescription = false }
+                      else { Task { await onPatch(["description": value]) } }
+                  }
+                  .buttonStyle(WandPrimaryButtonStyle())
+                  .disabled(busy)
+              }
+            } else {
+                Text(task.description.isEmpty ? "暂无描述，可补充背景、验收标准或复现步骤。" : task.description)
+                    .font(.system(size: 13)).lineSpacing(4)
+                    .foregroundColor(task.description.isEmpty ? Theme.textSecondary : Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("任务描述")
+            }
+        }
+        .wandMotion(value: editingDescription)
+        .onChange(of: editingDescription) { editing in
+            if editing { focusedField = "description" }
+        }
+        .onExitCommand {
+            guard editingDescription, !busy else { return }
+            editingDescription = false
+            description = task.description
         }
     }
 

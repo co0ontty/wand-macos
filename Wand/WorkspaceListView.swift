@@ -47,6 +47,7 @@ struct WorkspaceListView: View {
     @State private var collapsedRecentGroups = Set<String>()
     @State private var pendingSelectionReveal = false
     @State private var collapsedTaskIds = Set<String>()
+    @State private var expandedStandaloneGroups = Set<String>()
     @State private var clearTarget: WorkspaceTaskSummary?
     @State private var clearBusy = false
     @State private var deleteSessionTarget: WorkspaceSessionSummary?
@@ -74,6 +75,7 @@ struct WorkspaceListView: View {
     @State private var collapsedArchivedTaskIds = Set<String>()
     @StateObject private var organizationAction = WandTaskOrganizationAction()
     @State private var organizationGroupId: String?
+    @State private var lastOrganizationGroupId: String?
     @State private var organizationInitialMode: WandTaskOrganizationMode?
 
     var body: some View {
@@ -404,8 +406,11 @@ struct WorkspaceListView: View {
                     ForEach(group.tasks) { summary in
                         taskSummaryRow(summary, group: group)
                     }
-                    if group.tasks.isEmpty {
-                        Text(activeOnly ? "没有活动任务" : "这个目录还没有任务。")
+                    if !group.standaloneSessions.isEmpty {
+                        standaloneGroup(group)
+                    }
+                    if group.tasks.isEmpty && group.standaloneSessions.isEmpty {
+                        Text(activeOnly ? "没有活动任务或会话" : "这个目录还没有任务或会话。")
                             .font(.system(size: 11))
                             .foregroundColor(Theme.textMuted)
                             .padding(.leading, TreeIndent.task)
@@ -448,7 +453,7 @@ struct WorkspaceListView: View {
             return true
         }
         if let selectedSessionId {
-            return group.tasks.contains { task in
+            return group.standaloneSessions.contains { $0.id == selectedSessionId } || group.tasks.contains { task in
                 task.sessions.contains { $0.id == selectedSessionId }
             }
         }
@@ -512,14 +517,22 @@ struct WorkspaceListView: View {
             .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
             .contextMenu {
                 Menu {
+                    if lastOrganizationGroupId == group.id && organizationAction.hasState {
+                        Button("查看上次归类结果或进度") {
+                            organizationInitialMode = nil
+                            organizationGroupId = group.id
+                        }
+                        Divider()
+                    }
                     ForEach(WandTaskOrganizationMode.allCases) { mode in
                         Button(mode.label) {
                             organizationAction.reset()
+                            lastOrganizationGroupId = group.id
                             organizationInitialMode = mode
                             organizationGroupId = group.id
                         }
                         .help(mode.hint)
-                        .disabled(organizationAction.busy || isSelecting)
+                        .disabled(organizationAction.busy || organizationAction.unresolved || isSelecting)
                     }
                 } label: {
                     Label("会话自动归类", systemImage: "folder")
@@ -675,6 +688,12 @@ struct WorkspaceListView: View {
             return
         }
         for group in store.taskGroups {
+            if group.standaloneSessions.contains(where: { $0.id == selectedSessionId }) {
+                expandedTaskGroups.insert(group.id)
+                expandedStandaloneGroups.insert(group.id)
+                pendingSelectionReveal = false
+                return
+            }
             let task = group.tasks.first { task in
                 if let selectedTaskId { return task.id == selectedTaskId }
                 return task.sessions.contains { $0.id == selectedSessionId }
@@ -1062,17 +1081,63 @@ struct WorkspaceListView: View {
         }.padding(.horizontal, 8)
     }
 
-    private func recentSessionRow(_ entry: TaskListPresentation.RecentEntry) -> some View {
+    private func standaloneGroup(_ group: TaskDirectoryGroup) -> some View {
+        let expanded = isFiltering || activeOnly || expandedStandaloneGroups.contains(group.id)
+        return VStack(alignment: .leading, spacing: 1) {
+            Button {
+                if isSelecting {
+                    let ids = Set(group.standaloneSessions.map(\.id))
+                    if ids.isSubset(of: selectedSessionIds) { selectedSessionIds.subtract(ids) }
+                    else { selectedSessionIds.formUnion(ids) }
+                } else if !isFiltering && !activeOnly {
+                    if expanded { expandedStandaloneGroups.remove(group.id) }
+                    else { expandedStandaloneGroups.insert(group.id) }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    treeDisclosureCaret(expanded: expanded)
+                    Text("\(group.workspaceName) - 未分组任务")
+                        .font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textPrimary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text("\(group.standaloneSessions.count)")
+                        .font(.system(size: 10)).foregroundColor(Theme.textMuted)
+                }
+                .padding(.leading, TreeIndent.task).padding(.trailing, 8).padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("sidebar-default-task-\(group.id)")
+            .sidebarPresence("sidebar-default-task-\(group.id)")
+            .accessibilityLabel("\(group.workspaceName) - 未分组任务，\(group.standaloneSessions.count) 个会话")
+            .help("\(group.workspaceName) - 未分组任务")
+            if expanded {
+                ForEach(group.standaloneSessions) { session in
+                    recentSessionRow(TaskListPresentation.RecentEntry(group: group, task: nil, session: session), inDirectory: true)
+                        .padding(.leading, TreeIndent.task)
+                }
+            }
+        }
+        .wandMotion(value: expanded, layout: true)
+    }
+
+    private func recentSessionRow(_ entry: TaskListPresentation.RecentEntry, inDirectory: Bool = false) -> some View {
         let session = entry.session
-        let selected = selectedSessionId == session.id
+        let selected = isSelecting && inDirectory ? selectedSessionIds.contains(session.id) : selectedSessionId == session.id
         return SidebarHoveringRow { hovering in
             Button {
-                if let task = entry.task {
+                if isSelecting && inDirectory {
+                    if selectedSessionIds.contains(session.id) { selectedSessionIds.remove(session.id) }
+                    else { selectedSessionIds.insert(session.id) }
+                } else if let task = entry.task {
                     let owner = TaskListPresentation.workspaceForTask(task, group: entry.group, workspaces: store.workspaces)
                     onOpenTaskSession?(owner, task.asTask(), session)
                 } else { onOpenSession?(workspace(from: entry.group), session) }
             } label: {
                 HStack(spacing: 8) {
+                    if isSelecting && inDirectory {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .foregroundColor(selected ? Theme.brand : Theme.textMuted)
+                    }
                     if let employee = session.employeeId {
                         ContactAvatar(id: employee, avatar: session.employeeAvatar ?? "", name: session.employeeName ?? "",
                                       provider: session.provider, size: 28)
@@ -1098,8 +1163,8 @@ struct WorkspaceListView: View {
                 }.padding(.horizontal, 8).padding(.vertical, 7).contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .sidebarSelectionChrome(isSelected: selected, isHovered: hovering)
-                .accessibilityIdentifier("sidebar-recent-\(session.id)")
-                .sidebarPresence("sidebar-recent-\(session.id)")
+                .accessibilityIdentifier("sidebar-\(inDirectory ? "standalone" : "recent")-\(session.id)")
+                .sidebarPresence("sidebar-\(inDirectory ? "standalone" : "recent")-\(session.id)")
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .help(session.title ?? session.providerLabel)
         }.contextMenu {

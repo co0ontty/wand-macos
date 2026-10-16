@@ -3138,13 +3138,9 @@ private struct ActivityFoldCard<Content: View>: View {
         if case .tool(_, _, _, _, _, let result) = item { return result == nil }
         return false
     } }
-    private var hasThinking: Bool { group.items.contains { item in
-        if case .plain(.thinking(_, _)) = item { return true }
-        return false
-    } }
+    /// 默认只在最新一组运行中自动展开；思考、报错不自动撑开，用户手动收放优先（对齐 Web/安卓）。
     private var automaticExpanded: Bool {
-        ChatDisclosurePresentation.expanded(userChoice: nil, running: group.newest && running,
-            attention: hasThinking || hasError || (missingResult && terminal == .failed))
+        ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: group.newest, running: running)
     }
 
     init(
@@ -3157,17 +3153,8 @@ private struct ActivityFoldCard<Content: View>: View {
         self.running = running
         self.terminal = activityGroup.newest ? terminal : nil
         self.itemView = itemView
-        let attention = activityGroup.items.contains { item in
-            if case .plain(.thinking(_, _)) = item { return true }
-            switch item {
-            case .tool(_, _, _, _, _, let result):
-                return result?.isError == true || (result == nil && activityGroup.newest && terminal == .failed)
-            case .plain(.toolResult(_, _, let error, _, _, _)): return error
-            default: return false
-            }
-        }
-        _expanded = State(initialValue: ChatDisclosurePresentation.expanded(userChoice: nil,
-            running: activityGroup.newest && running, attention: attention))
+        _expanded = State(initialValue: ChatDisclosurePresentation.activityExpanded(userChoice: nil,
+            isNewest: activityGroup.newest, running: running))
     }
 
     var body: some View {
@@ -3185,16 +3172,7 @@ private struct ActivityFoldCard<Content: View>: View {
             .help(expanded ? "收起活动" : "展开活动")
 
             if expanded {
-                if hasThinking {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(group.items.enumerated()), id: \.offset) { index, item in
-                            itemView(item, index, group.items.count - 1)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                } else {
-                    window
-                }
+                window
             }
         }
         .background(
@@ -3858,7 +3836,8 @@ private struct BlockView: View {
                     icon: "brain",
                     title: "思考过程",
                     tint: Theme.textSecondary,
-                    initiallyExpanded: true
+                    // 思考正文默认收起：展开是阅读选择，窗口里「最新一条默认展开」也不适用于它（对齐 Web/安卓）。
+                    initiallyExpanded: false
                 ) {
                     MarkdownText(text: thinking, baseURL: baseURL)
                         .font(.system(size: 13))

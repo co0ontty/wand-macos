@@ -113,6 +113,55 @@ final class TaskBoardTests: XCTestCase {
     }
 
     @MainActor
+    func testOrganizationUnknownReceiptSurvivesResetAndOnlyQueriesOriginalToken() async throws {
+        let hostName = "\(UUID().uuidString.lowercased()).organization-recovery.test"
+        let lock = NSLock()
+        var previews = 0, starts = 0, tokenReads = 0
+        var ready = false
+        CommunicationsContractURLProtocol.register(host: hostName) { request in
+            lock.lock(); defer { lock.unlock() }
+            if request.url?.path == "/api/sessions/auto-organize/by-token/original-token" {
+                tokenReads += 1
+                guard ready else { throw URLError(.cannotConnectToHost) }
+                return Data(#"{"job":{"id":"original-job","status":"completed","stage":"完成","processedSessions":2,"totalSessions":2,"modelRequests":1,"result":{"eligibleSessions":2,"analyzedSessions":2,"skippedManualSessions":0,"skippedSessions":0,"createdTasks":[{"taskId":"new"}],"reusedTasks":[],"updatedTasks":[],"movedSessions":[{"sessionId":"one"},{"sessionId":"two"}],"unassignedSessions":[],"refused":[]}}}"#.utf8)
+            }
+            guard previews == 0 else {
+                starts += 1
+                throw URLError(.networkConnectionLost)
+            }
+            previews += 1
+            return Data(#"{"preview":{"token":"original-token","sessionCount":2,"manualSessionCount":0,"skippedSessionCount":0,"existingTaskCount":0,"contentCharacters":1888,"estimatedModelRequests":1,"unchanged":false}}"#.utf8)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel(); CommunicationsContractURLProtocol.unregister(host: hostName) }
+        let api = WandAPI(baseURL: URL(string: "https://\(hostName)")!, token: nil, session: session)
+        let action = WandTaskOrganizationAction()
+        var refreshes = 0
+        await action.run(api: api, target: .all, mode: .auto, onChanged: {})
+        action.confirm(api: api) { refreshes += 1 }
+        await action.waitForBackgroundWorkForTesting()
+        XCTAssertTrue(action.unresolved)
+        XCTAssertEqual(action.submittedToken, "original-token")
+        XCTAssertNotNil(action.error)
+        action.reset()
+        await action.run(api: api, target: .workspace("another-directory"), mode: .all, onChanged: {})
+        XCTAssertEqual(lock.withLock { previews }, 1)
+        XCTAssertEqual(lock.withLock { starts }, 1)
+        XCTAssertEqual(lock.withLock { tokenReads }, 1)
+        lock.withLock { ready = true }
+        action.query(api: api) { refreshes += 1 }
+        await action.waitForBackgroundWorkForTesting()
+        XCTAssertFalse(action.unresolved)
+        XCTAssertNil(action.submittedToken)
+        XCTAssertEqual(action.result?.movedSessions.count, 2)
+        XCTAssertEqual(lock.withLock { starts }, 1)
+        XCTAssertEqual(lock.withLock { tokenReads }, 2)
+        XCTAssertEqual(refreshes, 1)
+    }
+
+    @MainActor
     func testOrganizationNativeRelationshipAndResultScreenshots() async throws {
         guard ProcessInfo.processInfo.environment["WAND_TASK_ORGANIZE_NATIVE_VISUAL"] == "1" else {
             throw XCTSkip("opt-in isolated native task-organization views; never calls a model")
@@ -174,6 +223,26 @@ final class TaskBoardTests: XCTestCase {
             }.padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             try await organizationSnapshot(summary, size: NSSize(width: 320, height: 100), dark: dark,
                 path: output.appendingPathComponent("relationship-summary-\(suffix).png"))
+        }
+    }
+
+    @MainActor
+    func testTaskDetailLongContentVisuals() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["WAND_TASK_DETAIL_VISUAL_OUTPUT"] else {
+            throw XCTSkip("Set WAND_TASK_DETAIL_VISUAL_OUTPUT for native offscreen detail snapshots")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let brief = "任务背景\n\n" + String(repeating: "完整描述应在主阅读区自然换行，而不是隐藏在限高编辑框里。\n", count: 12) + "描述末尾验收标记"
+        let data = try JSONSerialization.data(withJSONObject: ["id": "detail-visual", "identifier": "TASK-VISUAL", "title": "评估 CLI / skill 获取一次性 Web 登录票据（暂不实施）", "description": brief])
+        let task = try JSONDecoder().decode(WandBoardTask.self, from: data)
+        for width in [640, 1200] {
+            for dark in [false, true] {
+                let detail = WandBoardDetailView(task: task, loadComments: { _ in [] }, workspaces: [], milestones: [], catalog: nil, busy: false,
+                    onPatch: { _ in XCTFail("Read-only visual must not patch") }, onRemember: { _ in }, onDispatch: { _, _ in XCTFail("Read-only visual must not dispatch") }, onArchive: { XCTFail("Read-only visual must not archive") }, onOpenSession: { _ in }, onCreateMilestone: { _ in throw URLError(.unsupportedURL) })
+                try await organizationSnapshot(detail, size: NSSize(width: width, height: 1050), dark: dark,
+                    path: output.appendingPathComponent("detail-\(width)-\(dark ? "dark" : "light").png"))
+            }
         }
     }
 

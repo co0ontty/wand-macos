@@ -41,12 +41,21 @@ struct LegacyHistoryRefresh {
 final class WandAPI {
     let baseURL: URL
     let token: String?
+    let feedbackConnection: ClientFeedback.Connection?
     private let session: URLSession
+    private let reportServerFailure: (Error, String, URL) -> Void
 
-    init(baseURL: URL, token: String?, session: URLSession = SelfSignedSession.shared.session) {
+    init(baseURL: URL, token: String?, session: URLSession = SelfSignedSession.shared.session,
+         reportServerFailure: ((Error, String, URL) -> Void)? = nil) {
         self.baseURL = baseURL
         self.token = token
         self.session = session
+        let feedbackConnection = ClientFeedback.connectionForRequest(origin: baseURL, token: token)
+        self.feedbackConnection = feedbackConnection
+        self.reportServerFailure = reportServerFailure ?? { error, feature, _ in
+            ClientFeedback.capture(error, event: "http_5xx", feature: feature,
+                                   connection: feedbackConnection)
+        }
     }
 
     enum APIError: LocalizedError {
@@ -92,6 +101,7 @@ final class WandAPI {
         } catch let err as APIError {
             throw err
         } catch {
+            if error is CancellationError || ((error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled) { throw error }
             throw APIError.network(error.localizedDescription)
         }
     }
@@ -118,6 +128,11 @@ final class WandAPI {
                let err = obj["error"] as? String, !err.isEmpty {
                 message = err
             }
+            if http.statusCode >= 500, req.url?.path != "/api/feedback/client" {
+                reportServerFailure(NSError(domain: "HTTPError", code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: message]),
+                    ClientFeedbackReport.feature(path: req.url?.path ?? ""), baseURL)
+            }
             throw APIError.server(status: http.statusCode, message: message)
         }
         return data
@@ -136,6 +151,16 @@ final class WandAPI {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw APIError.network("响应解析失败：\(error.localizedDescription)")
+        }
+    }
+
+    func boardTaskComments(id: String) async throws -> [WandTaskComment] {
+        struct Response: Decodable { let comments: [WandTaskComment] }
+        do {
+            let response = try await request(Response.self, method: "GET", path: "/api/wand-tasks/\(percentEncodePathComponent(id))/comments")
+            return response.comments.filter { $0.taskId == id }
+        } catch APIError.server(status: 404, message: _) {
+            return [] // Older servers have no comments route.
         }
     }
 
@@ -611,6 +636,12 @@ final class WandAPI {
                 path: "/api/sessions/auto-organize/by-token/\(percentEncodePathComponent(token))") { return response.job }
             throw error
         }
+    }
+
+    func conversationOrganizationJobByToken(_ token: String) async throws -> WandConversationOrganizationJob {
+        let response = try await request(WandConversationOrganizationJobResponse.self, method: "GET",
+            path: "/api/sessions/auto-organize/by-token/\(percentEncodePathComponent(token))")
+        return response.job
     }
 
     func conversationOrganizationJob(id: String) async throws -> WandConversationOrganizationJob {

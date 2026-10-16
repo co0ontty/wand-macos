@@ -17,23 +17,29 @@ final class WandTaskOrganizationAction: ObservableObject {
     @Published private(set) var note = ""
     private var revision = 0
     private var work: Task<Void, Never>?
+    @Published private(set) var submittedToken: String?
+    private var cancelling = false
+    var unresolved: Bool { submittedToken != nil || job?.status == "running" }
+    var hasState: Bool { busy || unresolved || preview != nil || result != nil || error != nil || !note.isEmpty }
 
     var label: String { busy ? "正在整理会话" : preview != nil ? "确认会话范围" : error != nil ? "归类未完成" : job?.status == "running" ? "后台归类中" : result != nil ? "会话归类结果" : "会话自动归类" }
 
     func reset() {
+        guard !unresolved else {
+            note = "前一次范围仍在后台整理或等待回执；请查询原作业，切换目录不会重新发送。"
+            return
+        }
         revision += 1
-        result = nil; error = nil; preview = nil
-        if !busy { job = nil; note = "" }
-        else { note = "前一次范围仍在后台整理；切换目录不会重新发送或挪动新输入。" }
+        result = nil; error = nil; preview = nil; job = nil; note = ""
     }
 
     func prepare(api: WandAPI, target: WandTaskOrganizationTarget, mode: WandTaskOrganizationMode, onChanged: @escaping () async -> Void) {
-        guard !busy else { return }
+        guard !busy, !unresolved else { return }
         work = Task { await run(api: api, target: target, mode: mode, onChanged: onChanged) }
     }
 
     func run(api: WandAPI, target: WandTaskOrganizationTarget, mode: WandTaskOrganizationMode, onChanged: () async -> Void) async {
-        guard !busy else { return }
+        guard !busy, !unresolved else { return }
         reset(); busy = true; let started = revision
         note = "读取会话正文并估算处理量；尚未调用模型。"
         defer { busy = false }
@@ -48,7 +54,7 @@ final class WandTaskOrganizationAction: ObservableObject {
                 note = "没有符合范围且有正文的工作会话；跳过 \(response.manualSessionCount) 个人工任务会话，排除 \(response.skippedSessionCount) 个归档/私聊/系统或无正文会话。"
             } else {
                 preview = response
-                note = "正文 \(response.contentCharacters) 字符，预计 \(response.estimatedModelRequests) 个系统模型请求，使用初二当前配置及原有候选降级。确认后可自动创建/复用任务并移动会话，不执行其中的工作。"
+                note = "正文 \(response.contentCharacters) 字符，预计 \(response.estimatedModelRequests) 个系统模型请求，使用初二当前配置及原有候选降级；另排除 \(response.skippedSessionCount) 个归档/私聊/系统记录或无正文会话。确认后可自动创建/复用任务并移动会话，不执行其中的工作。"
             }
         } catch {
             guard started == revision else { return }
@@ -58,7 +64,8 @@ final class WandTaskOrganizationAction: ObservableObject {
     }
 
     func confirm(api: WandAPI, onChanged: @escaping () async -> Void) {
-        guard !busy, let prepared = preview else { return }
+        guard !busy, !unresolved, let prepared = preview else { return }
+        submittedToken = prepared.token
         busy = true; error = nil; let started = revision
         work = Task {
             defer { busy = false }
@@ -75,34 +82,52 @@ final class WandTaskOrganizationAction: ObservableObject {
     }
 
     func query(api: WandAPI, onChanged: @escaping () async -> Void) {
-        guard !busy, let current = job else { return }
+        guard !busy, job != nil || submittedToken != nil else { return }
+        let current = job, token = submittedToken
         busy = true; error = nil; let started = revision
         work = Task {
             defer { busy = false }
-            do { try await watch(api: api, accepted: try await api.conversationOrganizationJob(id: current.id), started: started, onChanged: onChanged) }
+            do {
+                let original: WandConversationOrganizationJob
+                if let current { original = try await api.conversationOrganizationJob(id: current.id) }
+                else if let token { original = try await api.conversationOrganizationJobByToken(token) }
+                else { return }
+                try await watch(api: api, accepted: original, started: started, onChanged: onChanged)
+            }
             catch { if !Task.isCancelled && started == revision { self.error = error.localizedDescription } }
         }
     }
 
     private func watch(api: WandAPI, accepted: WandConversationOrganizationJob, started: Int, onChanged: () async -> Void) async throws {
         var current = accepted
+        var polls = 0
         while true {
             try Task.checkCancellation()
             if started == revision { job = current; note = current.stage }
             if current.status != "running" { break }
+            guard polls < 900 else {
+                if started == revision { error = "前端查询已暂停；后台仍在执行，可继续查询原作业。" }
+                return
+            }
+            polls += 1
             try await Task.sleep(nanoseconds: 800_000_000)
             current = try await api.conversationOrganizationJob(id: current.id)
         }
+        submittedToken = nil
         await onChanged()
         guard started == revision else { return }
         result = current.result; job = current
-        error = current.status == "failed" || current.status == "interrupted" ? current.error : nil
+        error = current.status == "failed" || current.status == "interrupted" ? current.error ?? "归类未完成，请查看结果或初二日志。" : nil
     }
 
     func cancel(api: WandAPI) {
-        guard let current = job, current.status == "running" else { return }
-        Task { do { try await api.cancelConversationOrganization(id: current.id) }
-            catch { self.error = "取消回执未确认，请继续查询原作业；已完成部分不会回滚。" } }
+        guard let current = job, current.status == "running", !cancelling else { return }
+        cancelling = true
+        Task {
+            defer { cancelling = false }
+            do { try await api.cancelConversationOrganization(id: current.id) }
+            catch { self.error = "取消回执未确认，请继续查询原作业；已完成部分不会回滚。" }
+        }
     }
     func stopWatching() { work?.cancel(); work = nil }
     func reportError(_ message: String) { error = message }
@@ -132,8 +157,9 @@ struct WandTaskOrganizationPanel: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(WandSecondaryButtonStyle())
-                .disabled(action.busy)
+                .disabled(action.busy || action.unresolved)
             }
+            confirmationButton
             if action.busy {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -141,13 +167,9 @@ struct WandTaskOrganizationPanel: View {
                 }
                 .accessibilityIdentifier("task-organization-progress")
             }
-            if let prepared = action.preview {
+            if let prepared = action.preview, !action.unresolved {
                 Text("\(prepared.sessionCount) 个工作会话；跳过 \(prepared.manualSessionCount) 个人工任务会话。\(action.note)")
                     .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
-                Button(prepared.unchanged ? "内容未变，仍然重新分析" : "确认整理 \(prepared.sessionCount) 个会话") {
-                    action.confirm(api: api, onChanged: onChanged)
-                }
-                .buttonStyle(WandPrimaryButtonStyle()).disabled(action.busy)
             } else if !action.busy && action.result == nil && !action.note.isEmpty {
                 Text(action.note).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
             }
@@ -167,7 +189,6 @@ struct WandTaskOrganizationPanel: View {
             if let job = action.job {
                 if job.status == "running" {
                     Button("取消后续归类，保留已完成部分") { action.cancel(api: api) }.buttonStyle(WandSecondaryButtonStyle())
-                    if !action.busy { Button("继续查询本次作业") { action.query(api: api, onChanged: onChanged) }.buttonStyle(WandSecondaryButtonStyle()) }
                 }
                 if let id = job.logSessionId, let onOpenSession {
                     Button("查看初二的本次作业日志") { onOpenSession(id) }.buttonStyle(WandSecondaryButtonStyle())
@@ -186,6 +207,27 @@ struct WandTaskOrganizationPanel: View {
                 await action.run(api: api, target: target, mode: initialMode, onChanged: onChanged)
             }
         }
+    }
+
+    private var confirmationButton: some View {
+        let title = action.busy ? "正在整理会话…"
+            : action.unresolved ? (action.job == nil ? "查询原确认请求" : "继续查询本次作业")
+            : action.preview.map { $0.unchanged ? "内容未变，确认重新分析" : "确认整理 \($0.sessionCount) 个会话" }
+                ?? (action.result != nil ? "查看本次结果" : "先选择会话范围")
+        return Button {
+            if action.unresolved || action.result != nil { action.query(api: api, onChanged: onChanged) }
+            else { action.confirm(api: api, onChanged: onChanged) }
+        } label: {
+            ZStack {
+                Text(title).font(.system(size: 12, weight: .medium))
+                    .id(title).transition(.opacity)
+            }
+            .frame(width: 220, height: 18)
+        }
+        .buttonStyle(WandPrimaryButtonStyle())
+        .disabled(action.busy || (!action.unresolved && action.preview == nil && action.result == nil))
+        .accessibilityIdentifier("task-organization-primary")
+        .wandMotion(value: title)
     }
 }
 

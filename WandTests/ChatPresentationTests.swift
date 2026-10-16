@@ -35,6 +35,14 @@ final class ChatPresentationTests: XCTestCase {
         XCTAssertFalse(ChatDisclosurePresentation.expanded(userChoice: false, running: true, attention: true))
     }
 
+    func testActivityFoldOnlyOpensForTheLatestRunningGroup() {
+        XCTAssertTrue(ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: true, running: true))
+        XCTAssertFalse(ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: false, running: true))
+        XCTAssertFalse(ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: true, running: false))
+        XCTAssertTrue(ChatDisclosurePresentation.activityExpanded(userChoice: true, isNewest: false, running: false))
+        XCTAssertFalse(ChatDisclosurePresentation.activityExpanded(userChoice: false, isNewest: true, running: true))
+    }
+
     func testMissingResultIsNotSuccessAndErrorWins() {
         XCTAssertEqual(ChatDisclosurePresentation.toolStatus(hasResult: false, isError: false, running: false), "未收到结果")
         XCTAssertEqual(ChatDisclosurePresentation.toolStatus(hasResult: true, isError: true, running: true), "失败")

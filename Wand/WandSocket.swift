@@ -23,7 +23,9 @@ final class WandSocket: PtySocketTransport {
     var onError: ((String) -> Void)?
 
     private let baseURL: URL
+    private let feedbackConnection: ClientFeedback.Connection?
     private let prepareConnection: (() async throws -> Void)?
+    private let reportFailure: ((Error) -> Void)?
     private var preparation: Task<Void, Never>?
     private var task: URLSessionWebSocketTask?
     private var subscribedSessionId: String?
@@ -40,9 +42,12 @@ final class WandSocket: PtySocketTransport {
     private var queuedBytes = 0
     private var sending = false
 
-    init(baseURL: URL, prepareConnection: (() async throws -> Void)? = nil) {
+    init(baseURL: URL, feedbackConnection: ClientFeedback.Connection? = nil, prepareConnection: (() async throws -> Void)? = nil,
+         reportFailure: ((Error) -> Void)? = nil) {
         self.baseURL = baseURL
+        self.feedbackConnection = feedbackConnection
         self.prepareConnection = prepareConnection
+        self.reportFailure = reportFailure
     }
 
     deinit {
@@ -139,6 +144,7 @@ final class WandSocket: PtySocketTransport {
                 self.receiveNext(socket, generation: gen)
             } catch {
                 guard !self.closed, gen == self.generation else { return }
+                self.report(error)
                 self.onError?(error.localizedDescription)
                 self.scheduleReconnect()
             }
@@ -150,7 +156,8 @@ final class WandSocket: PtySocketTransport {
             DispatchQueue.main.async {
                 guard let self, !self.closed, gen == self.generation else { return }
                 switch result {
-                case .failure:
+                case .failure(let error):
+                    self.report(error)
                     self.scheduleReconnect()
                 case .success(let message):
                     self.lastMessageAt = Date()
@@ -172,7 +179,9 @@ final class WandSocket: PtySocketTransport {
 
     // Internal for deterministic protocol tests, without opening a network connection.
     func handle(_ data: Data) {
-        guard let incoming = try? JSONDecoder().decode(WsIncoming.self, from: data) else { return }
+        let incoming: WsIncoming
+        do { incoming = try JSONDecoder().decode(WsIncoming.self, from: data) }
+        catch { report(error); return }
         if incoming.type == "ping" {
             sendJSON(["type": "pong", "t": incoming.t ?? 0])
             return
@@ -223,7 +232,8 @@ final class WandSocket: PtySocketTransport {
         socket.send(.string(text)) { [weak self] error in
             DispatchQueue.main.async {
                 guard let self, gen == self.generation else { return }
-                if error != nil {
+                if let error {
+                    self.report(error)
                     self.onError?("终端发送失败；未确认的输入不会自动重发。")
                     self.scheduleReconnect()
                     return
@@ -234,6 +244,11 @@ final class WandSocket: PtySocketTransport {
                 self.drainSendQueue()
             }
         }
+    }
+
+    private func report(_ error: Error) {
+        if let reportFailure { reportFailure(error) }
+        else { ClientFeedback.capture(error, event: "websocket_error", feature: "realtime", connection: feedbackConnection) }
     }
 
     private func invalidateConnection() {

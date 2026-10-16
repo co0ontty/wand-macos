@@ -52,9 +52,11 @@ final class UpdateInstaller {
 
     func startUpdate(
         _ update: MacUpdateManager.Update,
+        feedbackConnection: ClientFeedback.Connection? = nil,
         progress: @escaping ProgressHandler
     ) {
         guard let asset = update.preferredAsset else {
+            ClientFeedback.capture(installerError(code: 50, message: "Release 没有可用于自动更新的 ZIP 或 DMG。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
             progress(.failed("Release 没有可用于自动更新的 ZIP 或 DMG。"))
             return
         }
@@ -65,10 +67,12 @@ final class UpdateInstaller {
                 && asset.downloadURL.path == "/macos/update-download"
                 && asset.sha256 != nil)
             : asset.downloadURL.scheme?.lowercased() == "https") else {
+            ClientFeedback.capture(installerError(code: 50, message: "更新包来源、地址或完整性信息无效。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
             progress(.failed("更新包来源、地址或完整性信息无效。"))
             return
         }
         guard Self.canInstallInPlace else {
+            ClientFeedback.capture(installerError(code: 20, message: Self.installBlockReason ?? "当前 Wand.app 无法原位更新。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
             progress(.failed(Self.installBlockReason ?? "当前 Wand.app 无法原位更新。"))
             return
         }
@@ -104,7 +108,8 @@ final class UpdateInstaller {
                     updateID: updateID,
                     fileExtension: fileExtension,
                     expectedVersion: update.latestVersion,
-                    expectedAsset: asset
+                    expectedAsset: asset,
+                    feedbackConnection: feedbackConnection
                 )
             }
         )
@@ -137,7 +142,7 @@ final class UpdateInstaller {
     }
 
     /// 用户确认后启动 helper；调用方随后应终止当前 Wand 进程。
-    func relaunch(pending: MacUpdateManager.PendingInstall) -> Result<Void, Error> {
+    func relaunch(pending: MacUpdateManager.PendingInstall, feedbackConnection: ClientFeedback.Connection? = nil) -> Result<Void, Error> {
         do {
             guard Self.canInstallInPlace else {
                 throw installerError(code: 20, message: Self.installBlockReason ?? "当前 Wand.app 无法原位更新。")
@@ -157,6 +162,7 @@ final class UpdateInstaller {
             try launchHelper(scriptPath: scriptPath)
             return .success(())
         } catch {
+            ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection)
             return .failure(error)
         }
     }
@@ -193,7 +199,8 @@ final class UpdateInstaller {
         updateID: UUID,
         fileExtension: String,
         expectedVersion: String,
-        expectedAsset: MacUpdateManager.Update.Asset
+        expectedAsset: MacUpdateManager.Update.Asset,
+        feedbackConnection: ClientFeedback.Connection?
     ) {
         guard isActive(updateID) else {
             if case let .success(url) = result { try? FileManager.default.removeItem(at: url) }
@@ -202,6 +209,7 @@ final class UpdateInstaller {
 
         switch result {
         case let .failure(error):
+            ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection)
             finish(.failed("下载失败：\(error.localizedDescription)"), for: updateID)
         case let .success(downloadedURL):
             emit(.verifying, for: updateID)
@@ -211,7 +219,8 @@ final class UpdateInstaller {
                     fileExtension: fileExtension,
                     expectedVersion: expectedVersion,
                     expectedAsset: expectedAsset,
-                    updateID: updateID
+                    updateID: updateID,
+                    feedbackConnection: feedbackConnection
                 )
             }
         }
@@ -222,7 +231,8 @@ final class UpdateInstaller {
         fileExtension: String,
         expectedVersion: String,
         expectedAsset: MacUpdateManager.Update.Asset,
-        updateID: UUID
+        updateID: UUID,
+        feedbackConnection: ClientFeedback.Connection?
     ) {
         var stagingDirectory: URL?
         defer { try? FileManager.default.removeItem(at: downloadedURL) }
@@ -248,6 +258,7 @@ final class UpdateInstaller {
             }
             finish(.readyToRelaunch(stagedAppPath: appURL.path), for: updateID)
         } catch {
+            if isActive(updateID) { ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection) }
             if let stagingDirectory { try? FileManager.default.removeItem(at: stagingDirectory) }
             finish(.failed("准备更新失败：\(error.localizedDescription)"), for: updateID)
         }

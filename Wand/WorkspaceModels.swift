@@ -695,7 +695,7 @@ enum TaskListPresentation {
     static func discoverDirectories(_ groups: [TaskDirectoryGroup], known: inout Set<String>, expanded: inout Set<String>) {
         for group in groups where !known.contains(group.id) {
             known.insert(group.id)
-            if !group.tasks.isEmpty { expanded.insert(group.id) }
+            if !group.tasks.isEmpty || !group.standaloneSessions.isEmpty { expanded.insert(group.id) }
         }
     }
 
@@ -705,18 +705,18 @@ enum TaskListPresentation {
             TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
                 tasks: group.tasks.filter { $0.archived != true && $0.status != "done" },
-                standaloneSessions: [], global: group.global)
-        }.filter { !$0.isSynthetic || !$0.tasks.isEmpty }
+                standaloneSessions: group.standaloneSessions.filter { $0.archived != true }, global: group.global)
+        }.filter { !$0.isSynthetic || !$0.tasks.isEmpty || !$0.standaloneSessions.isEmpty }
         let ids = Set(groups.map(\.id))
         source += workspaces.filter { !ids.contains($0.id) }.map {
             TaskDirectoryGroup(workspaceId: $0.id, workspaceName: $0.name, workspaceCwd: $0.cwd,
                 synthetic: false, tasks: [], standaloneSessions: [])
         }
-        source = source.filter { !$0.isGlobal || !$0.tasks.isEmpty }
+        source = source.filter { !$0.isGlobal || !$0.tasks.isEmpty || !$0.standaloneSessions.isEmpty }
         let searched = filteredDirectoryGroups(source, query: query)
         return source.compactMap { group in
             let result: TaskDirectoryGroup
-            if group.tasks.isEmpty && !group.isSynthetic {
+            if group.tasks.isEmpty && group.standaloneSessions.isEmpty && !group.isSynthetic {
                 guard searchMatches(query, values: [group.displayName, group.workspaceCwd]) else { return nil }
                 result = group
             } else {
@@ -728,7 +728,7 @@ enum TaskListPresentation {
                 workspaceCwd: result.workspaceCwd, synthetic: result.synthetic,
                 tasks: result.tasks.filter { task in
                     task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }
-                }, standaloneSessions: [], global: result.global)
+                }, standaloneSessions: result.standaloneSessions.filter { isActive($0, selectedSessionId: selectedSessionId) }, global: result.global)
         }.sorted { !$0.isGlobal && $1.isGlobal }
     }
 
@@ -836,7 +836,8 @@ enum TaskListPresentation {
                 searchMatches(query, values: [group.displayName, task.name, task.cwd]
                     + task.sessions.map { groupSearchText($0) })
             }
-            let standaloneSessions = group.standaloneSessions.filter(matchesSession)
+            let standaloneSessions = matches("\(group.workspaceName) - 未分组任务")
+                ? group.standaloneSessions : group.standaloneSessions.filter(matchesSession)
             guard !tasks.isEmpty || !standaloneSessions.isEmpty else { return nil }
             return TaskDirectoryGroup(
                 workspaceId: group.workspaceId, workspaceName: group.workspaceName,
