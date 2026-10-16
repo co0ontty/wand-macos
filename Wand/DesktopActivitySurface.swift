@@ -243,15 +243,17 @@ final class DesktopActivityIsland: NSObject, ObservableObject {
     @Published private(set) var expanded = false
     private let monitor: DesktopActivityMonitor
     private let observesOutsideEvents: Bool
+    private let animates: Bool
     private var panel: NSPanel?
     private var dismissedSignature: [String]?
     private var localEvents: Any?
     private var globalEvents: Any?
     private var screenObservation: NSObjectProtocol?
 
-    init(monitor: DesktopActivityMonitor, observesOutsideEvents: Bool = true) {
+    init(monitor: DesktopActivityMonitor, observesOutsideEvents: Bool = true, animates: Bool = true) {
         self.monitor = monitor
         self.observesOutsideEvents = observesOutsideEvents
+        self.animates = animates
         super.init()
         screenObservation = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.update() }
@@ -303,7 +305,7 @@ final class DesktopActivityIsland: NSObject, ObservableObject {
         // The system's primary display is stable across application activation and secondary-window moves.
         let frame = DesktopActivityIslandGeometry.frame(screen: screen.frame, visible: screen.visibleFrame,
             safeTop: screen.safeAreaInsets.top, expanded: expanded, rowCount: monitor.activities.count)
-        if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        if animated && animates && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = Theme.Motion.structureDuration
                 panel.animator().setFrame(frame, display: true)

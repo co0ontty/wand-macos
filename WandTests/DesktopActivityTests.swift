@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import UserNotifications
 import XCTest
 @testable import Wand
@@ -328,6 +329,9 @@ final class DesktopActivityTests: XCTestCase {
     }
 
     func testRealSystemMenuBarButtonReflectsTaskCountAndOpensNativePopover() async throws {
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        try XCTSkipIf(session?["CGSSessionScreenIsLocked"] as? Bool == true,
+                      "System menu-bar popovers require an unlocked graphical session")
         let monitor = DesktopActivityMonitor(defaults: UserDefaults(suiteName: "DesktopActivityTests.\(UUID())")!)
         let api = ActivityAPI()
         let center = ActivityNotificationCenter()
@@ -338,7 +342,10 @@ final class DesktopActivityTests: XCTestCase {
         monitor.connect(id: UUID(), api: api, poll: false)
         api.snapshots = [try snapshot(["structuredState": ["inFlight": true]]), try snapshot(["id": "needs-approval", "permissionBlocked": true])]
         await monitor.refresh()
-        try await Task.sleep(nanoseconds: 30_000_000)
+        for _ in 0..<200 {
+            if item.button?.title.contains("等待处理") == true { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         XCTAssertTrue(item.button?.title.contains("Claude") == true)
         XCTAssertTrue(item.button?.title.contains("等待处理") == true)
         XCTAssertTrue(item.button?.title.contains("+1") == true)
@@ -403,10 +410,10 @@ final class DesktopActivityTests: XCTestCase {
         await monitor.refresh()
         monitor.setIslandEnabled(true)
         // Geometry/visual fixture must not consume or react to the user's real desktop clicks.
-        let island = DesktopActivityIsland(monitor: monitor, observesOutsideEvents: false)
+        let island = DesktopActivityIsland(monitor: monitor, observesOutsideEvents: false, animates: false)
         defer { island.close() }
         island.update()
-        let window = try XCTUnwrap(NSApp.windows.first { $0.title == "Wand 任务动态" })
+        let window = try XCTUnwrap(NSApp.windows.first { $0.title == "Wand 任务动态" && $0.contentView != nil })
         XCTAssertTrue(window.isVisible)
         let top = window.frame.maxY
         island.toggle()
@@ -448,7 +455,7 @@ final class DesktopActivityTests: XCTestCase {
         defer { island.close() }
         island.update()
         island.toggle()
-        let panel = try XCTUnwrap(NSApp.windows.first { $0.title == "Wand 任务动态" })
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.title == "Wand 任务动态" && $0.contentView != nil })
         XCTAssertTrue(panel.canBecomeKey)
         let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
         other.isReleasedWhenClosed = false
