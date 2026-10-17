@@ -99,6 +99,9 @@
 		D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B103 /* DesktopLifecycleTests.swift */; };
 		D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B104 /* GitStatusPresentationTests.swift */; };
 		D7000000000000000000A105 /* ProviderCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B105 /* ProviderCatalogTests.swift */; };
+		FA11000000000000000000A1 /* ClientFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11000000000000000000B1 /* ClientFeedback.swift */; };
+		FA11000000000000000000A2 /* TaskComments.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11000000000000000000B2 /* TaskComments.swift */; };
+		FA11000000000000000000A3 /* ClientFeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11000000000000000000B3 /* ClientFeedbackTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -207,6 +210,9 @@
 		D7000000000000000000B103 /* DesktopLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopLifecycleTests.swift; sourceTree = "<group>"; };
 		D7000000000000000000B104 /* GitStatusPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusPresentationTests.swift; sourceTree = "<group>"; };
 		D7000000000000000000B105 /* ProviderCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderCatalogTests.swift; sourceTree = "<group>"; };
+		FA11000000000000000000B1 /* ClientFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFeedback.swift; sourceTree = "<group>"; };
+		FA11000000000000000000B2 /* TaskComments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskComments.swift; sourceTree = "<group>"; };
+		FA11000000000000000000B3 /* ClientFeedbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFeedbackTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -272,6 +278,7 @@
 				C9000000000000000000B009 /* PlushScene */,
 				A200000000000000000000B2 /* WandAPI.swift */,
 				A200000000000000000000B3 /* WandSocket.swift */,
+				FA11000000000000000000B1 /* ClientFeedback.swift */,
 				D800000000000000000000B1 /* NativeTerminalView.swift */,
 				D800000000000000000000B2 /* PtyTerminalStore.swift */,
 				A200000000000000000000B4 /* ChatStore.swift */,
@@ -296,6 +303,7 @@
 				D5000000000000000000BC05 /* TaskBoardViews.swift */,
 				D5000000000000000000BC06 /* TaskBoardPickers.swift */,
 				D5000000000000000000BC07 /* TaskBoardDetailView.swift */,
+				FA11000000000000000000B2 /* TaskComments.swift */,
 				D5000000000000000000BC08 /* TaskBoardCreateView.swift */,
 				F6000000000000000000BC01 /* SessionTimeFormatting.swift */,
 				F6000000000000000000BC02 /* WorkspaceModels.swift */,
@@ -330,6 +338,7 @@
 			children = (
 				D610000000000000000000B4 /* DesktopActivityTests.swift */,
 				E500000000000000000000B1 /* MacUpdateManagerTests.swift */,
+				FA11000000000000000000B3 /* ClientFeedbackTests.swift */,
 				E500000000000000000000B3 /* WorkspaceTaskContractTests.swift */,
 				E500000000000000000000B4 /* TaskBoardTests.swift */,
 				D7000000000000000000B102 /* DesktopHistoryTests.swift */,
@@ -490,6 +499,7 @@
 				C9000000000000000000A00A /* NativeAcceptance.swift in Sources */,
 				A200000000000000000000A2 /* WandAPI.swift in Sources */,
 				A200000000000000000000A3 /* WandSocket.swift in Sources */,
+				FA11000000000000000000A1 /* ClientFeedback.swift in Sources */,
 				D800000000000000000000A1 /* NativeTerminalView.swift in Sources */,
 				D800000000000000000000A2 /* PtyTerminalStore.swift in Sources */,
 				A200000000000000000000A4 /* ChatStore.swift in Sources */,
@@ -514,6 +524,7 @@
 				D5000000000000000000AC05 /* TaskBoardViews.swift in Sources */,
 				D5000000000000000000AC06 /* TaskBoardPickers.swift in Sources */,
 				D5000000000000000000AC07 /* TaskBoardDetailView.swift in Sources */,
+				FA11000000000000000000A2 /* TaskComments.swift in Sources */,
 				D5000000000000000000AC08 /* TaskBoardCreateView.swift in Sources */,
 				F6000000000000000000AC01 /* SessionTimeFormatting.swift in Sources */,
 				F6000000000000000000AC02 /* WorkspaceModels.swift in Sources */,
@@ -536,6 +547,7 @@
 			files = (
 				D610000000000000000000A4 /* DesktopActivityTests.swift in Sources */,
 				E500000000000000000000A1 /* MacUpdateManagerTests.swift in Sources */,
+				FA11000000000000000000A3 /* ClientFeedbackTests.swift in Sources */,
 				E500000000000000000000A3 /* WorkspaceTaskContractTests.swift in Sources */,
 				E500000000000000000000A4 /* TaskBoardTests.swift in Sources */,
 				D7000000000000000000A102 /* DesktopHistoryTests.swift in Sources */,

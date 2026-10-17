@@ -122,8 +122,9 @@ final class CommunicationsTests: XCTestCase {
         XCTAssertEqual(body["model"], "page-model")
         XCTAssertEqual(body["engine"], "cli")
         XCTAssertNil(body["mode"])
+        // 切到别的会话即丢弃临时配置，重进回到员工默认。
         store.select("dm_e_second"); await store.waitForDetailForTesting()
-        XCTAssertEqual(store.executionPreference?.model, "page-model")
+        XCTAssertNil(store.executionPreference)
         let reloaded = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: defaults())
         XCTAssertNil(reloaded.executionPreference)
         XCTAssertTrue(api.posts.allSatisfy { $0.path.hasSuffix("/messages") })

@@ -88,7 +88,7 @@ final class PtyTerminalStore: ObservableObject {
         self.sessionId = sessionId
         self.api = api
         self.defaults = defaults
-        self.socket = socket ?? WandSocket(baseURL: api.baseURL, prepareConnection: {
+        self.socket = socket ?? WandSocket(baseURL: api.baseURL, feedbackConnection: api.feedbackConnection, prepareConnection: {
             _ = try await api.getSession(id: sessionId)
         })
         let saved = defaults.double(forKey: "wand.nativeTerminalScale")

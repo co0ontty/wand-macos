@@ -150,7 +150,7 @@ final class MacUpdateManager: ObservableObject {
     private let connectedServer: () -> URL?
     private let fileManager: FileManager
     private let updatesRoot: URL
-    private let startInstallation: (Update, @escaping UpdateInstaller.ProgressHandler) -> Void
+    private let startInstallation: @MainActor (Update, @escaping UpdateInstaller.ProgressHandler) -> Void
     private let cancelInstallation: () -> Void
     private var activeInstallID: UUID?
     private var activeCheck: Task<CheckResult, Never>?
@@ -170,8 +170,8 @@ final class MacUpdateManager: ObservableObject {
             try await BetaUpdateSession.data(for: request)
         },
         connectedServer: @escaping () -> URL? = { ServerStore.shared.serverURL },
-        startInstallation: @escaping (Update, @escaping UpdateInstaller.ProgressHandler) -> Void = {
-            UpdateInstaller.shared.startUpdate($0, progress: $1)
+        startInstallation: @escaping @MainActor (Update, @escaping UpdateInstaller.ProgressHandler) -> Void = {
+            UpdateInstaller.shared.startUpdate($0, feedbackConnection: ClientFeedback.currentConnection(), progress: $1)
         },
         cancelInstallation: @escaping () -> Void = { UpdateInstaller.shared.cancel() }
     ) {
@@ -230,11 +230,12 @@ final class MacUpdateManager: ObservableObject {
         let previousUpdate = availableUpdate.flatMap { $0.channel == channel && isCurrentSource($0) ? $0 : nil }
         state = .checking
         let checkID = UUID()
+        let feedbackConnection = ClientFeedback.currentConnection()
         let task = Task { [weak self] () -> CheckResult in
             guard let self else { return .failed(message: "更新检查器已释放。") }
             return checkedChannel == .beta
-                ? await self.fetchServerBeta(serverURL: checkedServer)
-                : await self.fetchLatestRelease()
+                ? await self.fetchServerBeta(serverURL: checkedServer, feedbackConnection: feedbackConnection)
+                : await self.fetchLatestRelease(feedbackConnection: feedbackConnection)
         }
         activeCheck = task
         activeCheckID = checkID
@@ -332,6 +333,7 @@ final class MacUpdateManager: ObservableObject {
         if let reason = UpdateInstaller.installBlockReason { return reason }
 
         let installID = UUID()
+        let feedbackConnection = ClientFeedback.currentConnection()
         activeInstallID = installID
         state = .downloading(update: update, received: 0, total: update.preferredAsset?.size ?? 0)
         startInstallation(update) { [weak self] stage in
@@ -340,7 +342,7 @@ final class MacUpdateManager: ObservableObject {
                 if case let .readyToRelaunch(path) = stage { self.discardStagingDirectory(for: path) }
                 return
             }
-            self.handleInstallerStage(stage, update: update)
+            self.handleInstallerStage(stage, update: update, feedbackConnection: feedbackConnection)
         }
         return nil
     }
@@ -361,7 +363,7 @@ final class MacUpdateManager: ObservableObject {
         guard let pendingInstall else {
             return .failure(managerError(code: 40, message: "没有已准备好的更新。"))
         }
-        return UpdateInstaller.shared.relaunch(pending: pendingInstall)
+        return UpdateInstaller.shared.relaunch(pending: pendingInstall, feedbackConnection: ClientFeedback.currentConnection())
     }
 
     func shouldPresentReminder(for update: Update) -> Bool {
@@ -379,6 +381,7 @@ final class MacUpdateManager: ObservableObject {
     /// 返回 true 供启动流程重新检查可能因 ad-hoc 签名变化而失效的系统权限。
     @discardableResult
     func completeLaunchedUpdateIfNeeded(arguments: [String] = CommandLine.arguments) -> Bool {
+        let feedbackConnection = ClientFeedback.currentConnection()
         guard let token = argument(after: "--wand-update-token", in: arguments),
               let ackPath = argument(after: "--wand-update-ack", in: arguments),
               let pending = loadPendingInstall(),
@@ -394,6 +397,7 @@ final class MacUpdateManager: ObservableObject {
             restoreAvailability(for: channel)
             return true
         } catch {
+            ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection)
             state = .failed(message: "无法确认新版启动：\(error.localizedDescription)", update: nil)
             return false
         }
@@ -401,7 +405,7 @@ final class MacUpdateManager: ObservableObject {
 
     // MARK: - Installer state
 
-    func handleInstallerStage(_ stage: UpdateInstaller.Stage, update: Update) {
+    func handleInstallerStage(_ stage: UpdateInstaller.Stage, update: Update, feedbackConnection: ClientFeedback.Connection? = nil) {
         guard update.channel == channel, isCurrentSource(update) else {
             if case let .readyToRelaunch(path) = stage { discardStagingDirectory(for: path) }
             // 旧通道回调只清理自己的产物，不能覆盖新通道检查结果。
@@ -429,6 +433,7 @@ final class MacUpdateManager: ObservableObject {
                 try persistPendingInstall(pending)
                 state = .readyToRelaunch(pending)
             } catch {
+                ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection)
                 discardStagingDirectory(for: stagedAppPath)
                 state = .failed(message: "无法保存待安装更新：\(error.localizedDescription)", update: update)
             }
@@ -440,13 +445,14 @@ final class MacUpdateManager: ObservableObject {
 
     // MARK: - Stable GitHub / Beta server sources
 
-    private func fetchLatestRelease() async -> CheckResult {
+    private func fetchLatestRelease(feedbackConnection: ClientFeedback.Connection?) async -> CheckResult {
         do {
             let url = try githubURL(path: "/releases/latest")
             let data = try await loadGitHubData(from: url)
             let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
             guard !release.draft, !release.prerelease,
                   let latestVersion = Self.version(fromTag: release.tagName) else {
+                ClientFeedback.capture(managerError(code: 50, message: "GitHub 尚未发布有效的稳定版 Release。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
                 return .failed(message: "GitHub 尚未发布有效的稳定版 Release。")
             }
 
@@ -478,14 +484,16 @@ final class MacUpdateManager: ObservableObject {
             ))
         } catch is CancellationError {
             return .failed(message: "更新检查已取消。")
-        } catch is DecodingError {
+        } catch let error as DecodingError {
+            ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection)
             return .failed(message: "无法解析 GitHub Release 或更新清单。")
         } catch {
+            ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection)
             return .failed(message: "检查 GitHub Release 失败：\(error.localizedDescription)")
         }
     }
 
-    private func fetchServerBeta(serverURL: URL?) async -> CheckResult {
+    private func fetchServerBeta(serverURL: URL?, feedbackConnection: ClientFeedback.Connection?) async -> CheckResult {
         guard let serverURL,
               ["http", "https"].contains(serverURL.scheme?.lowercased() ?? ""),
               serverURL.host != nil, serverURL.user == nil, serverURL.password == nil else {
@@ -507,10 +515,12 @@ final class MacUpdateManager: ObservableObject {
                   http.statusCode == 200,
                   let responseURL = http.url,
                   Self.sameOrigin(responseURL, serverURL) else {
+                ClientFeedback.capture(managerError(code: 50, message: "当前服务端无法提供 macOS Beta 更新信息。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
                 return .failed(message: "当前服务端无法提供 macOS Beta 更新信息。")
             }
             let info = try JSONDecoder().decode(ServerBetaUpdate.self, from: data)
             guard info.channel == "beta", info.source == "local" || info.latestVersion == nil else {
+                ClientFeedback.capture(managerError(code: 50, message: "服务端返回了无效的 Beta 更新来源。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
                 return .failed(message: "服务端返回了无效的 Beta 更新来源。")
             }
             guard let version = info.latestVersion else {
@@ -518,6 +528,7 @@ final class MacUpdateManager: ObservableObject {
             }
             let current = currentVersionProvider()
             guard ParsedVersion(version) != nil else {
+                ClientFeedback.capture(managerError(code: 50, message: "服务端返回了无效的更新版本。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
                 return .failed(message: "服务端返回了无效的更新版本。")
             }
             guard Self.isVersionNewer(version, than: current) else {
@@ -536,6 +547,7 @@ final class MacUpdateManager: ObservableObject {
                   let size = info.size, size > 0,
                   let sha256 = info.sha256,
                   sha256.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil else {
+                ClientFeedback.capture(managerError(code: 50, message: "服务端 Beta 更新包缺少有效的下载地址、大小或 SHA-256。"), event: "update_failed", feature: "app_update", connection: feedbackConnection)
                 return .failed(message: "服务端 Beta 更新包缺少有效的下载地址、大小或 SHA-256。")
             }
             let asset = Update.Asset(name: name, downloadURL: downloadURL, size: size, sha256: sha256)
@@ -551,6 +563,7 @@ final class MacUpdateManager: ObservableObject {
         } catch is CancellationError {
             return .failed(message: "更新检查已取消。")
         } catch {
+            ClientFeedback.capture(error, event: "update_failed", feature: "app_update", connection: feedbackConnection)
             return .failed(message: "检查所选服务器 Beta 更新失败：\(error.localizedDescription)")
         }
     }

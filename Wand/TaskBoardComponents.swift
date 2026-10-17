@@ -226,18 +226,30 @@ struct WandBoardAgentChip: View {
 }
 
 struct WandBoardAgentChips: View {
+    var assignee: WandBoardAssignedExecutor? = nil
     let sessions: [WandBoardTaskSession]
     let assigned: WandBoardTaskAgent?
 
     var body: some View {
-        let agents = wandBoardListAgents(sessions: sessions, assigned: assigned)
-        HStack(spacing: 4) {
-            ForEach(agents, id: \.toolKey) { agent in
-                WandBoardAgentChip(
-                    agent: agent,
-                    running: sessions.contains { $0.provider == agent.provider && $0.toolEngine == (agent.engine ?? "cli") && $0.isRunning }
-                )
+        let people = Dictionary(grouping: sessions.filter { $0.employeeId != nil || $0.employeeName != nil }, by: { $0.employeeId ?? $0.employeeName ?? $0.id })
+        let direct = sessions.filter { $0.employeeId == nil && $0.employeeName == nil }
+        VStack(alignment: .leading, spacing: 4) {
+            if let assignee, !sessions.contains(where: { $0.employeeId == assignee.id }) {
+                HStack { ContactAvatar(id: assignee.id, avatar: assignee.avatar ?? "", name: assignee.name, size: 24); Text(assignee.name + " · 已指派 · 未启动") }.font(.caption)
             }
+            ForEach(people.keys.sorted(), id: \.self) { key in
+                if let first = people[key]?.first {
+                    HStack(spacing: 6) {
+                        ContactAvatar(id: first.employeeId ?? key, avatar: first.employeeAvatar ?? "", name: first.employeeName ?? "员工", size: 24)
+                        Text(first.employeeName ?? "员工")
+                        Text(people[key]?.contains(where: { $0.isRunning }) == true ? "执行中" : "历史执行").foregroundColor(Theme.textSecondary)
+                    }.font(.caption)
+                }
+            }
+            ForEach(wandBoardListAgents(sessions: direct, assigned: people.isEmpty && assignee == nil ? assigned : nil), id: \.toolKey) { agent in
+                WandBoardAgentChip(agent: agent, running: direct.contains { $0.provider == agent.provider && $0.toolEngine == (agent.engine ?? "cli") && $0.isRunning })
+            }
+            if sessions.isEmpty && assigned == nil { Text("待指派").font(.caption).foregroundColor(Theme.textSecondary) }
         }
     }
 }
@@ -433,6 +445,7 @@ struct WandBoardSessionList: View {
 
 /// 详情页的「已指派的 Agent」列表：按 CLI 工具分组，组头带模型 / 思考深度 / 工作模式。
 struct WandBoardAgentSessionList: View {
+    var assignee: WandBoardAssignedExecutor? = nil
     let sessions: [WandBoardTaskSession]
     let assigned: WandBoardTaskAgent?
     let onOpenSession: (String) -> Void
@@ -449,6 +462,7 @@ struct WandBoardAgentSessionList: View {
                 .padding(.vertical, 10)
         } else {
             VStack(alignment: .leading, spacing: 14) {
+                WandBoardAgentChips(assignee: assignee, sessions: sessions, assigned: assigned)
                 ForEach(groups) { group in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 7) {
@@ -469,7 +483,7 @@ struct WandBoardAgentSessionList: View {
                                 .foregroundColor(Theme.textMuted)
                         }
                         if group.sessions.isEmpty {
-                            Text("已指派，等待派发")
+                            Text("已保存配置，尚未派发")
                                 .font(.system(size: 12))
                                 .foregroundColor(Theme.textMuted)
                                 .padding(.leading, 21)
@@ -628,6 +642,7 @@ struct WandBoardCard: View {
                         .help("确认完成")
                 }
             }
+            if let employee = task.sessions.compactMap(\.employeeName).first { Text(employee).font(.subheadline).fontWeight(.semibold) }
             if parent != nil || childCount > 0 {
                 WandBoardRelationshipSummary(parent: parent, childCount: childCount)
             }
@@ -719,7 +734,7 @@ struct WandBoardCard: View {
             if let dueDate = task.dueDate, !dueDate.isEmpty {
                 WandBoardDueChip(dueDate: dueDate, status: task.status)
             }
-            WandBoardAgentChips(sessions: task.sessions, assigned: task.agent)
+            WandBoardAgentChips(assignee: task.assignedExecutor, sessions: task.sessions, assigned: task.agent)
             if status != .doing {
                 Spacer(minLength: 0)
                 WandBoardConversationButton(sessions: task.sessions, onOpen: onOpenSession)
@@ -770,5 +785,68 @@ struct WandBoardArchiveFolder<Content: View>: View {
                 if open { content }
             }
         }
+    }
+}
+
+
+struct WandGoalChildren: View {
+    let task: WandBoardTask
+    let tasks: [WandBoardTask]
+    let onOpen: (String) -> Void
+    var body: some View {
+        let children = wandBoardChildren(of: task, in: tasks)
+        if !children.isEmpty {
+            DisclosureGroup("\(children.count) 个子任务 · \(children.filter { $0.acceptance?.acceptedAt != nil }.count) 个已验收 · \(task.acceptance?.acceptedAt == nil ? "主目标待整体验收" : "主目标验收通过")") {
+                ForEach(children) { child in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Button("\(child.identifier) · \(child.title)") { onOpen(child.id) }
+                        Text("\(WandBoardStatus(rawValue: child.status)?.label ?? child.status) · \(child.sessions.isEmpty ? "尚未派发" : "交付待验收 · \(child.sessions.count) 个执行会话")")
+                            .font(.caption).foregroundColor(Theme.textSecondary)
+                        if let due = child.dueDate, !due.isEmpty { Text("截止 \(due)").font(.caption) }
+                        if let employee = child.sessions.compactMap(\.employeeName).first { Text(employee).font(.caption) }
+                        if let blocker = child.acceptance?.blocker, !blocker.isEmpty { Text("阻塞：\(blocker)").foregroundColor(Theme.warning) }
+                        if let evidence = child.acceptance?.evidence, !evidence.isEmpty { Text("交付证据：\(evidence)").font(.caption) }
+                        if !child.description.isEmpty { Text(child.description).font(.caption).lineLimit(3) }
+                        if !wandBoardChildren(of: child, in: tasks).isEmpty { Text("历史深层关系保留，可进入详情查看；调整前需确认").font(.caption) }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }.padding(8)
+        }
+    }
+}
+
+
+struct WandTaskAcceptanceEditor: View {
+    let task: WandBoardTask
+    let children: [WandBoardTask]
+    let busy: Bool
+    let onPatch: ([String: Any]) async -> Void
+    @State private var evidence: String
+    @State private var blocker: String
+    init(task: WandBoardTask, children: [WandBoardTask], busy: Bool, onPatch: @escaping ([String: Any]) async -> Void) {
+        self.task = task; self.children = children; self.busy = busy; self.onPatch = onPatch
+        _evidence = State(initialValue: task.acceptance?.evidence ?? "")
+        _blocker = State(initialValue: task.acceptance?.blocker ?? "")
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("交付与验收").font(.headline)
+            Text("会话结束、失败或归档均不代表验收通过。交付标准见任务描述。").font(.caption).foregroundColor(Theme.textSecondary)
+            TextField("交付证据与产物路径、源会话", text: $evidence).textFieldStyle(.roundedBorder)
+            TextField("验收阻塞；无阻塞时留空", text: $blocker).textFieldStyle(.roundedBorder)
+            let gaps = children.filter { $0.acceptance?.acceptedAt == nil }
+            if !gaps.isEmpty { Text("仍有 \(gaps.count) 个子任务尚未验收通过").foregroundColor(Theme.warning) }
+            if children.count > 0 && gaps.isEmpty && task.acceptance?.acceptedAt == nil { Text("子任务均已验收，主目标仍待整体验收") }
+            if task.acceptance?.acceptedAt != nil { Text("已由用户确认验收通过").foregroundColor(Theme.success) }
+            HStack {
+                Button("保存交付与缺口") { save(accepted: false) }.disabled(busy)
+                Button("确认验收通过") { save(accepted: true) }
+                    .disabled(busy || evidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !blocker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !gaps.isEmpty || task.acceptance?.acceptedAt != nil)
+            }
+        }
+    }
+    private func save(accepted: Bool) {
+        let value: [String: Any] = ["evidence": evidence, "blocker": blocker, "acceptedAt": accepted ? ISO8601DateFormatter().string(from: Date()) : NSNull()]
+        Task { await onPatch(["acceptance": value]) }
     }
 }

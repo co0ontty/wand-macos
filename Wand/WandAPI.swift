@@ -41,12 +41,21 @@ struct LegacyHistoryRefresh {
 final class WandAPI {
     let baseURL: URL
     let token: String?
+    let feedbackConnection: ClientFeedback.Connection?
     private let session: URLSession
+    private let reportServerFailure: (Error, String, URL) -> Void
 
-    init(baseURL: URL, token: String?, session: URLSession = SelfSignedSession.shared.session) {
+    init(baseURL: URL, token: String?, session: URLSession = SelfSignedSession.shared.session,
+         reportServerFailure: ((Error, String, URL) -> Void)? = nil) {
         self.baseURL = baseURL
         self.token = token
         self.session = session
+        let feedbackConnection = ClientFeedback.connectionForRequest(origin: baseURL, token: token)
+        self.feedbackConnection = feedbackConnection
+        self.reportServerFailure = reportServerFailure ?? { error, feature, _ in
+            ClientFeedback.capture(error, event: "http_5xx", feature: feature,
+                                   connection: feedbackConnection)
+        }
     }
 
     enum APIError: LocalizedError {
@@ -92,6 +101,7 @@ final class WandAPI {
         } catch let err as APIError {
             throw err
         } catch {
+            if error is CancellationError || ((error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled) { throw error }
             throw APIError.network(error.localizedDescription)
         }
     }
@@ -118,6 +128,11 @@ final class WandAPI {
                let err = obj["error"] as? String, !err.isEmpty {
                 message = err
             }
+            if http.statusCode >= 500, req.url?.path != "/api/feedback/client" {
+                reportServerFailure(NSError(domain: "HTTPError", code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: message]),
+                    ClientFeedbackReport.feature(path: req.url?.path ?? ""), baseURL)
+            }
             throw APIError.server(status: http.statusCode, message: message)
         }
         return data
@@ -136,6 +151,16 @@ final class WandAPI {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw APIError.network("响应解析失败：\(error.localizedDescription)")
+        }
+    }
+
+    func boardTaskComments(id: String) async throws -> [WandTaskComment] {
+        struct Response: Decodable { let comments: [WandTaskComment] }
+        do {
+            let response = try await request(Response.self, method: "GET", path: "/api/wand-tasks/\(percentEncodePathComponent(id))/comments")
+            return response.comments.filter { $0.taskId == id }
+        } catch APIError.server(status: 404, message: _) {
+            return [] // Older servers have no comments route.
         }
     }
 
@@ -613,6 +638,12 @@ final class WandAPI {
         }
     }
 
+    func conversationOrganizationJobByToken(_ token: String) async throws -> WandConversationOrganizationJob {
+        let response = try await request(WandConversationOrganizationJobResponse.self, method: "GET",
+            path: "/api/sessions/auto-organize/by-token/\(percentEncodePathComponent(token))")
+        return response.job
+    }
+
     func conversationOrganizationJob(id: String) async throws -> WandConversationOrganizationJob {
         let response = try await request(WandConversationOrganizationJobResponse.self, method: "GET",
             path: "/api/sessions/auto-organize/\(percentEncodePathComponent(id))")
@@ -641,7 +672,10 @@ final class WandAPI {
         dueDate: String? = nil,
         milestoneId: String? = nil,
         workspaceId: String?,
-        agent: WandBoardTaskAgent? = nil
+        agent: WandBoardTaskAgent? = nil,
+        parentTaskId: String? = nil,
+        employeeId: String? = nil,
+        employeeOverride: Bool = false
     ) async throws -> WandBoardTask {
         var body: [String: Any] = [
             // 标题可选：留空由服务端按描述自动生成。
@@ -660,9 +694,12 @@ final class WandAPI {
         } else {
             body["workspaceId"] = NSNull()
         }
-        if let agent {
-            body["agent"] = agent.jsonObject()
-        }
+        if let parentTaskId { body["parentTaskId"] = parentTaskId }
+        if let employeeId {
+            var subject: [String: Any] = ["type": "employee", "id": employeeId]
+            if employeeOverride, let agent { subject["agentOverride"] = agent.jsonObject() }
+            body["executionSubject"] = subject
+        } else if let agent { body["agent"] = agent.jsonObject() }
         return try await request(WandBoardTask.self, method: "POST", path: "/api/wand-tasks", body: body)
     }
 
@@ -714,9 +751,18 @@ final class WandAPI {
         id: String,
         agent: WandBoardTaskAgent,
         prompt: String = "",
-        workspaceId: String? = nil
+        workspaceId: String? = nil,
+        employeeId: String? = nil,
+        employeeOverride: Bool = false,
+        requestId: String = UUID().uuidString
     ) async throws -> WandBoardDispatchResult {
-        var body: [String: Any] = ["agent": agent.jsonObject()]
+        var body: [String: Any] = ["requestId": requestId]
+        if let employeeId {
+            body["subject"] = ["type": "employee", "id": employeeId]
+            if employeeOverride { body["agent"] = agent.jsonObject() }
+            else { body["useEmployeeDefaults"] = true }
+        }
+        else { body["agent"] = agent.jsonObject() }
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { body["prompt"] = trimmed }
         if let workspaceId {

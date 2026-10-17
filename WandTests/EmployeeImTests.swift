@@ -72,7 +72,18 @@ final class EmployeeImTests: XCTestCase {
         CommunicationsContractURLProtocol.register(host: host) { request in
             let method = request.httpMethod ?? ""
             let path = request.url?.path ?? ""
-            let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+            var bodyData = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    bodyData.append(buffer, count: count)
+                }
+            }
+            let body = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] ?? [:]
             requests.append((method, request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath } ?? path, body))
             if method == "GET" {
                 return Data(#"{"events":["task_started"],"telegram":{"enabled":false,"chatId":""},"dingtalk":{"enabled":false}}"#.utf8)

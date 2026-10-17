@@ -2,6 +2,10 @@ import SwiftUI
 
 /// 新建任务对话框里的草稿；字段与 Web `IssueDraft` 对齐。
 struct WandBoardDraft {
+    var employeeId = ""
+    var employeeOverride = false
+    var saveAndDispatch = false
+    var parentTaskId: String? = nil
     var title = ""
     var description = ""
     var status = WandBoardStatus.todo.rawValue
@@ -31,10 +35,13 @@ struct WandBoardDraft {
  * 「处理中」列新建时创建即派发；「等待认领」列只落库。
  */
 struct WandBoardCreateView: View {
+    var employees: [EmployeeContact] = []
     let workspaces: [Workspace]
     let milestones: [WandBoardMilestone]
     let catalog: ModelsResponse?
     let defaultWorkspaceId: String
+    let parent: WandBoardTask?
+    var allTasks: [WandBoardTask] = []
     let initialStatus: String
     let onCreate: (WandBoardDraft) async -> Bool
     let onCreateMilestone: (String, String?) async throws -> WandBoardMilestone
@@ -47,19 +54,26 @@ struct WandBoardCreateView: View {
     @FocusState private var focusedField: String?
 
     init(
+        employees: [EmployeeContact] = [],
         workspaces: [Workspace],
         milestones: [WandBoardMilestone],
         catalog: ModelsResponse?,
         defaultWorkspaceId: String,
         initialStatus: String = WandBoardStatus.todo.rawValue,
         lastAgent: WandBoardTaskAgent = .default,
+        parentTaskId: String? = nil,
+        parent: WandBoardTask? = nil,
+        allTasks: [WandBoardTask] = [],
         onCreate: @escaping (WandBoardDraft) async -> Bool,
         onCreateMilestone: @escaping (String, String?) async throws -> WandBoardMilestone
     ) {
+        self.employees = employees
         self.workspaces = workspaces
         self.milestones = milestones
         self.catalog = catalog
         self.defaultWorkspaceId = defaultWorkspaceId
+        self.parent = parent
+        self.allTasks = allTasks
         self.initialStatus = initialStatus
         self.onCreate = onCreate
         self.onCreateMilestone = onCreateMilestone
@@ -68,11 +82,16 @@ struct WandBoardCreateView: View {
         initial.priority = WandBoardPriority.low.rawValue
         initial.workspaceId = defaultWorkspaceId
         initial.agent = lastAgent
+        if let employee = employees.first(where: { $0.id == "e_wand_default" && !$0.isArchived }) ?? employees.first(where: { !$0.isArchived }) {
+            initial.employeeId = employee.id
+            initial.agent = employee.candidates.first?.taskAgent ?? lastAgent
+        }
+        initial.parentTaskId = parentTaskId
         _draft = State(initialValue: initial)
     }
 
     /// 「处理中」列的新建代表已经决定要跑：创建后立刻派 Agent。
-    private var dispatches: Bool { wandBoardCreateDispatches(status: draft.status) }
+    private var dispatches: Bool { draft.saveAndDispatch }
 
     private var hasDescription: Bool {
         !draft.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -84,8 +103,16 @@ struct WandBoardCreateView: View {
             Rectangle().fill(Theme.border).frame(height: 0.5)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if let parent = allTasks.first(where: { $0.id == draft.parentTaskId }) {
+                        DisclosureGroup("主目标 \(parent.identifier) · \(parent.title)") { Text(parent.description).textSelection(.enabled) }
+                        Text("仅保存不执行；保存并派发会包含当前任务目标、本轮描述及主目标约束。").font(.caption).foregroundColor(Theme.textSecondary)
+                    }
                     writing
                     properties
+                    WandBoardField("归属父任务") {
+                        WandBoardParentPicker(tasks: allTasks, workspaceId: draft.workspaceId.isEmpty ? nil : draft.workspaceId,
+                            value: draft.parentTaskId, disabled: creating) { draft.parentTaskId = $0 }
+                    }
                     assign
                     if let errorMessage {
                         Text(errorMessage)
@@ -243,12 +270,12 @@ struct WandBoardCreateView: View {
     private var assign: some View {
         VStack(alignment: .leading, spacing: 10) {
             WandBoardSectionTitle(
-                title: dispatches ? "第一次指派" : "Agent 与运行模式",
+                title: dispatches ? "第一次指派" : "执行员工",
                 detail: dispatches
                     ? (hasDescription ? "有描述时会立刻发给所选 Agent" : "补上描述才会立刻派发")
-                    : "会记入全局默认，之后派发沿用"
+                    : "仅保存任务的指派计划，不修改员工默认配置"
             )
-            WandBoardAgentEditor(agent: $draft.agent, catalog: catalog)
+            WandBoardEmployeeAssignment(employees: employees, employeeId: $draft.employeeId, agent: $draft.agent, overridden: $draft.employeeOverride, catalog: catalog)
         }
     }
 
@@ -263,11 +290,12 @@ struct WandBoardCreateView: View {
             Button("取消") { dismiss() }
                 .buttonStyle(WandSecondaryButtonStyle())
                 .disabled(creating)
-            Button(creating ? "正在保存…" : (dispatches && hasDescription ? "创建并指派" : "创建任务")) {
+            Toggle("保存并派发（新建执行）", isOn: $draft.saveAndDispatch)
+            Button(creating ? "正在保存…" : (dispatches && hasDescription ? "保存并派发" : "保存任务")) {
                 submit()
             }
             .buttonStyle(WandPrimaryButtonStyle())
-            .disabled(creating || draft.isEmpty)
+            .disabled(creating || draft.isEmpty || (draft.saveAndDispatch && !hasDescription))
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 16)

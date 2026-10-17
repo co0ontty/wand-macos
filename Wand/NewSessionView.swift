@@ -540,10 +540,31 @@ struct NewSessionView: View {
     private var form: some View {
         GeometryReader { geometry in
             ScrollView {
-                VStack(spacing: 26) {
-                    sessionTypePicker.disabled(draft.creating || draft.creationUnconfirmed)
-                    workSentence
-                    VStack(alignment: .leading, spacing: 0) {
+                VStack(spacing: 0) {
+                    VStack(spacing: 20) {
+                        WandBrandMark(size: 44).accessibilityHidden(true)
+                        Text(draft.sessionType == .structured ? "你想让我们在 \(projectName) 中完成什么？" : draft.sessionType == .pty ? "从这里开始 CLI 工作" : "从这里打开空白终端")
+                            .font(.system(size: geometry.size.width < 600 ? 22 : 28, weight: .regular))
+                            .foregroundColor(Theme.textPrimary).multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityAddTraits(.isHeader)
+                    }.padding(.top, 12)
+                    Spacer(minLength: 64)
+                    creationFeedback
+                        .frame(maxWidth: 760)
+                        .padding(.bottom, draft.errorMessage == nil ? 0 : 12)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 4) {
+                            directoryButton
+                            Spacer(minLength: 4)
+                            if draft.sessionType == .structured { employeeButton }
+                            runSettingsButton
+                        }
+                        .padding(.horizontal, 8).padding(.bottom, 8)
+                        .background(Theme.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .padding(.horizontal, 12)
+                        .disabled(draft.creating || draft.creationUnconfirmed)
+                        VStack(alignment: .leading, spacing: 0) {
                         firstMessageCard
                         if draft.loading {
                             HStack(spacing: 8) {
@@ -561,12 +582,10 @@ struct NewSessionView: View {
                                 .padding(.horizontal, 12).padding(.bottom, 12)
                                 .disabled(draft.creating)
                         }
+                        }
+                        .wandInputSurface(focused: composerFocused, cornerRadius: 24)
                     }
-                    .wandInputSurface(focused: composerFocused, cornerRadius: Theme.Radius.lg)
-                    .overlay(alignment: .bottomLeading) {
-                        creationFeedback
-                            .alignmentGuide(.bottom) { dimensions in dimensions[.top] - 8 }
-                    }
+                    .frame(maxWidth: 760)
                     if let error = draft.taskError {
                         VStack(alignment: .leading, spacing: 8) {
                             errorBanner(error)
@@ -575,26 +594,30 @@ struct NewSessionView: View {
                         }
                     }
                 }
-                .frame(maxWidth: 760)
-                .padding(.horizontal, 28).padding(.vertical, 32)
-                .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .center)
+                .frame(minHeight: max(0, geometry.size.height - 64), alignment: .top)
+                .padding(.horizontal, geometry.size.width < 600 ? 16 : 28).padding(.vertical, 32)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
 
-    private var workSentence: some View {
-        HStack(spacing: 8) {
-            if draft.sessionType == .structured {
-                Text("与")
-                Button { showEmployeePicker = true } label: {
+    private var projectName: String {
+        let name = (draft.cwd as NSString).lastPathComponent
+        return name.isEmpty || name == "/" ? "Wand" : name
+    }
+
+    private var employeeButton: some View {
+                Button { showEmployeePicker.toggle() } label: {
                     HStack(spacing: 8) {
                         if let employee = draft.employees.first(where: { $0.id == draft.employeeId }) {
-                            WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 32)
-                            Text(employee.name)
+                            WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 24)
+                            Text(employee.name).lineLimit(1).truncationMode(.tail)
                         } else { Text("选择员工") }
                         Image(systemName: "chevron.down").font(.system(size: 10))
                     }
-                }.buttonStyle(.plain).accessibilityLabel("新工作员工")
+                }.buttonStyle(DesktopNavigationButtonStyle())
+                    .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                    .frame(maxWidth: 160).frame(height: 32).accessibilityLabel("新工作员工")
                     .popover(isPresented: $showEmployeePicker, arrowEdge: .bottom) {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 8) {
@@ -610,12 +633,6 @@ struct NewSessionView: View {
                             }.padding(16)
                         }.frame(width: 300, height: 360)
                     }
-                Text("一起在")
-            } else { Text("在") }
-            directoryButton
-            Text(draft.sessionType == .structured ? "工作" : "打开终端")
-        }.font(.system(size: 16)).foregroundColor(Theme.textSecondary)
-            .disabled(draft.creating || draft.creationUnconfirmed)
     }
 
     @ViewBuilder
@@ -641,23 +658,32 @@ struct NewSessionView: View {
     private func composerOptions(compact: Bool) -> some View {
         if compact {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) { if draft.sessionType != .shell { providerButton; modelMenuButton; thinkingButton }; Spacer(minLength: 0) }
-                HStack(spacing: 4) { directoryButton; taskButton; Spacer(minLength: 4); runSettingsButton; startButton }
+                HStack(spacing: 4) { taskButton; permissionButton; Spacer(minLength: 4) }
+                HStack(spacing: 4) { if draft.sessionType != .shell { providerButton; modelMenuButton; thinkingButton }; Spacer(minLength: 4); startButton }
             }
         } else {
             HStack(spacing: 4) {
+                taskButton
+                permissionButton
+                Spacer(minLength: 4)
                 if draft.sessionType != .shell {
                     providerButton
                     modelMenuButton
                     thinkingButton
                 }
-                directoryButton
-                taskButton
-                Spacer(minLength: 4)
-                runSettingsButton
                 startButton
             }
         }
+    }
+
+    private var permissionButton: some View {
+        Button { showRunSettings.toggle() } label: {
+            Label(draft.sessionType == .shell ? "系统 Shell" : draft.mode.label, systemImage: "checkmark.shield")
+                .font(.system(size: 12)).lineLimit(1)
+                .foregroundColor(draft.sessionType != .shell && (draft.mode == .fullAccess || draft.mode == .managed) ? Theme.warning : Theme.textSecondary)
+                .padding(.horizontal, 4).frame(height: 32)
+        }.buttonStyle(DesktopNavigationButtonStyle()).help(draft.sessionType == .shell ? "使用当前服务端的系统 Shell" : modeHint)
+            .accessibilityLabel(draft.sessionType == .shell ? "系统 Shell" : "运行权限：\(draft.mode.label)")
     }
 
     private func chipLabel(_ text: String, symbol: String, width: CGFloat = 130) -> some View {
@@ -763,22 +789,22 @@ struct NewSessionView: View {
     }
 
     private var runSettingsButton: some View {
-        Button { showRunSettings = true } label: {
-            Image(systemName: "slider.horizontal.3").font(.system(size: 14))
+        Button { showRunSettings.toggle() } label: {
+            Image(systemName: "gearshape").font(.system(size: 14))
                 .foregroundColor(Theme.textSecondary).frame(width: 32, height: 32)
         }.buttonStyle(DesktopNavigationButtonStyle())
             .accessibilityLabel("运行设置").help("\(draft.sessionType.desc) · \(draft.mode.label)")
             .popover(isPresented: $showRunSettings, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("运行设置").font(.system(size: 14, weight: .semibold))
+                    fieldLabel("会话类型")
+                    sessionTypePicker.help(sessionKindHint)
                     if draft.sessionType != .shell {
                     ThinkingEffortSlider(options: thinkingLevels, selection: draft.thinkingEffort, accent: Theme.wandAccent) {
                         draft.providerWasEdited = true
                         draft.thinkingEffort = $0
                         draft.rememberExecutionPreference()
                     }
-                    fieldLabel("会话类型")
-                    sessionTypePicker.help(sessionKindHint)
                     fieldLabel("权限模式")
                     modePicker
                     fieldHint(modeHint)
@@ -1058,15 +1084,15 @@ struct NewSessionView: View {
 
     private var firstMessageCard: some View {
         IMEAwareComposerTextView(
-            text: $draft.firstMessage, placeholder: "描述你想完成的事…",
+            text: $draft.firstMessage, placeholder: draft.sessionType == .shell ? "输入启动后要执行的命令（可选）…" : draft.sessionType == .pty ? "输入要交给 CLI 的内容（可选）…" : "随心输入，描述你想完成的事…",
             isFocused: composerFocused, sendWithCommandEnter: true,
             onFocusChange: { composerFocused = $0 },
             onCompositionChange: { composing = $0 },
             onSubmit: prepareCreate, onHeightChange: { composerHeight = $0 },
             submitActionName: "启动会话"
         )
-        .frame(height: max(104, min(220, composerHeight)))
-        .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
+        .frame(height: max(48, min(220, composerHeight)))
+        .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 8)
         .disabled(draft.creating)
     }
 

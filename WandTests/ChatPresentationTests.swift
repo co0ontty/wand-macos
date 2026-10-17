@@ -1,7 +1,63 @@
 import XCTest
+import AppKit
+import SwiftUI
 @testable import Wand
 
 final class ChatPresentationTests: XCTestCase {
+    func testSessionSubtasksKeepStableIdentityAcrossTurnsAndIgnoreParentClaims() {
+        let a = SubagentMeta(taskId: "child-a", agentType: "general", taskDescription: "检查 A")
+        let b = SubagentMeta(taskId: "child-b", agentType: "general", taskDescription: "检查 B")
+        let turns = [
+            ConversationTurn(role: "assistant", content: [
+                .toolUse(id: "child-a", name: "Task", description: nil, input: ["prompt": .string("完整任务说明 A")], subagent: a),
+                .toolUse(id: "child-b", name: "Task", description: nil, input: [:], subagent: b),
+            ]),
+            ConversationTurn(role: "user", content: [
+                .toolResult(toolUseId: "child-a", text: "Async agent launched successfully.\nagentId: native-a\noutput_file: /tmp/child.txt", isError: false, truncated: false, images: [], subagent: nil),
+            ]),
+            ConversationTurn(role: "assistant", content: [.text(text: "两个任务都已成功完成", subagent: nil)]),
+        ]
+        let tasks = collectNativeChatSubtasks(turns)
+        XCTAssertEqual(tasks.map(\.id), ["child-a", "child-b"])
+        XCTAssertEqual(tasks[0].instruction, "完整任务说明 A")
+        XCTAssertEqual(tasks[0].status(running: false), "运行状态未知")
+        XCTAssertNil(tasks[0].finalResult)
+        XCTAssertTrue(tasks[0].diagnostics.contains("/tmp/child.txt"))
+        XCTAssertTrue(tasks[0].process.isEmpty)
+        let terminal = ConversationTurn(role: "user", content: [
+            .toolResult(toolUseId: "child-a", text: "# 完整结果\n\n保留换行", isError: false, truncated: false, images: [], subagent: a),
+        ])
+        let updated = collectNativeChatSubtasks(turns + [terminal])
+        XCTAssertEqual(updated.map(\.id), tasks.map(\.id))
+        XCTAssertEqual(updated[0].finalResult, "# 完整结果\n\n保留换行")
+        XCTAssertEqual(updated[0].status(running: true), "已完成")
+        XCTAssertEqual(updated[1].status(running: false), "运行状态未知")
+    }
+
+    @MainActor
+    func testNativeSubtaskPanelRendersIndependentlyAtWideAndNarrowWidths() throws {
+        let meta = SubagentMeta(taskId: "child", agentType: "general", taskDescription: "原生子任务")
+        let tasks = collectNativeChatSubtasks([ConversationTurn(role: "assistant", content: [
+            .toolUse(id: "child", name: "Task", description: nil, input: ["prompt": .string("任务说明")], subagent: meta),
+            .toolResult(toolUseId: "child", text: "# 原生结果\n\n已返回的内容", isError: false, truncated: false, images: [], subagent: nil),
+        ])])
+        for width in [CGFloat(420), CGFloat(900)] {
+            let view = NativeChatSubtaskPanel(tasks: tasks, selectedID: .constant("child"),
+                baseURL: URL(string: "http://127.0.0.1")!, running: false, onClose: {})
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 700)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(host.fittingSize.height, 0)
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let output = root.appendingPathComponent("output/architecture-stage2/task-70/native")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            try png.write(to: output.appendingPathComponent("panel-\(Int(width)).png"))
+        }
+    }
+
     func testLiveShellIsNotAnExecutingTurn() {
         XCTAssertEqual(ChatRunningPresentation.session(status: "running", responding: false).stage, .idle)
         XCTAssertEqual(ChatRunningPresentation.session(status: "running", responding: true).label, "正在执行")
@@ -33,6 +89,26 @@ final class ChatPresentationTests: XCTestCase {
         XCTAssertTrue(ChatDisclosurePresentation.expanded(userChoice: nil, running: false, attention: true))
         XCTAssertTrue(ChatDisclosurePresentation.expanded(userChoice: true, running: false, attention: false))
         XCTAssertFalse(ChatDisclosurePresentation.expanded(userChoice: false, running: true, attention: true))
+    }
+
+    func testActivityFoldOnlyOpensForTheLatestRunningGroup() {
+        XCTAssertTrue(ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: true, running: true))
+        XCTAssertFalse(ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: false, running: true))
+        XCTAssertFalse(ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: true, running: false))
+        XCTAssertTrue(ChatDisclosurePresentation.activityExpanded(userChoice: true, isNewest: false, running: false))
+        XCTAssertFalse(ChatDisclosurePresentation.activityExpanded(userChoice: false, isNewest: true, running: true))
+    }
+
+    func testQoderChildReceiptAndNativeTerminalAreIndependentOfParentStatus() {
+        let receipt = ContentBlock.toolResult(toolUseId: "a", text: "Async agent launched successfully.\nagentId: native-a", isError: false, truncated: false, images: [], subagent: nil)
+        for running in [false, true] {
+            XCTAssertEqual(ChatDisclosurePresentation.subagentStatus(blocks: [receipt], taskID: "a", running: running), "运行状态未知")
+        }
+        let done = ContentBlock.toolResult(toolUseId: "a", text: "原生子任务通知：已完成。", isError: false, truncated: false, images: [], subagent: nil)
+        XCTAssertEqual(ChatDisclosurePresentation.subagentStatus(blocks: [receipt, done], taskID: "a", running: true), "已完成")
+        let failed = ContentBlock.toolResult(toolUseId: "a", text: "原生子任务通知：执行失败。", isError: true, truncated: false, images: [], subagent: nil)
+        XCTAssertEqual(ChatDisclosurePresentation.subagentStatus(blocks: [receipt, failed], taskID: "a", running: false), "执行失败")
+        XCTAssertEqual(ChatDisclosurePresentation.subagentStatus(blocks: [done], taskID: "other", running: false), "运行状态未知")
     }
 
     func testMissingResultIsNotSuccessAndErrorWins() {
@@ -154,5 +230,128 @@ final class ChatPresentationTests: XCTestCase {
     func testEmptyWindowDoesNotAdvertiseInvertedRange() {
         XCTAssertEqual(ChatDisclosurePresentation.loadedRange(offset: 0, count: 0, total: 0), "尚未加载消息，共 0 条；仅列用户提问。")
         XCTAssertEqual(ChatDisclosurePresentation.loadedRange(offset: 40, count: 2, total: 42), "已加载消息 41–42，共 42 条；仅列用户提问。")
+    }
+}
+
+final class NativeSubtaskLiveTests: XCTestCase {
+    @MainActor
+    func testInstalledQoderConversationSubtaskSplitPreservesDraftAndReading() async throws {
+        guard ProcessInfo.processInfo.environment["WAND_SUBTASK_LIVE"] == "1" else {
+            throw XCTSkip("Installed Qoder native acceptance is opt-in and read-only")
+        }
+        XCTAssertTrue(NativeAcceptance.enabled)
+        let storage = NativeAcceptance.defaults
+        defer { NativeAcceptance.cleanup() }
+        let origin = try XCTUnwrap(URL(string: try XCTUnwrap(storage.string(forKey: "wand.serverURL"))))
+        let token = try XCTUnwrap(storage.string(forKey: "wand.token"))
+        let api = WandAPI(baseURL: origin, token: token)
+        let sessionID = "3ae04c2f-c3c9-43e5-8f72-1ab5aeaeabf6"
+        let snapshot = try await api.getSession(id: sessionID)
+        let tasks = collectNativeChatSubtasks(snapshot.messages ?? [])
+        XCTAssertEqual(tasks.count, 2, "Use the existing Qoder pair; never manufacture server data")
+        let host = NSHostingView(rootView: ChatView(sessionId: sessionID, api: api, gitStatusStore: GitStatusStore()).defaultAppStorage(storage))
+        host.frame = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        if let appearance = ProcessInfo.processInfo.environment["WAND_SUBTASK_APPEARANCE"] {
+            window.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
+        }
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func marker(_ id: String) throws -> NSView { try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id }, "Missing rendered marker: \(id)") }
+        func settle() async throws { try await Task.sleep(nanoseconds: 500_000_000); host.layoutSubtreeIfNeeded() }
+        func click(_ id: String) async throws {
+            let view = try marker(id), rect = view.convert(view.bounds, to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+            }
+            try await settle()
+        }
+        func capture(_ name: String) throws {
+            let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let output = ProcessInfo.processInfo.environment["WAND_SUBTASK_VISUAL_OUTPUT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+                ?? root.appendingPathComponent("output/architecture-stage2/task-70/native")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+        }
+        try await Task.sleep(nanoseconds: 2_000_000_000); host.layoutSubtreeIfNeeded()
+        NotificationCenter.default.post(name: .wandDesktopCommand, object: DesktopCommand.focusComposer)
+        try await settle()
+        let input = try XCTUnwrap(descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        input.insertText("TASK-70 本机验收草稿，不发送", replacementRange: NSRange(location: 0, length: 0))
+        try await settle()
+        let draft = input.string
+        let trigger = try marker("subtasks-trigger"), triggerFrame = trigger.convert(trigger.bounds, to: host)
+        let scroll = try XCTUnwrap(descendants(host).compactMap { $0 as? NSScrollView }.first {
+            !($0.documentView is NSTextView) && $0.convert($0.bounds, to: host).height > 300
+                && $0.convert($0.bounds, to: host).minX < 1440
+        })
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, scroll.documentView!.bounds.height - scroll.contentView.bounds.height - 160)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let position = scroll.contentView.bounds.origin.y
+        try await click("subtasks-trigger")
+        XCTAssertEqual(try marker("subtasks-main").bounds.width, 1440 * 0.62, accuracy: 2)
+        XCTAssertTrue(descendants(host).contains { $0 === input })
+        XCTAssertEqual(input.string, draft)
+        XCTAssertEqual(trigger.convert(trigger.bounds, to: host), triggerFrame)
+        let mainFrame = try marker("subtasks-main").convert(marker("subtasks-main").bounds, to: host)
+        let detailFrame = try marker("subtasks-panel").convert(marker("subtasks-panel").bounds, to: host)
+        XCTAssertLessThanOrEqual(mainFrame.maxX, detailFrame.minX + 1, "Native main and details must be separate layout columns")
+        XCTAssertEqual(detailFrame.maxX, host.bounds.maxX, accuracy: 2)
+        XCTAssertLessThanOrEqual(scroll.documentView!.bounds.width, scroll.contentView.bounds.width + 1,
+            "Native message content must reflow inside the main viewport")
+        XCTAssertLessThanOrEqual(input.convert(input.bounds, to: host).maxX, mainFrame.maxX + 1,
+            "Composer must stay within the main conversation column, not cross under the inspector")
+        _ = try marker("subtask-instruction-closed-" + tasks[0].id)
+        _ = try marker("subtask-instruction-closed-" + tasks[1].id)
+        try capture("default-wide")
+        try await click("subtask-instruction-" + tasks[0].id)
+        _ = try marker("subtask-instruction-open-" + tasks[0].id)
+        let detailScrolls = descendants(host).compactMap { $0 as? NSScrollView }.filter {
+            let rect = $0.convert($0.bounds, to: host)
+            return rect.minX >= 890 && rect.minX < 1440 && rect.height > 300 && !($0.documentView is NSTextView)
+        }
+        XCTAssertEqual(detailScrolls.count, 2)
+        let firstDetail = try XCTUnwrap(detailScrolls.first)
+        firstDetail.contentView.scroll(to: NSPoint(x: 0, y: 80))
+        firstDetail.reflectScrolledClipView(firstDetail.contentView)
+        let firstPosition = firstDetail.contentView.bounds.origin.y
+        try await click("subtask-row-" + tasks[1].id)
+        _ = try marker("subtask-selected-" + tasks[1].id)
+        _ = try marker("subtask-instruction-closed-" + tasks[1].id)
+        try capture("default-second")
+        try await click("subtask-instruction-" + tasks[1].id)
+        _ = try marker("subtask-instruction-open-" + tasks[1].id)
+        let secondDetail = try XCTUnwrap(detailScrolls.last)
+        secondDetail.contentView.scroll(to: NSPoint(x: 0, y: 50))
+        secondDetail.reflectScrolledClipView(secondDetail.contentView)
+        let secondPosition = secondDetail.contentView.bounds.origin.y
+        try capture("installed-wide")
+        try await click("subtasks-close")
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, position, accuracy: 2)
+        try await click("subtasks-trigger")
+        _ = try marker("subtask-selected-" + tasks[1].id)
+        XCTAssertEqual(firstDetail.contentView.bounds.origin.y, firstPosition, accuracy: 2)
+        XCTAssertEqual(secondDetail.contentView.bounds.origin.y, secondPosition, accuracy: 2)
+        _ = try marker("subtask-instruction-open-" + tasks[1].id)
+        XCTAssertEqual(input.string, draft)
+        window.makeFirstResponder(input)
+        window.sendEvent(try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)))
+        try await settle()
+        XCTAssertEqual(try marker("subtasks-main").bounds.width, 1440, accuracy: 2)
+        XCTAssertEqual(input.string, draft)
+        host.frame.size.width = 900; window.setContentSize(NSSize(width: 900, height: 900))
+        try await settle(); try await click("subtasks-trigger")
+        XCTAssertEqual(try marker("subtasks-panel").bounds.width, 900, accuracy: 2)
+        try await click("subtask-instruction-" + tasks[1].id)
+        _ = try marker("subtask-instruction-closed-" + tasks[1].id)
+        try capture("installed-900px")
+        try await click("subtasks-trigger")
+        XCTAssertEqual(input.string, draft)
     }
 }

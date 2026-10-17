@@ -70,12 +70,14 @@ struct WandBoardListView: View {
                 }
                 ForEach(items) { task in
                     row(task)
+                    WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
                 }
                 if status == .done {
                     WandBoardArchiveFolder(count: archived.count, open: archiveOpen, onToggle: onToggleArchive) {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(archived) { task in
                                 row(task)
+                    WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
                             }
                         }
                     }
@@ -145,6 +147,7 @@ struct WandBoardListView: View {
 struct WandBoardDashboardView: View {
     let projectName: String
     let tasks: [WandBoardTask]
+    var allTasks: [WandBoardTask] = []
     let onOpenTask: (String) -> Void
     let onOpenSession: (String) -> Void
 
@@ -171,6 +174,7 @@ struct WandBoardDashboardView: View {
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                ForEach(tasks) { task in WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask) }
                 VStack(alignment: .leading, spacing: 10) {
                     Text(projectName)
                         .font(.system(size: 22, weight: .semibold))
@@ -482,10 +486,10 @@ struct WandBoardGanttView: View {
 
     var body: some View {
         let range = wandBoardGanttRange(zoom: zoom)
-        let statuses = hideCompleted ? WandBoardStatus.columns.filter { $0 != .done } : WandBoardStatus.allCases
+        let statuses = WandBoardStatus.allCases
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
-                Toggle("隐藏已确认", isOn: Binding(get: { hideCompleted }, set: onHideCompleted))
+                Toggle("隐藏「\(WandBoardStatus.done.label)」", isOn: Binding(get: { hideCompleted }, set: onHideCompleted))
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
@@ -503,7 +507,7 @@ struct WandBoardGanttView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     headRow(range: range)
                     ForEach(statuses) { status in
-                        let items = (grouped[status.rawValue] ?? [])
+                        let items = (grouped[status.rawValue] ?? []).filter { !hideCompleted || ($0.status != "done" && $0.status != "archived") || wandBoardHasOpenDescendant($0, in: allTasks) }
                         if !items.isEmpty { group(status, items: items, range: range) }
                     }
                 }
@@ -583,6 +587,7 @@ struct WandBoardGanttView: View {
                 }
                 .buttonStyle(WandBoardRowButtonStyle())
                 .help(task.title)
+                WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
             }
         }
     }

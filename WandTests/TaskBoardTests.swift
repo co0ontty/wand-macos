@@ -5,6 +5,30 @@ import XCTest
 @testable import Wand
 
 final class TaskBoardTests: XCTestCase {
+    func testTaskScopedEmployeeOverrideAndIdentityDecode() throws {
+        let json = #"{"id":"task","executionSubject":{"type":"employee","id":"e1","agentOverride":{"provider":"pi","engine":"sdk","model":"fixture"}},"assignedExecutor":{"id":"e1","name":"员工一","avatar":"cat:0"},"sessions":[{"id":"s1","employeeId":"e1","employeeName":"员工一","employeeAvatar":"cat:0","provider":"pi"}]}"#
+        let task = try JSONDecoder().decode(WandBoardTask.self, from: Data(json.utf8))
+        XCTAssertEqual(task.executionSubject?.agentOverride?.engine, "sdk")
+        XCTAssertEqual(task.assignedExecutor?.name, "员工一")
+        XCTAssertEqual(task.sessions.first?.employeeId, "e1")
+        XCTAssertEqual(task.sessions.first?.employeeAvatar, "cat:0")
+    }
+
+    func testPlanningParentPolicyCoversUnstartedAndAwaitingConfirmation() throws {
+        let json = #"[{"id":"todo","status":"todo"},{"id":"doing","status":"doing"},{"id":"done","status":"done"},{"id":"archived","status":"archived"},{"id":"child","parentTaskId":"todo"},{"id":"other","workspaceId":"elsewhere"}]"#
+        let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(json.utf8))
+        for candidate in tasks.prefix(3) {
+            XCTAssertNil(wandBoardParentRejection(candidate, tasks: tasks, workspaceId: nil, childId: nil, currentParentId: nil))
+            XCTAssertTrue(candidate.sessions.isEmpty)
+        }
+        XCTAssertNotNil(wandBoardParentRejection(tasks[3], tasks: tasks, workspaceId: nil, childId: nil, currentParentId: nil))
+        XCTAssertNotNil(wandBoardParentRejection(tasks[4], tasks: tasks, workspaceId: nil, childId: nil, currentParentId: nil))
+        XCTAssertNotNil(wandBoardParentRejection(tasks[5], tasks: tasks, workspaceId: nil, childId: nil, currentParentId: nil))
+        XCTAssertNotNil(wandBoardParentRejection(tasks[0], tasks: tasks, workspaceId: nil, childId: "todo", currentParentId: nil))
+        XCTAssertNotNil(wandBoardParentRejection(tasks[1], tasks: tasks, workspaceId: nil, childId: "todo", currentParentId: nil))
+        XCTAssertNil(wandBoardParentRejection(tasks[0], tasks: tasks, workspaceId: nil, childId: "child", currentParentId: "todo"))
+    }
+
     func testOrganizationNoChangesIsNotReportedAsAlreadyOrganized() throws {
         let json = #"{"foundTasks":5,"eligibleTasks":3,"skippedTasks":2,"movedSessions":[],"categorizedTasks":[],"refused":[]}"#.data(using: .utf8)!
         let result = try JSONDecoder().decode(WandTaskOrganizationResult.self, from: json)
@@ -113,6 +137,55 @@ final class TaskBoardTests: XCTestCase {
     }
 
     @MainActor
+    func testOrganizationUnknownReceiptSurvivesResetAndOnlyQueriesOriginalToken() async throws {
+        let hostName = "\(UUID().uuidString.lowercased()).organization-recovery.test"
+        let lock = NSLock()
+        var previews = 0, starts = 0, tokenReads = 0
+        var ready = false
+        CommunicationsContractURLProtocol.register(host: hostName) { request in
+            lock.lock(); defer { lock.unlock() }
+            if request.url?.path == "/api/sessions/auto-organize/by-token/original-token" {
+                tokenReads += 1
+                guard ready else { throw URLError(.cannotConnectToHost) }
+                return Data(#"{"job":{"id":"original-job","status":"completed","stage":"完成","processedSessions":2,"totalSessions":2,"modelRequests":1,"result":{"eligibleSessions":2,"analyzedSessions":2,"skippedManualSessions":0,"skippedSessions":0,"createdTasks":[{"taskId":"new"}],"reusedTasks":[],"updatedTasks":[],"movedSessions":[{"sessionId":"one"},{"sessionId":"two"}],"unassignedSessions":[],"refused":[]}}}"#.utf8)
+            }
+            guard previews == 0 else {
+                starts += 1
+                throw URLError(.networkConnectionLost)
+            }
+            previews += 1
+            return Data(#"{"preview":{"token":"original-token","sessionCount":2,"manualSessionCount":0,"skippedSessionCount":0,"existingTaskCount":0,"contentCharacters":1888,"estimatedModelRequests":1,"unchanged":false}}"#.utf8)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel(); CommunicationsContractURLProtocol.unregister(host: hostName) }
+        let api = WandAPI(baseURL: URL(string: "https://\(hostName)")!, token: nil, session: session)
+        let action = WandTaskOrganizationAction()
+        var refreshes = 0
+        await action.run(api: api, target: .all, mode: .auto, onChanged: {})
+        action.confirm(api: api) { refreshes += 1 }
+        await action.waitForBackgroundWorkForTesting()
+        XCTAssertTrue(action.unresolved)
+        XCTAssertEqual(action.submittedToken, "original-token")
+        XCTAssertNotNil(action.error)
+        action.reset()
+        await action.run(api: api, target: .workspace("another-directory"), mode: .all, onChanged: {})
+        XCTAssertEqual(lock.withLock { previews }, 1)
+        XCTAssertEqual(lock.withLock { starts }, 1)
+        XCTAssertEqual(lock.withLock { tokenReads }, 1)
+        lock.withLock { ready = true }
+        action.query(api: api) { refreshes += 1 }
+        await action.waitForBackgroundWorkForTesting()
+        XCTAssertFalse(action.unresolved)
+        XCTAssertNil(action.submittedToken)
+        XCTAssertEqual(action.result?.movedSessions.count, 2)
+        XCTAssertEqual(lock.withLock { starts }, 1)
+        XCTAssertEqual(lock.withLock { tokenReads }, 2)
+        XCTAssertEqual(refreshes, 1)
+    }
+
+    @MainActor
     func testOrganizationNativeRelationshipAndResultScreenshots() async throws {
         guard ProcessInfo.processInfo.environment["WAND_TASK_ORGANIZE_NATIVE_VISUAL"] == "1" else {
             throw XCTSkip("opt-in isolated native task-organization views; never calls a model")
@@ -174,6 +247,26 @@ final class TaskBoardTests: XCTestCase {
             }.padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             try await organizationSnapshot(summary, size: NSSize(width: 320, height: 100), dark: dark,
                 path: output.appendingPathComponent("relationship-summary-\(suffix).png"))
+        }
+    }
+
+    @MainActor
+    func testTaskDetailLongContentVisuals() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["WAND_TASK_DETAIL_VISUAL_OUTPUT"] else {
+            throw XCTSkip("Set WAND_TASK_DETAIL_VISUAL_OUTPUT for native offscreen detail snapshots")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let brief = "任务背景\n\n" + String(repeating: "完整描述应在主阅读区自然换行，而不是隐藏在限高编辑框里。\n", count: 12) + "描述末尾验收标记"
+        let data = try JSONSerialization.data(withJSONObject: ["id": "detail-visual", "identifier": "TASK-VISUAL", "title": "评估 CLI / skill 获取一次性 Web 登录票据（暂不实施）", "description": brief])
+        let task = try JSONDecoder().decode(WandBoardTask.self, from: data)
+        for width in [640, 1200] {
+            for dark in [false, true] {
+                let detail = WandBoardDetailView(task: task, loadComments: { _ in [] }, workspaces: [], milestones: [], catalog: nil, busy: false,
+                    onPatch: { _ in XCTFail("Read-only visual must not patch") }, onRemember: { _ in }, onDispatch: { _, _ in XCTFail("Read-only visual must not dispatch") }, onArchive: { XCTFail("Read-only visual must not archive") }, onOpenSession: { _ in }, onCreateMilestone: { _ in throw URLError(.unsupportedURL) })
+                try await organizationSnapshot(detail, size: NSSize(width: width, height: 1050), dark: dark,
+                    path: output.appendingPathComponent("detail-\(width)-\(dark ? "dark" : "light").png"))
+            }
         }
     }
 
@@ -349,9 +442,9 @@ final class TaskBoardTests: XCTestCase {
     // MARK: 拖拽与派发时机
 
     func testDropDispatchOnlyForTheFirstTripToDoing() {
-        XCTAssertTrue(wandBoardCreateDispatches(status: "doing"))
+        XCTAssertFalse(wandBoardCreateDispatches(status: "doing"))
         XCTAssertFalse(wandBoardCreateDispatches(status: "todo"))
-        XCTAssertTrue(wandBoardDropDispatches(status: "doing", sessionCount: 0))
+        XCTAssertFalse(wandBoardDropDispatches(status: "doing", sessionCount: 0))
         // 已经跑过的卡再拖回来只改状态，避免拖一次就多开一个 session。
         XCTAssertFalse(wandBoardDropDispatches(status: "doing", sessionCount: 1))
         XCTAssertFalse(wandBoardDropDispatches(status: "done", sessionCount: 0))
@@ -592,4 +685,17 @@ final class TaskBoardTests: XCTestCase {
 private func makeMilestone(_ json: [String: Any]) -> WandBoardMilestone {
     let data = try! JSONSerialization.data(withJSONObject: json)
     return try! JSONDecoder().decode(WandBoardMilestone.self, from: data)
+}
+
+
+extension TaskBoardTests {
+    func testGoalProjectionKeepsParentForChildSearchAndPlanningDoesNotExecute() throws {
+        let source = #"[{"id":"root","title":"目标","status":"todo"},{"id":"one","title":"交付一","parentTaskId":"root"},{"id":"two","title":"交付二","parentTaskId":"root"},{"id":"three","title":"交付三","parentTaskId":"root"}]"#
+        let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(source.utf8))
+        XCTAssertEqual(wandBoardGoalProjection(all: tasks, matched: tasks).map(\.id), ["root"])
+        XCTAssertEqual(wandBoardGoalProjection(all: tasks, matched: [tasks[2]]).map(\.id), ["root"])
+        XCTAssertEqual(wandBoardChildren(of: tasks[0], in: tasks).count, 3)
+        XCTAssertFalse(WandBoardDraft().saveAndDispatch)
+        XCTAssertEqual(tasks[0].status, "todo")
+    }
 }

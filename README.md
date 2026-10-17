@@ -83,6 +83,7 @@ Wand 的原生 SwiftUI / AppKit 桌面客户端。可收起的连续侧栏、专
 - 新建：`POST /api/structured-sessions` 或 `POST /api/commands`
 - 输入与权限：`POST /api/sessions/:id/input` 及 escalation / permission 端点
 - 实时更新：连接 `/ws`，订阅会话并合并 `init` / `output` / `status` / `ended`
+- 任务评论：`GET /api/wand-tasks/:id/comments`，任务详情原位只读展示最近 50 条；无内容不展示，旧服务 404 视为空，切换任务后迟到结果不串入新任务。
 - PTY：SwiftTerm AppKit 原生终端直接发送 `pty_input` / `pty_resize` / `pty_ack`，不加载网页
 - 终端快捷键：⌘L 聚焦、⌘F 查找回滚、⌘± 缩放、⌘0 重置、⌘K 仅清除本地回滚历史
 
@@ -197,6 +198,14 @@ macOS 15 (Sequoia) 起，原生 URLSession 直连局域网 IP 需要用户授权
 当前客户端不再包含 WebView 更新桥。服务端 `/api/macos-dmg-update` 和 `/macos/download`
 仍保留，供旧客户端和浏览器手动下载兼容。原位替换沿用相同 bundle id / 安装路径，
 无须用户重新拖动安装或重输连接信息；但 ad-hoc 签名下无法保证系统授权不重新弹窗。
+
+## 自动错误反馈
+
+更新检查 / 下载 / 校验 / 准备 / 启动 helper 前的真实失败、REST 5xx 与 WebSocket 准备 / 接收 / 发送 / 解码异常，尽力 POST 到**当前连接**的 Wand `/api/feedback/client`，使用操作启动时快照的现有 Bearer token 或内存登录 Cookie。API/Socket 绑定所属连接，更新异步事务沿回调携带启动时连接；发送前核对 origin、token、连接代次（以及 Cookie），切换/断开或同地址换 token 后的迟到错误直接丢弃，不借用新凭据，也不从共享 Cookie 存储动态取新登录态。只在 HTTPS 或字面 loopback HTTP 上发送；不向中央收集地址发送客户端凭据，不跟随重定向。服务端读取上报方 `userProfile.name`，客户端不传用户名。
+
+保留原始 Error / NSError 消息、domain 与 code；只有错误本身提供 `ClientFeedbackStackProviding` 或 `NSStackTraceKey` 记录时才附带真实堆栈，Swift Error 通常没有可取的原始栈，不以当前线程栈冒充。不收集聊天、完整请求 / 响应或环境；过滤当前连接 token 和显式凭据字段。超出 8 KiB 消息 / 16 KiB 栈 / 32 KiB 报告的诊断直接丢弃，不静默截断原文。
+
+传输超时 4 秒、资源上限 5 秒；最多并发 2 条、每分钟 5 条、相同报告 5 分钟去重，不排队、不重试、不递归、不等待反馈完成或重放业务。取消不报告。独立 shell 安装 helper 在父 App 退出后的替换 / 回滚 / 新版启动失败**不能直接自动上报**：它不带连接凭据或反馈运行时，继续只写 `~/Library/Logs/Wand/update.log` 和原有恢复结果，不改变退出 / 回滚生命周期。本轮不新增崩溃信号拦截或声称能采集已退出进程的异常原栈。
 
 ## 工程结构
 

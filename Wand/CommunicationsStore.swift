@@ -106,13 +106,19 @@ final class CommunicationsStore: ObservableObject {
         }
     }
 
-    func selectContact(_ employee: EmployeeContact) { selectedContactID = employee.id; section = .contacts }
+    func selectContact(_ employee: EmployeeContact) {
+        selectedContactID = employee.id; section = .contacts
+        // 临时执行配置只属于当前打开的私聊：离开会话即恢复员工默认。
+        executionPreference = nil
+    }
     func selectEmployee(_ employee: EmployeeContact) { select(employee.conversationID) }
     func select(_ id: String) {
         section = .conversations
         guard selectedID != id else { refreshDetail(); return }
         selectedID = id; target = nil; detail = nil; detailError = nil
         messageQuery = ""; messageSearchExpanded = false
+        // 切换到别的会话即丢弃本会话的临时执行配置，重进回到员工默认。
+        executionPreference = nil
         refreshDetail()
     }
     func selectTarget(_ next: ConversationTarget?) {

@@ -3,6 +3,336 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+private struct ChatSubtaskOpenKey: EnvironmentKey {
+    static let defaultValue: ((String) -> Void)? = nil
+}
+private extension EnvironmentValues {
+    var chatSubtaskOpen: ((String) -> Void)? {
+        get { self[ChatSubtaskOpenKey.self] }
+        set { self[ChatSubtaskOpenKey.self] = newValue }
+    }
+}
+
+/// A session projection of stamped child identities; parent prose is never lifecycle evidence.
+struct NativeChatSubtask: Identifiable {
+    let id: String
+    var meta: SubagentMeta
+    var blocks: [ContentBlock]
+
+    var title: String { meta.taskDescription ?? meta.agentType ?? "子任务" }
+    func status(running: Bool) -> String {
+        ChatDisclosurePresentation.subagentStatus(blocks: blocks, taskID: id, running: running)
+    }
+    var instruction: String {
+        for block in blocks {
+            if case .toolUse(let toolID, _, _, let input, _) = block, toolID == id {
+                return input["prompt"]?.stringValue ?? input["task"]?.stringValue ?? title
+            }
+        }
+        return title
+    }
+    var finalResult: String? {
+        for block in blocks.reversed() {
+            if case .toolResult(let toolID, let text, _, _, _, _) = block, toolID == id {
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Async agent launched successfully.") { return nil }
+                return text
+            }
+        }
+        return nil
+    }
+    var latest: String {
+        for block in blocks.reversed() {
+            switch block {
+            case .text(let text, _), .thinking(let text, _): return String(text.prefix(180))
+            case .toolUse(let toolID, let name, let description, _, _) where toolID != id: return description ?? name
+            default: continue
+            }
+        }
+        return finalResult == nil ? "暂无新的过程或结果；派发回执不代表仍在运行。" : "已收到子任务结果"
+    }
+    var process: [ContentBlock] {
+        blocks.filter { block in
+            switch block {
+            case .toolUse(let toolID, _, _, _, _): return toolID != id
+            case .toolResult(let toolID, _, _, _, _, _): return toolID != id
+            default: return true
+            }
+        }.map { block in
+            switch block {
+            case .text(let text, _): return .text(text: text, subagent: nil)
+            case .thinking(let text, _): return .thinking(thinking: text, subagent: nil)
+            case .toolUse(let id, let name, let description, let input, _): return .toolUse(id: id, name: name, description: description, input: input, subagent: nil)
+            case .toolResult(let id, let text, let error, let truncated, let images, _): return .toolResult(toolUseId: id, text: text, isError: error, truncated: truncated, images: images, subagent: nil)
+            case .unknown: return .unknown
+            }
+        }
+    }
+    var diagnostics: String {
+        var lines = ["任务 ID：\(id)"]
+        for block in blocks {
+            if case .toolResult(let toolID, let text, _, _, _, _) = block, toolID == id,
+               text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Async agent launched successfully.") {
+                lines.append(text)
+            }
+        }
+        return lines.joined(separator: "\n\n")
+    }
+}
+
+func collectNativeChatSubtasks(_ messages: [ConversationTurn]) -> [NativeChatSubtask] {
+    var tasks: [NativeChatSubtask] = []
+    var indices: [String: Int] = [:]
+    for message in messages {
+        for block in message.content {
+            guard let meta = blockSubagentMeta(block), let id = meta.taskId, !id.isEmpty else { continue }
+            if indices[id] == nil {
+                indices[id] = tasks.count
+                tasks.append(NativeChatSubtask(id: id, meta: meta, blocks: []))
+            }
+        }
+    }
+    for message in messages {
+        for block in message.content {
+            var id = blockSubagentMeta(block)?.taskId
+            if id == nil, case .toolResult(let toolID, _, _, _, _, _) = block { id = toolID }
+            if let id, let index = indices[id] { tasks[index].blocks.append(block) }
+        }
+    }
+    return tasks
+}
+
+func nativeChatSubtaskSummary(_ tasks: [NativeChatSubtask], running: Bool) -> String {
+    var order: [String] = []
+    var counts: [String: Int] = [:]
+    for task in tasks {
+        let status = task.status(running: running)
+        if counts[status] == nil { order.append(status) }
+        counts[status, default: 0] += 1
+    }
+    return order.map { "\(counts[$0] ?? 0)\($0)" }.joined(separator: " · ")
+}
+
+struct NativeChatSubtaskPanel: View {
+    let tasks: [NativeChatSubtask]
+    @Binding var selectedID: String
+    let baseURL: URL
+    let running: Bool
+    let onClose: () -> Void
+    @State private var listExpanded = true
+    @State private var hoveredTaskID: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var activeID: String { tasks.contains { $0.id == selectedID } ? selectedID : tasks.first?.id ?? "" }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("子任务").font(.system(size: 14, weight: .semibold))
+                Text("\(tasks.count)")
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundColor(Theme.textSecondary)
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)) }
+                    .buttonStyle(WandIconButtonStyle())
+                    .accessibilityLabel("关闭子任务详情").sidebarPresence("subtasks-close")
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 52)
+            taskList
+            Divider()
+            ZStack {
+                ForEach(tasks) { task in
+                    NativeChatSubtaskDetail(task: task, baseURL: baseURL, running: running)
+                        .opacity(task.id == activeID ? 1 : 0)
+                        .allowsHitTesting(task.id == activeID)
+                        .accessibilityHidden(task.id != activeID)
+                        .animation(reduceMotion ? nil : (task.id == activeID ? Theme.Motion.structure : Theme.Motion.feedback), value: activeID)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .font(.system(size: 13, weight: .regular))
+        .foregroundColor(Theme.textPrimary)
+        .background(Theme.surface)
+        .overlay(alignment: .leading) { Rectangle().fill(Color(nsColor: Theme.borderSubtle)).frame(width: 0.5) }
+        .onExitCommand(perform: onClose)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("子任务详情").sidebarPresence("subtasks-panel")
+    }
+}
+
+private extension NativeChatSubtaskPanel {
+    var taskList: some View {
+        DisclosureGroup(isExpanded: $listExpanded) {
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(tasks) { task in taskRow(task) }
+                }
+                .padding(.top, 8)
+            }
+            .frame(maxHeight: 180)
+        } label: {
+            Text("任务列表")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Theme.textSecondary)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 4).padding(.bottom, 16)
+        .background(Theme.sidebarBackground)
+        .wandMotion(value: listExpanded, layout: true)
+    }
+
+    func taskRow(_ task: NativeChatSubtask) -> some View {
+        Button { selectedID = task.id } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(task.title)
+                        .font(.system(size: 13, weight: task.id == activeID ? .medium : .regular))
+                        .foregroundColor(Theme.textPrimary).lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    NativeSubtaskStatus(label: task.status(running: running))
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.wandAccent)
+                    .opacity(task.id == activeID ? 1 : 0)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .contentShape(Rectangle())
+            .wandSelectionSurface(isSelected: task.id == activeID, isHovered: hoveredTaskID == task.id,
+                cornerRadius: Theme.Radius.control)
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredTaskID = $0 ? task.id : nil }
+        .accessibilityValue(task.id == activeID ? "已选择" : "").sidebarPresence("subtask-row-" + task.id)
+        .sidebarPresence((task.id == activeID ? "subtask-selected-" : "subtask-unselected-") + task.id)
+    }
+}
+
+private struct NativeSubtaskStatus: View {
+    let label: String
+    private var symbol: String {
+        switch label {
+        case "已完成": return "checkmark.circle"
+        case "执行失败": return "exclamationmark.circle"
+        case "处理中": return "ellipsis.circle"
+        default: return "questionmark.circle"
+        }
+    }
+    private var tint: Color {
+        switch label {
+        case "已完成": return Theme.success
+        case "执行失败": return Theme.danger
+        case "处理中": return Theme.wandAccent
+        default: return Theme.textSecondary
+        }
+    }
+    var body: some View {
+        Label(label, systemImage: symbol)
+            .font(.system(size: 11, weight: .regular))
+            .foregroundColor(tint)
+    }
+}
+
+private struct NativeChatSubtaskDetail: View {
+    let task: NativeChatSubtask
+    let baseURL: URL
+    let running: Bool
+    @State private var resultExpanded = true
+    @State private var instructionExpanded = false
+    @State private var processExpanded = false
+    @State private var diagnosticsExpanded = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(task.title)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    NativeSubtaskStatus(label: task.status(running: running))
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("最近活动")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                    Text(task.latest)
+                        .font(.system(size: 13, weight: .regular))
+                        .lineSpacing(4)
+                        .foregroundColor(Theme.textPrimary)
+                        .textSelection(.enabled)
+                }
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .bottom) { Divider() }
+
+                if let result = task.finalResult {
+                    DisclosureGroup(isExpanded: $resultExpanded) {
+                        MarkdownText(text: result, baseURL: baseURL)
+                            .padding(.top, 12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } label: {
+                        Text("结果").font(.system(size: 13, weight: .semibold))
+                    }
+                } else {
+                    Label("尚未收到结果", systemImage: "tray")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(Theme.textSecondary)
+                }
+                if !task.process.isEmpty {
+                    DisclosureGroup("过程与工具记录", isExpanded: $processExpanded) {
+                        TurnView(turn: ConversationTurn(role: "assistant", content: task.process), baseURL: baseURL,
+                            isLastTurn: false, isResponding: false, showHeader: false, interactiveTools: false)
+                            .padding(.top, 12)
+                    }
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 16) {
+                    DisclosureGroup(isExpanded: $instructionExpanded) {
+                        Text(task.instruction)
+                            .font(.system(size: 13, weight: .regular))
+                            .lineSpacing(5)
+                            .foregroundColor(Theme.textPrimary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 12)
+                    } label: {
+                        Button { instructionExpanded.toggle() } label: {
+                            Text("任务说明")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(instructionExpanded ? "收起任务说明" : "展开任务说明")
+                        .sidebarPresence("subtask-instruction-" + task.id)
+                    }
+                    .sidebarPresence((instructionExpanded ? "subtask-instruction-open-" : "subtask-instruction-closed-") + task.id)
+                    DisclosureGroup("诊断信息", isExpanded: $diagnosticsExpanded) {
+                        Text(task.diagnostics)
+                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundColor(Theme.textSecondary)
+                            .textSelection(.enabled)
+                            .padding(.top, 12)
+                    }
+                }
+                .font(.system(size: 12, weight: .regular))
+                .foregroundColor(Theme.textSecondary)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .wandMotion(value: resultExpanded, layout: true)
+        .wandMotion(value: instructionExpanded, layout: true)
+        .wandMotion(value: processExpanded, layout: true)
+        .wandMotion(value: diagnosticsExpanded, layout: true)
+        .sidebarPresence("subtask-detail-" + task.id)
+    }
+}
+
+
 private enum ComposerMetrics {
     static let actionVisualSize: CGFloat = 34
     static let actionTouchSize: CGFloat = 44
@@ -36,6 +366,9 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var draftRestored = false
     @AppStorage("wand.sendWithCommandEnter") private var sendWithCommandEnter = false
+    @State private var showSubtasks = false
+    @State private var selectedSubtaskID = ""
+    @FocusState private var subtaskTriggerFocused: Bool
     @State private var showingFind = false
     @State private var findQuery = ""
     @State private var selectedFindResult: Int?
@@ -79,36 +412,35 @@ struct ChatView: View {
             sessionActionBar
             if showingFind { conversationFindBar }
             if !store.connected && !store.loading { reconnectBanner }
-            ZStack {
-                WandAmbientBackground()
-                if store.loading {
-                    ProgressView().tint(Theme.brand)
-                } else if let error = store.loadError {
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.bubble.fill")
-                            .font(.system(size: 30)).foregroundColor(Theme.danger)
-                        Text("会话加载失败").font(.headline).foregroundColor(Theme.textPrimary)
-                        Text(error).font(.footnote).foregroundColor(Theme.textSecondary)
-                            .multilineTextAlignment(.center)
-                            .textSelection(.enabled)
-                        HStack(spacing: 10) {
-                            Button("重新加载") { store.retryLoad() }
-                                .buttonStyle(WandPrimaryButtonStyle())
-                            Button { showTroubleshooting = true } label: {
-                                Label("故障排查", systemImage: "stethoscope")
-                            }
-                            .buttonStyle(WandSecondaryButtonStyle())
-                        }
-                    }
-                    .padding(32)
-                } else if store.messages.isEmpty && runningPresentation.label.isEmpty {
-                    sessionLaunchPanel
-                } else {
-                    messageList.clipped().simultaneousGesture(TapGesture().onEnded { composerFocus.collapseFromContent(); inputFocused = false })
+            GeometryReader { geometry in
+                let split = geometry.size.width > 960
+                let detailWidth = split ? geometry.size.width * 0.38 : geometry.size.width
+                ZStack(alignment: .trailing) {
+                    conversationSurface
+                        .safeAreaInset(edge: .bottom) { bottomBar }
+                        .sidebarPresence("subtasks-main")
+                        .environment(\.chatSubtaskOpen, { id in
+                            selectedSubtaskID = id
+                            showSubtasks = true
+                        })
+                        .frame(width: showSubtasks && split ? geometry.size.width - detailWidth : geometry.size.width)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .opacity(showSubtasks && !split ? 0 : 1)
+                        .allowsHitTesting(!(showSubtasks && !split))
+                        .accessibilityHidden(showSubtasks && !split)
+                    NativeChatSubtaskPanel(tasks: sessionSubtasks, selectedID: $selectedSubtaskID,
+                        baseURL: api.baseURL, running: store.isResponding, onClose: closeSubtasks)
+                        .frame(width: detailWidth)
+                        .background(Theme.workspaceBackground)
+                        .offset(x: showSubtasks ? 0 : detailWidth)
+                        .opacity(showSubtasks ? 1 : 0)
+                        .allowsHitTesting(showSubtasks)
+                        .accessibilityHidden(!showSubtasks)
                 }
+                .clipped()
+                .wandMotion(value: showSubtasks, layout: true)
             }
         }
-        .safeAreaInset(edge: .bottom) { bottomBar }
         // Confirm only once the loaded result is projected, not on list polling.
         .task(id: "\(store.loading)-\(store.snapshot?.completionRevision ?? 0)-\(store.isResponding)-\(pageActive)") {
             guard pageActive, !store.loading, store.loadError == nil,
@@ -197,6 +529,46 @@ struct ChatView: View {
             toastView
                 .padding(.top, 8)
         }
+    }
+
+    private var sessionSubtasks: [NativeChatSubtask] {
+        collectNativeChatSubtasks(store.messages)
+    }
+
+    private func closeSubtasks() {
+        showSubtasks = false
+        subtaskTriggerFocused = true
+    }
+
+    private var conversationSurface: some View {
+        ZStack {
+                WandAmbientBackground()
+                if store.loading {
+                    ProgressView().tint(Theme.brand)
+                } else if let error = store.loadError {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.bubble.fill")
+                            .font(.system(size: 30)).foregroundColor(Theme.danger)
+                        Text("会话加载失败").font(.headline).foregroundColor(Theme.textPrimary)
+                        Text(error).font(.footnote).foregroundColor(Theme.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .textSelection(.enabled)
+                        HStack(spacing: 10) {
+                            Button("重新加载") { store.retryLoad() }
+                                .buttonStyle(WandPrimaryButtonStyle())
+                            Button { showTroubleshooting = true } label: {
+                                Label("故障排查", systemImage: "stethoscope")
+                            }
+                            .buttonStyle(WandSecondaryButtonStyle())
+                        }
+                    }
+                    .padding(32)
+                } else if store.messages.isEmpty && runningPresentation.label.isEmpty {
+                    sessionLaunchPanel
+                } else {
+                    messageList.clipped().simultaneousGesture(TapGesture().onEnded { composerFocus.collapseFromContent(); inputFocused = false })
+                }
+            }
     }
 
     // MARK: - 消息列表
@@ -834,24 +1206,40 @@ struct ChatView: View {
 
     /// 自绘会话操作行：取代原本压在系统工具栏里的 Git 改动与模型/思考设置。
     /// 非结构化(终端)会话不显示设置入口；正在加载或出错时整行隐藏，避免抢占焦点。
-    @ViewBuilder
     private var sessionActionBar: some View {
-        if !store.loading && store.loadError == nil && hasGitChanges {
-            HStack {
-                gitChangesButton
-                    .buttonStyle(.plain)
-                Spacer(minLength: 0)
+        let tasks = sessionSubtasks
+        let summary = nativeChatSubtaskSummary(tasks, running: store.isResponding)
+        return HStack {
+            if !store.loading && store.loadError == nil && hasGitChanges {
+                gitChangesButton.buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
-            .chatContentWidth()
-            .frame(height: 34)
-            .background(Theme.workspaceBackground)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Color(nsColor: Theme.borderSubtle))
-                    .frame(height: 0.5)
+            Spacer(minLength: 0)
+            Button {
+                if showSubtasks { closeSubtasks() } else { showSubtasks = true }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "sidebar.right")
+                    Text("子任务 \(tasks.count)")
+                    Text(summary).foregroundColor(Theme.textSecondary).lineLimit(1)
+                }
+                .font(.system(size: 11))
+                .frame(width: 280, height: 28, alignment: .leading)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .focused($subtaskTriggerFocused)
+            .opacity(tasks.isEmpty ? 0 : 1)
+            .disabled(tasks.isEmpty)
+            .accessibilityHidden(tasks.isEmpty)
+            .accessibilityLabel("子任务 \(tasks.count)，\(summary)")
+            .accessibilityValue(showSubtasks ? "已展开" : "已收起")
+            .help("查看子任务 · \(summary)").sidebarPresence("subtasks-trigger")
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 34)
+        .background(Theme.workspaceBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color(nsColor: Theme.borderSubtle)).frame(height: 0.5)
         }
     }
 
@@ -1015,7 +1403,7 @@ struct ChatView: View {
             onCompositionChange: { composerIsComposing = $0 },
             onSubmit: handleReturnKey,
             onHeightChange: { composerInputHeight = $0 },
-            onEscape: { composerFocus.collapse(); inputFocused = false },
+            onEscape: { if showSubtasks { closeSubtasks() } else { composerFocus.collapse(); inputFocused = false } },
             onPasteAttachment: { attachments.importFromPasteboard($0) }
         )
         .frame(height: composerInputHeight)
@@ -3138,13 +3526,9 @@ private struct ActivityFoldCard<Content: View>: View {
         if case .tool(_, _, _, _, _, let result) = item { return result == nil }
         return false
     } }
-    private var hasThinking: Bool { group.items.contains { item in
-        if case .plain(.thinking(_, _)) = item { return true }
-        return false
-    } }
+    /// 默认只在最新一组运行中自动展开；思考、报错不自动撑开，用户手动收放优先（对齐 Web/安卓）。
     private var automaticExpanded: Bool {
-        ChatDisclosurePresentation.expanded(userChoice: nil, running: group.newest && running,
-            attention: hasThinking || hasError || (missingResult && terminal == .failed))
+        ChatDisclosurePresentation.activityExpanded(userChoice: nil, isNewest: group.newest, running: running)
     }
 
     init(
@@ -3157,17 +3541,8 @@ private struct ActivityFoldCard<Content: View>: View {
         self.running = running
         self.terminal = activityGroup.newest ? terminal : nil
         self.itemView = itemView
-        let attention = activityGroup.items.contains { item in
-            if case .plain(.thinking(_, _)) = item { return true }
-            switch item {
-            case .tool(_, _, _, _, _, let result):
-                return result?.isError == true || (result == nil && activityGroup.newest && terminal == .failed)
-            case .plain(.toolResult(_, _, let error, _, _, _)): return error
-            default: return false
-            }
-        }
-        _expanded = State(initialValue: ChatDisclosurePresentation.expanded(userChoice: nil,
-            running: activityGroup.newest && running, attention: attention))
+        _expanded = State(initialValue: ChatDisclosurePresentation.activityExpanded(userChoice: nil,
+            isNewest: activityGroup.newest, running: running))
     }
 
     var body: some View {
@@ -3185,16 +3560,7 @@ private struct ActivityFoldCard<Content: View>: View {
             .help(expanded ? "收起活动" : "展开活动")
 
             if expanded {
-                if hasThinking {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(group.items.enumerated()), id: \.offset) { index, item in
-                            itemView(item, index, group.items.count - 1)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                } else {
-                    window
-                }
+                window
             }
         }
         .background(
@@ -3343,6 +3709,7 @@ private let subagentWindowContentHeight: CGFloat = 280
 private struct SubagentRoleWindow<Content: View>: View {
     let meta: SubagentMeta
     let items: [DisplayItem]
+    let statusLabel: String
     let running: Bool
     @ViewBuilder let itemView: (DisplayItem) -> Content
 
@@ -3377,7 +3744,7 @@ private struct SubagentRoleWindow<Content: View>: View {
                         .lineLimit(2)
                 }
                 Spacer(minLength: 0)
-                Text(running ? "处理中" : "\(items.count) 条内容")
+                Text(statusLabel)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(Theme.codex)
                     .padding(.horizontal, 7)
@@ -3494,6 +3861,7 @@ struct TurnView: View {
     var interactiveTools: Bool
 
     @State private var localCollapsed: Bool
+    @Environment(\.chatSubtaskOpen) private var openSubtask
 
     init(
         turn: ConversationTurn,
@@ -3705,14 +4073,35 @@ struct TurnView: View {
                     parentBlocksView(blocks)
                 case .subagent(let subagent):
                     let items = pairToolBlocks(subagent.blocks)
+                    if let openSubtask, let taskID = subagent.meta.taskId {
+                        Button {
+                            openSubtask(taskID)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "sidebar.right")
+                                Text(subagent.meta.taskDescription ?? "子任务").lineLimit(1)
+                                Text("查看详情").foregroundColor(Theme.wandAccent)
+                                Image(systemName: "chevron.right").font(.system(size: 9, weight: .medium))
+                            }
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundColor(Theme.textSecondary)
+                            .padding(.vertical, 5)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    } else {
                     SubagentRoleWindow(
                         meta: subagent.meta,
                         items: items,
+                        statusLabel: ChatDisclosurePresentation.subagentStatus(
+                            blocks: subagent.blocks, taskID: subagent.meta.taskId,
+                            running: isLastTurn && isResponding),
                         running: isLastTurn && isResponding && items.contains {
                             isDisplayItemRunning($0, isLastTurn: true, isResponding: true)
                         }
                     ) { item in
                         itemView(item, showSubagentTags: false)
+                    }
                     }
                 }
             }
@@ -3858,7 +4247,8 @@ private struct BlockView: View {
                     icon: "brain",
                     title: "思考过程",
                     tint: Theme.textSecondary,
-                    initiallyExpanded: true
+                    // 思考正文默认收起：展开是阅读选择，窗口里「最新一条默认展开」也不适用于它（对齐 Web/安卓）。
+                    initiallyExpanded: false
                 ) {
                     MarkdownText(text: thinking, baseURL: baseURL)
                         .font(.system(size: 13))

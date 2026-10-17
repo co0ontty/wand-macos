@@ -121,8 +121,8 @@ final class WorkspaceTaskContractTests: XCTestCase {
         let groups = try searchGroups()
         var known = Set<String>(), expanded = Set<String>()
         TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
-        XCTAssertEqual(expanded, ["ui"])
-        expanded.remove("ui")
+        XCTAssertEqual(expanded, ["ui", "infra"], "只有未分组会话的目录也属于非空目录")
+        expanded.removeAll()
         TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
         XCTAssertTrue(expanded.isEmpty, "A refresh must not reopen the user's collapsed workspace")
         let fresh = TaskDirectoryGroup(workspaceId: "new", workspaceName: "New", workspaceCwd: "/new", synthetic: true,
@@ -208,6 +208,44 @@ final class WorkspaceTaskContractTests: XCTestCase {
             activeOnly: true, selectedSessionId: "layout", selectedTaskId: nil)
         XCTAssertTrue(active.flatMap(\.tasks).isEmpty)
         XCTAssertEqual(active.map(\.id), source.map(\.id), "Activity filtering retains directory roots")
+    }
+
+    func testSidebarKeepsUnboundDirectoryMembersAndDefaultGroupSearch() throws {
+        let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"[{"workspaceId":"cwd:/repo/free","workspaceName":"Free","workspaceCwd":"/repo/free","synthetic":true,"tasks":[],"standaloneSessions":[{"id":"free","title":"独立工作","status":"idle"},{"id":"old","archived":true}]},{"workspaceId":"global","workspaceName":"全局","workspaceCwd":"/scratch","global":true,"tasks":[],"standaloneSessions":[{"id":"other","title":"全局工作","status":"idle"}]}]"#.utf8))
+        let projected = TaskListPresentation.sidebarDirectoryGroups(groups, workspaces: [], query: "", activeOnly: false, selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(Set(projected.map(\.id)), Set(groups.map(\.id)))
+        XCTAssertEqual(Set(projected.flatMap(\.standaloneSessions).map(\.id)), ["free", "other"])
+        let searched = TaskListPresentation.sidebarDirectoryGroups(groups, workspaces: [], query: "Free - 未分组任务", activeOnly: false, selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(searched.flatMap(\.standaloneSessions).map(\.id), ["free"])
+        var known = Set<String>(), expanded = Set<String>()
+        TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
+        XCTAssertTrue(expanded.contains("cwd:/repo/free"), "只有未分组会话的目录同样可发现和展开")
+    }
+
+    @MainActor
+    func testNativeDefaultGroupExpandsAndOpensTheActualUnboundSession() async throws {
+        let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"[{"workspaceId":"cwd:/repo/free","workspaceName":"Free","workspaceCwd":"/repo/free","synthetic":true,"tasks":[],"standaloneSessions":[{"id":"free","title":"独立工作","provider":"pi","sessionKind":"structured","cwd":"/repo/free","status":"idle"}]}]"#.utf8))
+        let data = try JSONEncoder().encode(groups)
+        let api = makeAPI { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return request.url?.path == "/api/tasks" ? data : Data("[]".utf8)
+        }
+        let store = trackedStore(api: api, serverID: "sidebar-unbound-click")
+        await store.loadTaskGroups()
+        var opened: String?
+        let host = NSHostingView(rootView: WorkspaceListView(store: store, api: api, selectedTaskId: nil, query: "",
+            onOpenTask: { _, _ in XCTFail("默认组不是正式任务") }, onOpenSession: { _, session in opened = session.id }).frame(width: 260))
+        host.frame = NSRect(x: 0, y: 0, width: 260, height: 680)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 220_000_000); host.layoutSubtreeIfNeeded()
+        try clickSidebarMarker(host, window: window, id: "sidebar-default-task-cwd:/repo/free")
+        try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-standalone-free"))
+        try captureSidebar(host, name: "fixture-default-group-expanded")
+        try clickSidebarMarker(host, window: window, id: "sidebar-standalone-free")
+        XCTAssertEqual(opened, "free")
     }
 
     @MainActor
@@ -1090,6 +1128,13 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(editor.convert(editor.bounds, to: host).midY, idleEditorRect.midY, accuracy: 1, "Failure feedback cannot move the input or send slot")
         host.appearance = NSAppearance(named: .darkAqua)
         try await settle(); try capture("creation-failed-dark")
+        for (name, size) in [("creation-narrow", NSSize(width: 540, height: 680)), ("creation-short", NSSize(width: 900, height: 360))] {
+            window.setContentSize(size); host.frame.size = size
+            try await settle(); try capture(name)
+            XCTAssertTrue(editor === descendants(host).compactMap { $0 as? ComposerNSTextView }.first, "Resizing retains the editor instance")
+            XCTAssertEqual(draft.firstMessage, "仅用于本地界面验收的草稿")
+            XCTAssertLessThanOrEqual(editor.convert(editor.bounds, to: host).maxX, host.bounds.maxX, "The editor fits a narrow window")
+        }
     }
 
     @MainActor
@@ -1191,6 +1236,44 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertFalse(action.busy)
         XCTAssertEqual(refreshes, 2)
         XCTAssertNil(action.result)
+    }
+
+    @MainActor
+    func testOrganizationRefreshMovesSidebarMembersFromDefaultGroupIntoCreatedTask() async throws {
+        let lock = NSLock()
+        var committed = false
+        let initial = Data(#"[{"workspaceId":"w1","workspaceName":"wand","workspaceCwd":"/repo","tasks":[],"standaloneSessions":[{"id":"s1","title":"通知设置保存","cwd":"/repo","provider":"pi","sessionKind":"structured","status":"idle"}]}]"#.utf8)
+        let classified = Data(#"[{"workspaceId":"w1","workspaceName":"wand","workspaceCwd":"/repo","tasks":[{"id":"new-task","workspaceId":"w1","name":"修复通知保存","cwd":"/repo","status":"active","createdAt":"2026-10-01","sessions":[{"id":"s1","title":"通知设置保存","cwd":"/repo","provider":"pi","sessionKind":"structured","status":"idle"}]}],"standaloneSessions":[]}]"#.utf8)
+        let api = makeAPI { request in
+            if request.url?.path == "/api/tasks" { return lock.withLock { committed } ? classified : initial }
+            if request.url?.path == "/api/sessions/auto-organize" {
+                if try Self.requestBody(request)["action"] as? String == "preview" { return Self.organizationPreview }
+                lock.withLock { committed = true }
+                return Self.organizationComplete
+            }
+            return Data("[]".utf8)
+        }
+        let store = trackedStore(api: api, serverID: "sidebar-content-organization")
+        await store.loadTaskGroups()
+        XCTAssertEqual(store.taskGroups.flatMap(\.standaloneSessions).map(\.id), ["s1"])
+        let action = WandTaskOrganizationAction()
+        await action.run(api: api, target: .workspace("w1"), mode: .auto, onChanged: {})
+        XCTAssertEqual(store.taskGroups.flatMap(\.standaloneSessions).map(\.id), ["s1"], "预览不挪会话")
+        action.confirm(api: api) { await store.loadTaskGroups(force: true) }
+        await action.waitForBackgroundWorkForTesting()
+        let projected = TaskListPresentation.sidebarDirectoryGroups(store.taskGroups, workspaces: [], query: "", activeOnly: false, selectedSessionId: "s1", selectedTaskId: nil)
+        XCTAssertTrue(projected.flatMap(\.standaloneSessions).isEmpty)
+        XCTAssertEqual(projected.flatMap(\.tasks).map(\.name), ["修复通知保存"])
+        XCTAssertEqual(projected.flatMap(\.tasks).flatMap(\.sessions).map(\.id), ["s1"])
+        let host = NSHostingView(rootView: WorkspaceListView(store: store, api: api, selectedTaskId: "new-task", selectedSessionId: "s1", query: "", onOpenTask: { _, _ in }).frame(width: 260))
+        host.frame = NSRect(x: 0, y: 0, width: 260, height: 680)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 220_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-new-task"))
+        XCTAssertNil(sidebarPresenceView(host, id: "sidebar-default-task-w1"))
+        try captureSidebar(host, name: "fixture-created-task-after-organization")
     }
 
     @MainActor
@@ -1366,6 +1449,51 @@ private final class WorkspaceContractURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+/// The actual creation view loads installed-service defaults without starting any work.
+final class NewSessionLiveTests: XCTestCase {
+    @MainActor
+    func testInstalledServiceCreationReferenceLayoutReadOnly() async throws {
+        guard ProcessInfo.processInfo.environment["WAND_CREATION_LIVE"] == "1" else {
+            throw XCTSkip("Installed-service creation acceptance is opt-in")
+        }
+        XCTAssertTrue(NativeAcceptance.enabled)
+        let storage = NativeAcceptance.defaults
+        defer { NativeAcceptance.cleanup() }
+        let origin = try XCTUnwrap(URL(string: try XCTUnwrap(storage.string(forKey: "wand.serverURL"))))
+        let api = WandAPI(baseURL: origin, token: try XCTUnwrap(storage.string(forKey: "wand.token")))
+        let draft = SessionCreationDraft(context: .init(startsNewTask: false))
+        let host = NSHostingView(rootView: NewSessionView(api: api, draft: draft, embedded: true) { _ in
+            XCTFail("Read-only acceptance must never create a session")
+        }.defaultAppStorage(storage))
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 840)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        for _ in 0..<200 {
+            host.layoutSubtreeIfNeeded()
+            if draft.initialized && !draft.loading { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(draft.initialized, "Installed defaults must finish loading")
+        XCTAssertNil(draft.loadError)
+        XCTAssertFalse(draft.employees.isEmpty)
+        XCTAssertFalse(draft.creating)
+        XCTAssertTrue(draft.firstMessage.isEmpty)
+        let editor = try XCTUnwrap(sidebarDescendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        for (name, size, appearance) in [
+            ("installed-creation-light", NSSize(width: 900, height: 840), NSAppearance.Name.aqua),
+            ("installed-creation-narrow-dark", NSSize(width: 540, height: 680), NSAppearance.Name.darkAqua)
+        ] {
+            host.appearance = NSAppearance(named: appearance)
+            window.setContentSize(size); host.frame.size = size
+            try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
+            try captureSidebar(host, name: name)
+            XCTAssertTrue(editor === sidebarDescendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+            XCTAssertLessThanOrEqual(editor.convert(editor.bounds, to: host).maxX, host.bounds.maxX)
+        }
+    }
 }
 
 /// Separate suite: the live read-only guard must never run mutation fixtures.

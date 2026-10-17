@@ -486,6 +486,7 @@ struct WorkspaceTask: Codable, Equatable, Identifiable {
 
 /// GET /api/tasks 聚合行：任务 + 运行期派生字段；目录信息在 TaskDirectoryGroup 上。
 struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
+    var parentWorkspaceTaskId: String? = nil
     let id: String
     let workspaceId: String
     let name: String
@@ -518,8 +519,10 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         worktreeError: String?,
         sessions: [WorkspaceSessionSummary],
         totalSessions: Int? = nil,
-        archived: Bool? = nil
+        archived: Bool? = nil,
+        parentWorkspaceTaskId: String? = nil
     ) {
+        self.parentWorkspaceTaskId = parentWorkspaceTaskId
         self.id = id
         self.workspaceId = workspaceId
         self.name = name
@@ -695,40 +698,35 @@ enum TaskListPresentation {
     static func discoverDirectories(_ groups: [TaskDirectoryGroup], known: inout Set<String>, expanded: inout Set<String>) {
         for group in groups where !known.contains(group.id) {
             known.insert(group.id)
-            if !group.tasks.isEmpty { expanded.insert(group.id) }
+            if !group.tasks.isEmpty || !group.standaloneSessions.isEmpty { expanded.insert(group.id) }
         }
     }
 
     static func sidebarDirectoryGroups(_ groups: [TaskDirectoryGroup], workspaces: [Workspace], query: String,
                                        activeOnly: Bool, selectedSessionId: String?, selectedTaskId: String?) -> [TaskDirectoryGroup] {
-        var source = groups.map { group in
-            TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
-                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
-                tasks: group.tasks.filter { $0.archived != true && $0.status != "done" },
-                standaloneSessions: [], global: group.global)
-        }.filter { !$0.isSynthetic || !$0.tasks.isEmpty }
-        let ids = Set(groups.map(\.id))
-        source += workspaces.filter { !ids.contains($0.id) }.map {
-            TaskDirectoryGroup(workspaceId: $0.id, workspaceName: $0.name, workspaceCwd: $0.cwd,
-                synthetic: false, tasks: [], standaloneSessions: [])
-        }
-        source = source.filter { !$0.isGlobal || !$0.tasks.isEmpty }
-        let searched = filteredDirectoryGroups(source, query: query)
-        return source.compactMap { group in
-            let result: TaskDirectoryGroup
-            if group.tasks.isEmpty && !group.isSynthetic {
-                guard searchMatches(query, values: [group.displayName, group.workspaceCwd]) else { return nil }
-                result = group
-            } else {
-                guard let match = searched.first(where: { $0.id == group.id }) else { return nil }
-                result = match
+        return groups.compactMap { group in
+            let candidates = group.tasks
+            let matching = candidates.filter { task in
+                task.archived != true && task.status != "done" &&
+                (!activeOnly || task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }) &&
+                (task.sessions.count > 0 || (task.id == selectedTaskId) || !query.isEmpty) &&
+                searchMatches(query, values: [group.displayName, group.workspaceCwd, task.name, task.cwd] + task.sessions.map { groupSearchText($0) })
             }
-            guard activeOnly else { return result }
-            return TaskDirectoryGroup(workspaceId: result.workspaceId, workspaceName: result.workspaceName,
-                workspaceCwd: result.workspaceCwd, synthetic: result.synthetic,
-                tasks: result.tasks.filter { task in
-                    task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }
-                }, standaloneSessions: [], global: result.global)
+            var keep = Set(matching.map(\.id))
+            for task in matching {
+                var parent = task.parentWorkspaceTaskId
+                var seen = Set<String>()
+                while let id = parent, !seen.contains(id) {
+                    seen.insert(id); keep.insert(id)
+                    parent = candidates.first { $0.id == id }?.parentWorkspaceTaskId
+                }
+            }
+            let sessions = group.standaloneSessions.filter { ($0.archived != true || !query.isEmpty) && (!activeOnly || isActive($0, selectedSessionId: selectedSessionId)) && searchMatches(query, values: [groupSearchText($0), group.displayName, group.workspaceCwd]) }
+            let tasks = candidates.filter { keep.contains($0.id) }
+            guard !tasks.isEmpty || !sessions.isEmpty else { return nil }
+            return TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: tasks,
+                standaloneSessions: sessions, global: group.global)
         }.sorted { !$0.isGlobal && $1.isGlobal }
     }
 
@@ -836,7 +834,8 @@ enum TaskListPresentation {
                 searchMatches(query, values: [group.displayName, task.name, task.cwd]
                     + task.sessions.map { groupSearchText($0) })
             }
-            let standaloneSessions = group.standaloneSessions.filter(matchesSession)
+            let standaloneSessions = matches("\(group.workspaceName) - 未分组任务")
+                ? group.standaloneSessions : group.standaloneSessions.filter(matchesSession)
             guard !tasks.isEmpty || !standaloneSessions.isEmpty else { return nil }
             return TaskDirectoryGroup(
                 workspaceId: group.workspaceId, workspaceName: group.workspaceName,

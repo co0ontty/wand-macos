@@ -203,6 +203,12 @@ enum ChatDisclosurePresentation {
         userChoice ?? (attention || running)
     }
 
+    /// 活动组默认只在「最新一组运行中」自动展开；思考与报错都不再自动撑开
+    /// （对齐 Web/安卓的收起语义），用户手动收放的阅读选择始终优先。
+    static func activityExpanded(userChoice: Bool?, isNewest: Bool, running: Bool) -> Bool {
+        userChoice ?? (isNewest && running)
+    }
+
     static func activityStatus(hasError: Bool, missingResult: Bool, running: Bool,
                                terminal: ChatRunningPresentation.Stage?) -> String {
         if hasError { return "有执行错误" }
@@ -216,6 +222,21 @@ enum ChatDisclosurePresentation {
         if isError { return "失败" }
         if hasResult { return "完成" }
         return running ? "处理中" : "未收到结果"
+    }
+
+    /// Native terminal notifications use the existing correlated tool-result
+    /// projection. A Qoder launch acknowledgement alone proves no live status.
+    static func subagentStatus(blocks: [ContentBlock], taskID: String?, running: Bool) -> String {
+        for block in blocks.reversed() {
+            guard case .toolResult(let id, let text, let isError, _, _, _) = block,
+                  id == taskID else { continue }
+            if isError { return "执行失败" }
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Async agent launched successfully.\n") {
+                return "运行状态未知"
+            }
+            return "已完成"
+        }
+        return running ? "处理中" : "运行状态未知"
     }
 
     static func loadedRange(offset: Int, count: Int, total: Int) -> String {

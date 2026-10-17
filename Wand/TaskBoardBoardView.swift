@@ -163,6 +163,7 @@ struct WandBoardBoardView: View {
     }
 
     private func card(_ task: WandBoardTask) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
         WandBoardCard(
             task: task,
             display: display,
@@ -184,6 +185,8 @@ struct WandBoardBoardView: View {
             },
             onUnbindSession: { onUnbindSession(task, $0) }
         )
+        WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
+        }
         .onDrag {
             NSItemProvider(item: task.id as NSString, typeIdentifier: wandBoardTaskDragType)
         }

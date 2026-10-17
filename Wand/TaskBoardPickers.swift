@@ -17,23 +17,29 @@ final class WandTaskOrganizationAction: ObservableObject {
     @Published private(set) var note = ""
     private var revision = 0
     private var work: Task<Void, Never>?
+    @Published private(set) var submittedToken: String?
+    private var cancelling = false
+    var unresolved: Bool { submittedToken != nil || job?.status == "running" }
+    var hasState: Bool { busy || unresolved || preview != nil || result != nil || error != nil || !note.isEmpty }
 
     var label: String { busy ? "正在整理会话" : preview != nil ? "确认会话范围" : error != nil ? "归类未完成" : job?.status == "running" ? "后台归类中" : result != nil ? "会话归类结果" : "会话自动归类" }
 
     func reset() {
+        guard !unresolved else {
+            note = "前一次范围仍在后台整理或等待回执；请查询原作业，切换目录不会重新发送。"
+            return
+        }
         revision += 1
-        result = nil; error = nil; preview = nil
-        if !busy { job = nil; note = "" }
-        else { note = "前一次范围仍在后台整理；切换目录不会重新发送或挪动新输入。" }
+        result = nil; error = nil; preview = nil; job = nil; note = ""
     }
 
     func prepare(api: WandAPI, target: WandTaskOrganizationTarget, mode: WandTaskOrganizationMode, onChanged: @escaping () async -> Void) {
-        guard !busy else { return }
+        guard !busy, !unresolved else { return }
         work = Task { await run(api: api, target: target, mode: mode, onChanged: onChanged) }
     }
 
     func run(api: WandAPI, target: WandTaskOrganizationTarget, mode: WandTaskOrganizationMode, onChanged: () async -> Void) async {
-        guard !busy else { return }
+        guard !busy, !unresolved else { return }
         reset(); busy = true; let started = revision
         note = "读取会话正文并估算处理量；尚未调用模型。"
         defer { busy = false }
@@ -48,7 +54,7 @@ final class WandTaskOrganizationAction: ObservableObject {
                 note = "没有符合范围且有正文的工作会话；跳过 \(response.manualSessionCount) 个人工任务会话，排除 \(response.skippedSessionCount) 个归档/私聊/系统或无正文会话。"
             } else {
                 preview = response
-                note = "正文 \(response.contentCharacters) 字符，预计 \(response.estimatedModelRequests) 个系统模型请求，使用初二当前配置及原有候选降级。确认后可自动创建/复用任务并移动会话，不执行其中的工作。"
+                note = "正文 \(response.contentCharacters) 字符，预计 \(response.estimatedModelRequests) 个系统模型请求，使用初二当前配置及原有候选降级；另排除 \(response.skippedSessionCount) 个归档/私聊/系统记录或无正文会话。确认后可自动创建/复用任务并移动会话，不执行其中的工作。"
             }
         } catch {
             guard started == revision else { return }
@@ -58,7 +64,8 @@ final class WandTaskOrganizationAction: ObservableObject {
     }
 
     func confirm(api: WandAPI, onChanged: @escaping () async -> Void) {
-        guard !busy, let prepared = preview else { return }
+        guard !busy, !unresolved, let prepared = preview else { return }
+        submittedToken = prepared.token
         busy = true; error = nil; let started = revision
         work = Task {
             defer { busy = false }
@@ -75,34 +82,52 @@ final class WandTaskOrganizationAction: ObservableObject {
     }
 
     func query(api: WandAPI, onChanged: @escaping () async -> Void) {
-        guard !busy, let current = job else { return }
+        guard !busy, job != nil || submittedToken != nil else { return }
+        let current = job, token = submittedToken
         busy = true; error = nil; let started = revision
         work = Task {
             defer { busy = false }
-            do { try await watch(api: api, accepted: try await api.conversationOrganizationJob(id: current.id), started: started, onChanged: onChanged) }
+            do {
+                let original: WandConversationOrganizationJob
+                if let current { original = try await api.conversationOrganizationJob(id: current.id) }
+                else if let token { original = try await api.conversationOrganizationJobByToken(token) }
+                else { return }
+                try await watch(api: api, accepted: original, started: started, onChanged: onChanged)
+            }
             catch { if !Task.isCancelled && started == revision { self.error = error.localizedDescription } }
         }
     }
 
     private func watch(api: WandAPI, accepted: WandConversationOrganizationJob, started: Int, onChanged: () async -> Void) async throws {
         var current = accepted
+        var polls = 0
         while true {
             try Task.checkCancellation()
             if started == revision { job = current; note = current.stage }
             if current.status != "running" { break }
+            guard polls < 900 else {
+                if started == revision { error = "前端查询已暂停；后台仍在执行，可继续查询原作业。" }
+                return
+            }
+            polls += 1
             try await Task.sleep(nanoseconds: 800_000_000)
             current = try await api.conversationOrganizationJob(id: current.id)
         }
+        submittedToken = nil
         await onChanged()
         guard started == revision else { return }
         result = current.result; job = current
-        error = current.status == "failed" || current.status == "interrupted" ? current.error : nil
+        error = current.status == "failed" || current.status == "interrupted" ? current.error ?? "归类未完成，请查看结果或初二日志。" : nil
     }
 
     func cancel(api: WandAPI) {
-        guard let current = job, current.status == "running" else { return }
-        Task { do { try await api.cancelConversationOrganization(id: current.id) }
-            catch { self.error = "取消回执未确认，请继续查询原作业；已完成部分不会回滚。" } }
+        guard let current = job, current.status == "running", !cancelling else { return }
+        cancelling = true
+        Task {
+            defer { cancelling = false }
+            do { try await api.cancelConversationOrganization(id: current.id) }
+            catch { self.error = "取消回执未确认，请继续查询原作业；已完成部分不会回滚。" }
+        }
     }
     func stopWatching() { work?.cancel(); work = nil }
     func reportError(_ message: String) { error = message }
@@ -132,8 +157,9 @@ struct WandTaskOrganizationPanel: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(WandSecondaryButtonStyle())
-                .disabled(action.busy)
+                .disabled(action.busy || action.unresolved)
             }
+            confirmationButton
             if action.busy {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -141,13 +167,9 @@ struct WandTaskOrganizationPanel: View {
                 }
                 .accessibilityIdentifier("task-organization-progress")
             }
-            if let prepared = action.preview {
+            if let prepared = action.preview, !action.unresolved {
                 Text("\(prepared.sessionCount) 个工作会话；跳过 \(prepared.manualSessionCount) 个人工任务会话。\(action.note)")
                     .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
-                Button(prepared.unchanged ? "内容未变，仍然重新分析" : "确认整理 \(prepared.sessionCount) 个会话") {
-                    action.confirm(api: api, onChanged: onChanged)
-                }
-                .buttonStyle(WandPrimaryButtonStyle()).disabled(action.busy)
             } else if !action.busy && action.result == nil && !action.note.isEmpty {
                 Text(action.note).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
             }
@@ -167,7 +189,6 @@ struct WandTaskOrganizationPanel: View {
             if let job = action.job {
                 if job.status == "running" {
                     Button("取消后续归类，保留已完成部分") { action.cancel(api: api) }.buttonStyle(WandSecondaryButtonStyle())
-                    if !action.busy { Button("继续查询本次作业") { action.query(api: api, onChanged: onChanged) }.buttonStyle(WandSecondaryButtonStyle()) }
                 }
                 if let id = job.logSessionId, let onOpenSession {
                     Button("查看初二的本次作业日志") { onOpenSession(id) }.buttonStyle(WandSecondaryButtonStyle())
@@ -186,6 +207,27 @@ struct WandTaskOrganizationPanel: View {
                 await action.run(api: api, target: target, mode: initialMode, onChanged: onChanged)
             }
         }
+    }
+
+    private var confirmationButton: some View {
+        let title = action.busy ? "正在整理会话…"
+            : action.unresolved ? (action.job == nil ? "查询原确认请求" : "继续查询本次作业")
+            : action.preview.map { $0.unchanged ? "内容未变，确认重新分析" : "确认整理 \($0.sessionCount) 个会话" }
+                ?? (action.result != nil ? "查看本次结果" : "先选择会话范围")
+        return Button {
+            if action.unresolved || action.result != nil { action.query(api: api, onChanged: onChanged) }
+            else { action.confirm(api: api, onChanged: onChanged) }
+        } label: {
+            ZStack {
+                Text(title).font(.system(size: 12, weight: .medium))
+                    .id(title).transition(.opacity)
+            }
+            .frame(width: 220, height: 18)
+        }
+        .buttonStyle(WandPrimaryButtonStyle())
+        .disabled(action.busy || (!action.unresolved && action.preview == nil && action.result == nil))
+        .accessibilityIdentifier("task-organization-primary")
+        .wandMotion(value: title)
     }
 }
 
@@ -457,8 +499,9 @@ struct WandBoardAgentEditor: View {
             alignment: .leading,
             spacing: 10
         ) {
-            WandBoardField("CLI 工具") {
-                Picker("", selection: providerBinding) {
+            WandBoardField("执行工具") {
+                Picker("", selection: toolBinding) {
+                    Text("Wand Agent").tag("wand-agent")
                     ForEach(wandBoardProviders, id: \.self) { provider in
                         Text(wandBoardProviderLabel(provider)).tag(provider)
                     }
@@ -470,6 +513,9 @@ struct WandBoardAgentEditor: View {
                 Picker("", selection: modelBinding) {
                     ForEach(wandBoardModelOptions(from: catalog, provider: agent.provider), id: \.id) { option in
                         Text(option.label).tag(option.id)
+                    }
+                    if !wandBoardModelOptions(from: catalog, provider: agent.provider).contains(where: { $0.id == agent.model }) {
+                        Text("\(agent.model)（已保存）").tag(agent.model)
                     }
                 }
                 .labelsHidden()
@@ -496,6 +542,18 @@ struct WandBoardAgentEditor: View {
         }
         .disabled(disabled)
         .font(.system(size: 12))
+    }
+
+    private var toolBinding: Binding<String> {
+        Binding(get: { agent.provider == "pi" && agent.engine == "sdk" ? "wand-agent" : agent.provider }, set: { tool in
+            if tool == "wand-agent" {
+                var next = agent.withProvider("pi"); next.engine = "sdk"; next.kind = "structured"; agent = next; onChange(next)
+            } else {
+                providerBinding.wrappedValue = tool
+                agent.engine = nil
+                onChange(agent)
+            }
+        })
     }
 
     private var providerBinding: Binding<String> {
@@ -626,5 +684,108 @@ struct WandBoardLabelsField: View {
             .filter { !$0.isEmpty }
         guard parsed != labels else { return }
         onChange(parsed)
+    }
+}
+
+/// Shared planning/reassignment picker. Native popover owns focus and Escape dismissal.
+struct WandBoardParentPicker: View {
+    let tasks: [WandBoardTask]
+    let workspaceId: String?
+    var childId: String? = nil
+    let value: String?
+    var disabled = false
+    let onChange: (String?) -> Void
+    @State private var open = false
+    @State private var query = ""
+
+    private var candidates: [WandBoardTask] {
+        tasks.filter { $0.workspaceId == workspaceId && (query.isEmpty || "\($0.identifier) \($0.title)".localizedCaseInsensitiveContains(query)) }
+    }
+    var body: some View {
+        Button { query = ""; open = true } label: {
+            Text(tasks.first { $0.id == value }.map { "\($0.identifier) · \($0.title)" } ?? "无父任务")
+                .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .disabled(disabled)
+        .accessibilityLabel("归属父任务")
+        .popover(isPresented: $open) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    TextField("搜索主任务编号或标题", text: $query)
+                    if !query.isEmpty { Button("清除搜索") { query = "" } }
+                }
+                Text("同项目未归档主任务均可规划归属；保存不启动执行。")
+                    .font(.caption).foregroundColor(Theme.textSecondary)
+                Button("无父任务") { onChange(nil); open = false }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(candidates) { candidate in
+                            let reason = wandBoardParentRejection(candidate, tasks: tasks, workspaceId: workspaceId, childId: childId, currentParentId: value)
+                            Button { onChange(candidate.id); open = false } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("\(candidate.identifier) · \(candidate.title)")
+                                    Text("\(WandBoardStatus(rawValue: candidate.status)?.label ?? candidate.status) · \(wandBoardChildren(of: candidate, in: tasks).count) 个子任务 · \(candidate.sessions.count) 个会话")
+                                        .font(.caption).foregroundColor(Theme.textSecondary)
+                                    if let reason { Text("不可选：\(reason)").font(.caption).foregroundColor(Theme.textSecondary) }
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }.disabled(reason != nil)
+                        }
+                        if candidates.isEmpty { Text("没有匹配的同项目任务，请检查编号、标题或项目目录。") }
+                    }
+                }.frame(maxHeight: 320)
+            }.padding(16).frame(width: 360)
+        }
+    }
+}
+
+
+/// Task-scoped drafts: dismissing the popover never changes the employee definition.
+struct WandBoardEmployeeAssignment: View {
+    let employees: [EmployeeContact]
+    @Binding var employeeId: String
+    @Binding var agent: WandBoardTaskAgent
+    @Binding var overridden: Bool
+    let catalog: ModelsResponse?
+    var disabled = false
+    @State private var editing = false
+    @State private var pending = WandBoardTaskAgent.default
+    @State private var advanced = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("指派员工", selection: $employeeId) {
+                Text("选择员工").tag("")
+                ForEach(employees.filter { !$0.isArchived }) { employee in Text(employee.name).tag(employee.id) }
+            }
+            .onChange(of: employeeId) { id in
+                overridden = false
+                if let first = employees.first(where: { $0.id == id })?.candidates.first { agent = first.taskAgent }
+            }
+            if let employee = employees.first(where: { $0.id == employeeId }) {
+                HStack(spacing: 8) {
+                    ContactAvatar(id: employee.id, avatar: employee.avatar ?? "", name: employee.name, size: 28)
+                    Text(employee.name).fontWeight(.semibold)
+                }
+                Button { pending = agent; editing = true } label: {
+                    Text("\(wandBoardProviderLabel(agent.provider, engine: agent.engine)) · \(wandBoardAgentSummary(agent, catalog))").font(.caption)
+                }
+                .popover(isPresented: $editing) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("本次任务的工具设置").font(.headline)
+                        Text("仅影响本次执行，不改员工默认配置；覆盖后只使用所选配置。").font(.caption)
+                        WandBoardAgentEditor(agent: $pending, catalog: catalog)
+                        HStack { Button("取消") { editing = false }; Spacer(); Button("应用到本次") { agent = pending; overridden = true; editing = false } }
+                    }.padding(16).frame(width: 420)
+                }
+                if overridden { Button("恢复员工默认") { if let first = employee.candidates.first { agent = first.taskAgent }; overridden = false } }
+                Text(overridden ? "已覆盖本次配置" : "按员工已配置候选顺序执行").font(.caption).foregroundColor(Theme.textSecondary)
+            }
+            DisclosureGroup("高级选项 · 直接指派工具", isExpanded: $advanced) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button("改为直接工具指派") { employeeId = ""; overridden = false }
+                    if employeeId.isEmpty { WandBoardAgentEditor(agent: $agent, catalog: catalog) }
+                }.padding(.top, 8)
+            }
+        }.disabled(disabled)
     }
 }

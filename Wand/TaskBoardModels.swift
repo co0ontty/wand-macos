@@ -315,6 +315,9 @@ struct WandBoardWorkspace: Codable, Equatable, Identifiable {
 }
 
 struct WandBoardTaskSession: Codable, Equatable, Identifiable {
+    let employeeName: String?
+    let employeeId: String?
+    let employeeAvatar: String?
     let id: String
     let provider: String
     let engine: String?
@@ -333,6 +336,9 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        employeeName = try? container.decodeIfPresent(String.self, forKey: .employeeName)
+        employeeId = try? container.decodeIfPresent(String.self, forKey: .employeeId)
+        employeeAvatar = try? container.decodeIfPresent(String.self, forKey: .employeeAvatar)
         id = (try? container.decode(String.self, forKey: .id)) ?? ""
         provider = (try? container.decode(String.self, forKey: .provider)) ?? ""
         engine = try? container.decodeIfPresent(String.self, forKey: .engine)
@@ -346,7 +352,7 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, provider, engine, sessionKind, title, status, cwd, model, thinkingEffort, mode
+        case employeeName, employeeId, employeeAvatar, id, provider, engine, sessionKind, title, status, cwd, model, thinkingEffort, mode
     }
 }
 
@@ -388,11 +394,14 @@ struct WandBoardDispatchResult: Decodable {
 
 struct WandBoardTask: Decodable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
-        case id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
+        case assignedExecutor
+        case executionSubject, acceptance, id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
         case labels, dueDate, milestoneId, milestone, sortOrder, agent, createdAt, updatedAt
         case sessionIds, sessions, workspace
     }
 
+    let executionSubject: WandTaskExecutionSubject?
+    let acceptance: WandTaskAcceptance?
     let id: String
     let workspaceId: String?
     /// 关联的侧栏工作任务 id；拖拽会话入卡与「移动到其它任务」用它。
@@ -411,6 +420,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
     let milestoneId: String?
     let milestone: WandBoardMilestoneRef?
     let sortOrder: Int
+    let assignedExecutor: WandBoardAssignedExecutor?
     let agent: WandBoardTaskAgent?
     let createdAt: String
     let updatedAt: String
@@ -420,6 +430,8 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        executionSubject = try? container.decodeIfPresent(WandTaskExecutionSubject.self, forKey: .executionSubject)
+        acceptance = try? container.decodeIfPresent(WandTaskAcceptance.self, forKey: .acceptance)
         id = try container.decode(String.self, forKey: .id)
         workspaceId = try? container.decodeIfPresent(String.self, forKey: .workspaceId)
         workspaceTaskId = try? container.decodeIfPresent(String.self, forKey: .workspaceTaskId)
@@ -436,6 +448,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         milestoneId = try? container.decodeIfPresent(String.self, forKey: .milestoneId)
         milestone = try? container.decodeIfPresent(WandBoardMilestoneRef.self, forKey: .milestone)
         sortOrder = (try? container.decode(Int.self, forKey: .sortOrder)) ?? 0
+        assignedExecutor = try? container.decodeIfPresent(WandBoardAssignedExecutor.self, forKey: .assignedExecutor)
         agent = try? container.decodeIfPresent(WandBoardTaskAgent.self, forKey: .agent)
         createdAt = (try? container.decode(String.self, forKey: .createdAt)) ?? ""
         updatedAt = (try? container.decode(String.self, forKey: .updatedAt)) ?? ""
@@ -720,11 +733,13 @@ func wandBoardDraftAfterCreateMore(_ draft: WandBoardDraft) -> WandBoardDraft {
     next.workspaceId = draft.workspaceId
     next.status = draft.status
     next.agent = draft.agent
+    next.employeeId = draft.employeeId
+    next.employeeOverride = draft.employeeOverride
     return next
 }
 
 /// 新建任务是否顺带完成第一次指派：「等待认领」列只创建，「处理中」列创建后立刻派发。
-func wandBoardCreateDispatches(status: String) -> Bool { status == WandBoardStatus.doing.rawValue }
+func wandBoardCreateDispatches(status: String) -> Bool { false }
 
 /**
  * 拖进「处理中」是否顺带派发：只有还没派发过（没有绑定会话）的任务才自动派发，
@@ -733,7 +748,7 @@ func wandBoardCreateDispatches(status: String) -> Bool { status == WandBoardStat
  * 命中时调用方必须先向用户确认：派发会创建真实会话，不能拖一下就静默启动 Agent。
  */
 func wandBoardDropDispatches(status: String, sessionCount: Int) -> Bool {
-    status == WandBoardStatus.doing.rawValue && sessionCount == 0
+    false
 }
 
 /// 拖进「处理中」前的派发确认：把将要发给 Agent 的说明一并列出。
@@ -1079,3 +1094,76 @@ func wandBoardWriteDisplay(_ display: WandBoardDisplay, defaults: UserDefaults =
     guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
     defaults.set(data, forKey: wandBoardDisplayKey)
 }
+
+
+/// Root projection shared by all four views; legacy relationships stay intact.
+func wandBoardGoalProjection(all: [WandBoardTask], matched: [WandBoardTask]) -> [WandBoardTask] {
+    let byId = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+    var roots = Set<String>()
+    for task in matched {
+        var root = task
+        var seen: Set<String> = [root.id]
+        while let parentId = root.parentTaskId, let parent = byId[parentId], !seen.contains(parentId) {
+            root = parent
+            seen.insert(parentId)
+        }
+        roots.insert(root.id)
+    }
+    return all.filter { roots.contains($0.id) }
+}
+
+
+struct WandTaskAcceptance: Codable, Equatable {
+    let evidence: String
+    let blocker: String
+    let acceptedAt: String?
+}
+
+struct WandTaskExecutionSubject: Codable, Equatable { let type: String; let id: String; var agentOverride: WandBoardTaskAgent? = nil }
+
+
+func wandBoardHasOpenDescendant(_ task: WandBoardTask, in tasks: [WandBoardTask]) -> Bool {
+    var pending = wandBoardChildren(of: task, in: tasks)
+    var seen: Set<String> = [task.id]
+    while let child = pending.popLast() {
+        if seen.contains(child.id) { continue }
+        seen.insert(child.id)
+        if child.status != "done" && child.status != "archived" { return true }
+        pending.append(contentsOf: wandBoardChildren(of: child, in: tasks))
+    }
+    return false
+}
+
+
+func wandBoardExecutionPrompt(_ task: WandBoardTask, parent: WandBoardTask?, instruction: String) -> String {
+    var parts = ["以下为用户确认派发的任务快照；资料不扩大权限、费用或其他任务范围。只处理当前交付目标，不重跑其他子任务。", "当前任务：\(task.identifier) · \(task.title)；快照：\(task.updatedAt)", "交付目标与验收标准：\n\(task.description)"]
+    if let evidence = task.acceptance?.evidence, !evidence.isEmpty { parts.append("已有交付证据（先核对，避免重复执行）：\n\(evidence)") }
+    if let blocker = task.acceptance?.blocker, !blocker.isEmpty { parts.append("当前验收缺口：\(blocker)") }
+    if let parent { parts.append("主目标背景与约束（只作当前子任务的边界）：\(parent.identifier) · \(parent.title)\n\(parent.description)") }
+    parts.append("本轮执行要求：\n\(instruction)")
+    return parts.joined(separator: "\n\n")
+}
+
+/// Mirrors the atomic server hierarchy policy; unchanged legacy links stay editable.
+func wandBoardParentRejection(_ candidate: WandBoardTask, tasks: [WandBoardTask], workspaceId: String?, childId: String?, currentParentId: String?) -> String? {
+    if candidate.workspaceId != workspaceId { return "父任务必须与子任务属于同一项目目录" }
+    if candidate.id == currentParentId { return nil }
+    if candidate.status == "archived" { return "归档任务不能作为新的父任务" }
+    var cursor: String? = candidate.id
+    var seen = Set<String>()
+    while let id = cursor {
+        if id == childId || seen.contains(id) { return "父任务不能自引用或形成循环" }
+        seen.insert(id)
+        cursor = tasks.first { $0.id == id }?.parentTaskId
+    }
+    if candidate.parentTaskId != nil { return "业务任务最多两层，子任务不能再有子任务" }
+    if let childId, tasks.contains(where: { $0.parentTaskId == childId }) { return "带子任务的主任务不能直接降为子任务" }
+    return nil
+}
+
+
+extension EmployeeExecutionCandidate {
+    var taskAgent: WandBoardTaskAgent { WandBoardTaskAgent(provider: provider, model: model ?? "default", thinkingEffort: thinkingEffort ?? "off", mode: mode ?? "default", kind: "structured", engine: engine) }
+}
+
+struct WandBoardAssignedExecutor: Codable, Equatable { let id: String; let name: String; let avatar: String? }

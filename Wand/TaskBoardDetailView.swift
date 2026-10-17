@@ -1,5 +1,7 @@
 import SwiftUI
 
+@MainActor private enum TaskDispatchDraftCache { static var drafts: [String: String] = [:] }
+
 /**
  * 任务详情：主区（标题 / 描述 / 已指派 Agent / 派发编辑器）+ 右侧属性栏。
  * 交互口径对齐 Web `IssueDetail`：标题失焦保存、属性右栏改完立即写回、派发需要提示词。
@@ -7,6 +9,7 @@ import SwiftUI
 struct WandBoardDetailView: View {
     let task: WandBoardTask
     let allTasks: [WandBoardTask]
+    let loadComments: (String) async throws -> [WandTaskComment]
     let onOpenTask: ((String) -> Void)?
     let workspaces: [Workspace]
     let milestones: [WandBoardMilestone]
@@ -16,14 +19,24 @@ struct WandBoardDetailView: View {
     let composeToken: UUID?
     let onPatch: ([String: Any]) async -> Void
     let onRemember: (WandBoardTaskAgent) -> Void
+    let onCreateChild: () -> Void
+    let employees: [EmployeeContact]
+    let onDispatchEmployee: ((String, String, WandBoardTaskAgent?) async -> Void)?
+    @State private var selectedEmployeeId = ""
+    @State private var employeeOverride = false
+    @State private var confirmDispatch = false
+    @State private var approvedDispatchPrompt = ""
+    @State private var approvedConfiguration = ""
     let onDispatch: (String, WandBoardTaskAgent) async -> Void
     let onArchive: () async -> Void
     let onOpenSession: (String) -> Void
     let onCreateMilestone: (String) async throws -> WandBoardMilestone
 
+    @StateObject private var commentsStore = TaskCommentsStore()
     @State private var title: String
     @State private var description: String
-    @State private var savedDescription: String
+    @State private var editingDescription = false
+    @State private var submittedDescription: String?
     @State private var agent: WandBoardTaskAgent
     @State private var composeOpen: Bool
     @State private var composePrompt: String
@@ -32,6 +45,7 @@ struct WandBoardDetailView: View {
     init(
         task: WandBoardTask,
         allTasks: [WandBoardTask] = [],
+        loadComments: @escaping (String) async throws -> [WandTaskComment] = { _ in [] },
         onOpenTask: ((String) -> Void)? = nil,
         workspaces: [Workspace],
         milestones: [WandBoardMilestone],
@@ -40,13 +54,20 @@ struct WandBoardDetailView: View {
         composeToken: UUID? = nil,
         onPatch: @escaping ([String: Any]) async -> Void,
         onRemember: @escaping (WandBoardTaskAgent) -> Void,
+        onCreateChild: @escaping () -> Void = {},
+        employees: [EmployeeContact] = [],
+        onDispatchEmployee: ((String, String, WandBoardTaskAgent?) async -> Void)? = nil,
         onDispatch: @escaping (String, WandBoardTaskAgent) async -> Void,
         onArchive: @escaping () async -> Void,
         onOpenSession: @escaping (String) -> Void,
         onCreateMilestone: @escaping (String) async throws -> WandBoardMilestone
     ) {
         self.task = task
+        let preferredEmployeeId = employees.first(where: { $0.id == "e_wand_default" && !$0.isArchived })?.id ?? ""
+        let initialEmployeeId = task.executionSubject?.type == "employee" ? task.executionSubject?.id ?? "" : (task.agent == nil && task.executionSubject == nil ? preferredEmployeeId : "")
+        _selectedEmployeeId = State(initialValue: initialEmployeeId)
         self.allTasks = allTasks
+        self.loadComments = loadComments
         self.onOpenTask = onOpenTask
         self.workspaces = workspaces
         self.milestones = milestones
@@ -55,14 +76,18 @@ struct WandBoardDetailView: View {
         self.composeToken = composeToken
         self.onPatch = onPatch
         self.onRemember = onRemember
+        self.onCreateChild = onCreateChild
+        self.employees = employees
+        self.onDispatchEmployee = onDispatchEmployee
         self.onDispatch = onDispatch
         self.onArchive = onArchive
         self.onOpenSession = onOpenSession
         self.onCreateMilestone = onCreateMilestone
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.description)
-        _savedDescription = State(initialValue: task.description)
-        _agent = State(initialValue: task.agent ?? .default)
+        let initialCandidate = employees.first(where: { $0.id == initialEmployeeId })?.candidates.first?.taskAgent
+        _agent = State(initialValue: task.executionSubject?.agentOverride ?? initialCandidate ?? task.agent ?? .default)
+        _employeeOverride = State(initialValue: task.executionSubject?.agentOverride != nil)
         let assigned = !task.sessions.isEmpty
         _composeOpen = State(initialValue: !assigned)
         _composePrompt = State(initialValue: "")
@@ -80,8 +105,11 @@ struct WandBoardDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            HStack(alignment: .top, spacing: 24) {
+        GeometryReader { geometry in
+          let compact = geometry.size.width < 820
+          let columns = compact ? [GridItem(.flexible(), alignment: .topLeading)] : [GridItem(.flexible(), alignment: .topLeading), GridItem(.fixed(250), alignment: .topLeading)]
+          ScrollView {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("ID: \(task.identifier.isEmpty ? String(task.id.prefix(8)) : task.identifier)")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -89,8 +117,13 @@ struct WandBoardDetailView: View {
                         .textSelection(.enabled)
                     titleField
                     descriptionSection
+                    TaskCommentsSection(comments: commentsStore.comments, loading: commentsStore.loading, failed: commentsStore.failed) {
+                        Task { await commentsStore.load(taskId: task.id, fetch: loadComments) }
+                    }
                     taskRelationships
+                    WandTaskAcceptanceEditor(task: task, children: wandBoardChildren(of: task, in: allTasks), busy: busy, onPatch: onPatch).id(task.id)
                     WandBoardAgentSessionList(
+                        assignee: task.assignedExecutor,
                         sessions: task.sessions,
                         assigned: task.agent,
                         onOpenSession: onOpenSession,
@@ -101,29 +134,52 @@ struct WandBoardDetailView: View {
                 .frame(maxWidth: 760, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 properties
-                    .frame(width: 250)
+                    .frame(width: compact ? nil : 250)
             }
-            .padding(28)
+            .padding(compact ? 16 : 28)
+          }
         }
         .background(Theme.workspaceBackground)
+        .confirmationDialog("确认新建一次执行", isPresented: $confirmDispatch, titleVisibility: .visible) {
+            Button("确认派发") {
+                let prompt = approvedDispatchPrompt
+                if !selectedEmployeeId.isEmpty, let onDispatchEmployee { Task { await onDispatchEmployee(prompt, selectedEmployeeId, employeeOverride ? agent : nil) } }
+                else { let sending = agent; Task { await onDispatch(prompt, sending) } }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("\(approvedDispatchPrompt)\n\n执行配置：\(approvedConfiguration)\n沿用现有权限与费用边界；已有会话从原记录精确继续，此处新建执行，不代表验收通过。")
+        }
+        .task(id: task.id + ":" + task.updatedAt) { await commentsStore.load(taskId: task.id, fetch: loadComments) }
+        .onChange(of: task.description) { value in
+            if !editingDescription || submittedDescription == value {
+                description = value
+                editingDescription = false
+                submittedDescription = nil
+            }
+        }
         .onChange(of: task.id) { _ in
+            selectedEmployeeId = task.executionSubject?.type == "employee" ? task.executionSubject?.id ?? "" : ""
             title = task.title
             description = task.description
-            savedDescription = task.description
-            agent = task.agent ?? .default
+            editingDescription = false
+            submittedDescription = nil
+            employeeOverride = task.executionSubject?.agentOverride != nil
+            agent = task.executionSubject?.agentOverride ?? employees.first(where: { $0.id == selectedEmployeeId })?.candidates.first?.taskAgent ?? task.agent ?? .default
             let assigned = !task.sessions.isEmpty
             composeOpen = !assigned
-            composePrompt = ""
+            composePrompt = TaskDispatchDraftCache.drafts[task.id] ?? ""
         }
+        .onChange(of: composePrompt) { value in TaskDispatchDraftCache.drafts[task.id] = value }
         .onAppear {
+            composePrompt = TaskDispatchDraftCache.drafts[task.id] ?? ""
             guard composeToken != nil else { return }
             composeOpen = true
-            composePrompt = ""
         }
         .onChange(of: composeToken) { token in
             guard token != nil else { return }
             composeOpen = true
-            composePrompt = ""
+            composePrompt = TaskDispatchDraftCache.drafts[task.id] ?? ""
         }
         .onChange(of: task.sessions.count) { _ in
             // 派发成功后收起编辑器并清空提示词，避免误以为还能再发一次同一段话。
@@ -140,10 +196,11 @@ struct WandBoardDetailView: View {
     private var taskRelationships: some View {
         let parent = wandBoardParent(of: task, in: allTasks)
         let children = wandBoardChildren(of: task, in: allTasks)
-        if parent != nil || !children.isEmpty {
+        if parent != nil || !children.isEmpty || task.parentTaskId == nil {
             VStack(alignment: .leading, spacing: 8) {
                 WandBoardSectionTitle(title: "关联任务", detail: "归类保留原任务及其会话，不删除历史")
                 if let parent { relatedTaskRow(parent, caption: "父任务") }
+                if task.parentTaskId == nil && task.status != "archived" { Button("添加子任务（仅规划）", action: onCreateChild) }
                 if !children.isEmpty {
                     Text("\(children.count) 个子任务")
                         .font(.system(size: 12, weight: .medium))
@@ -197,20 +254,16 @@ struct WandBoardDetailView: View {
     private var descriptionSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                WandBoardSectionTitle(title: "任务描述", detail: "留空时派发用标题作为指令")
-                if description != savedDescription {
-                    Button("保存描述") {
-                        let value = description
-                        Task {
-                            await onPatch(["description": value])
-                            savedDescription = value
-                        }
-                    }
-                    .buttonStyle(WandSecondaryButtonStyle())
-                    .disabled(busy)
+                WandBoardSectionTitle(title: "任务描述")
+                Button(editingDescription ? "取消编辑" : "编辑描述") {
+                    description = task.description
+                    editingDescription.toggle()
                 }
+                .buttonStyle(WandSecondaryButtonStyle())
+                .disabled(busy)
             }
-            TextEditor(text: $description)
+            if editingDescription {
+              TextEditor(text: $description)
                 .font(.system(size: 13))
                 .lineSpacing(4)
                 .focused($focusedField, equals: "description")
@@ -228,7 +281,38 @@ struct WandBoardDetailView: View {
                     }
                 }
                 .disabled(busy)
-                .accessibilityLabel("任务描述")
+                .accessibilityLabel("编辑任务描述")
+              HStack {
+                  Text("仅保存描述，不会启动执行。")
+                      .font(.system(size: 11)).foregroundColor(Theme.textTertiary)
+                  Spacer()
+                  Button(busy ? "正在保存…" : "保存描述") {
+                      let value = description
+                      submittedDescription = value
+                      if value == task.description { editingDescription = false }
+                      else { Task { await onPatch(["description": value]) } }
+                  }
+                  .buttonStyle(WandPrimaryButtonStyle())
+                  .disabled(busy)
+              }
+            } else {
+                Text(task.description.isEmpty ? "暂无描述，可补充背景、验收标准或复现步骤。" : task.description)
+                    .font(.system(size: 13)).lineSpacing(4)
+                    .foregroundColor(task.description.isEmpty ? Theme.textSecondary : Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("任务描述")
+            }
+        }
+        .wandMotion(value: editingDescription)
+        .onChange(of: editingDescription) { editing in
+            if editing { focusedField = "description" }
+        }
+        .onExitCommand {
+            guard editingDescription, !busy else { return }
+            editingDescription = false
+            description = task.description
         }
     }
 
@@ -252,7 +336,7 @@ struct WandBoardDetailView: View {
                         )
                         .overlay(alignment: .topLeading) {
                             if composePrompt.isEmpty {
-                                Text("输入这次派给 Agent 的提示词。任务卡里的旧描述不会自动带上。")
+                                Text("输入本轮执行范围，确认时预览任务快照与主目标约束。")
                                     .font(.system(size: 13))
                                     .foregroundColor(Theme.textMuted)
                                     .padding(.horizontal, 13)
@@ -261,12 +345,7 @@ struct WandBoardDetailView: View {
                             }
                         }
                         .accessibilityLabel("派发提示词")
-                    WandBoardAgentEditor(
-                        agent: $agent,
-                        catalog: catalog,
-                        disabled: busy,
-                        onChange: onRemember
-                    )
+                    WandBoardEmployeeAssignment(employees: employees, employeeId: $selectedEmployeeId, agent: $agent, overridden: $employeeOverride, catalog: catalog, disabled: busy)
                     HStack(spacing: 8) {
                         Spacer(minLength: 0)
                         if !task.sessions.isEmpty {
@@ -278,9 +357,11 @@ struct WandBoardDetailView: View {
                             .disabled(busy)
                         }
                         Button(busy ? "正在派发…" : "派发 Agent") {
-                            let prompt = composePrompt
-                            let sending = agent
-                            Task { await onDispatch(prompt, sending) }
+                            approvedDispatchPrompt = wandBoardExecutionPrompt(task, parent: wandBoardParent(of: task, in: allTasks), instruction: composePrompt)
+                            approvedConfiguration = (employeeOverride ? nil : employees.first(where: { $0.id == selectedEmployeeId })).map { employee in
+                                employee.name + "；" + employee.candidates.map { "\($0.toolLabel) · \($0.model ?? "服务默认模型") · \($0.mode ?? "default")" }.joined(separator: "；")
+                            } ?? "\(WandProvider.title(for: agent.provider)) · \(agent.model) · \(agent.mode)"
+                            confirmDispatch = true
                         }
                         .buttonStyle(WandPrimaryButtonStyle())
                         .disabled(busy || composePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -365,6 +446,13 @@ struct WandBoardDetailView: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .disabled(busy)
+            }
+
+            WandBoardField("归属父任务") {
+                WandBoardParentPicker(tasks: allTasks, workspaceId: task.workspaceId, childId: task.id,
+                    value: task.parentTaskId, disabled: busy) { value in
+                    Task { await onPatch(["parentTaskId": value.map { $0 as Any } ?? NSNull()]) }
+                }
             }
 
             WandBoardField("里程碑") {

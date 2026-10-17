@@ -68,7 +68,7 @@ final class ChatStore: ObservableObject {
     init(sessionId: String, api: WandAPI) {
         self.sessionId = sessionId
         self.api = api
-        self.socket = WandSocket(baseURL: api.baseURL)
+        self.socket = WandSocket(baseURL: api.baseURL, feedbackConnection: api.feedbackConnection)
     }
 
     // MARK: - 生命周期

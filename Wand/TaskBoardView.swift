@@ -15,9 +15,13 @@ struct TaskBoardView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    @State private var executionQueue = false
+    @State private var createParent: WandBoardTask?
     @State private var tasks: [WandBoardTask] = []
     @State private var workspaces: [Workspace] = []
     @State private var milestones: [WandBoardMilestone] = []
+    @State private var employees: [EmployeeContact] = []
+    @State private var dispatchRequestIds: [String: String] = [:]
     @State private var catalog: ModelsResponse?
     @State private var loading = true
     @State private var refreshing = false
@@ -55,9 +59,10 @@ struct TaskBoardView: View {
     }
 
     private var visible: [WandBoardTask] {
-        tasks.filter {
+        let matched = tasks.filter {
             wandBoardMatches(task: $0, query: query, workspaceId: workspaceFilter, filters: filters)
         }
+        return executionQueue ? matched : wandBoardGoalProjection(all: tasks, matched: matched)
     }
 
     private var grouped: [String: [WandBoardTask]] {
@@ -112,12 +117,16 @@ struct TaskBoardView: View {
         .background(Theme.workspaceBackground)
         .sheet(isPresented: $showCreate) {
             WandBoardCreateView(
+                employees: employees,
                 workspaces: workspaces,
                 milestones: milestones,
                 catalog: catalog,
-                defaultWorkspaceId: workspaceFilter.isEmpty ? (linkedWorkspaceId ?? "") : workspaceFilter,
+                defaultWorkspaceId: createParent?.workspaceId ?? (workspaceFilter.isEmpty ? (linkedWorkspaceId ?? "") : workspaceFilter),
                 initialStatus: createStatus,
                 lastAgent: lastAgent,
+                parentTaskId: createParent?.id,
+                parent: createParent,
+                allTasks: tasks,
                 onCreate: { draft in await createTask(draft) },
                 onCreateMilestone: { name, workspaceId in
                     try await api.createBoardMilestone(name: name, workspaceId: workspaceId)
@@ -296,6 +305,7 @@ struct TaskBoardView: View {
 
     private var resultSummary: some View {
         HStack(spacing: 8) {
+            Toggle("子任务执行队列", isOn: $executionQueue)
             Text(loading ? "正在同步任务…" : "共 \(visible.count) 个任务\(filtered ? " · 已筛选" : "")")
                 .font(.system(size: 11))
                 .foregroundColor(filtered ? Theme.wandAccent : Theme.textMuted)
@@ -323,6 +333,7 @@ struct TaskBoardView: View {
             WandBoardDetailView(
                 task: task,
                 allTasks: tasks,
+                loadComments: { try await api.boardTaskComments(id: $0) },
                 onOpenTask: { selectedId = $0 },
                 workspaces: workspaces,
                 milestones: milestones,
@@ -331,7 +342,16 @@ struct TaskBoardView: View {
                 composeToken: composeRequest?.id == task.id ? composeRequest?.token : nil,
                 onPatch: { body in await patchTask(task, body) },
                 onRemember: rememberAgent,
-                onDispatch: { prompt, agent in await dispatch(task, agent: agent, prompt: prompt) },
+                onCreateChild: { createParent = task; createStatus = WandBoardStatus.todo.rawValue; showCreate = true },
+                employees: employees,
+                onDispatchEmployee: { prompt, employeeId, override in await dispatch(task, agent: override ?? task.agent ?? .default, prompt: prompt, employeeId: employeeId, employeeOverride: override != nil) },
+                onDispatch: { prompt, agent in
+                    guard task.executionSubject?.type != "team" else {
+                        errorMessage = "此任务已指派团队，请在 Web 中执行团队任务；也可明确选择员工，不会自动改用 CLI。"
+                        return
+                    }
+                    await dispatch(task, agent: agent, prompt: prompt)
+                },
                 onArchive: { await removeTask(task) },
                 onOpenSession: onOpenSession,
                 onCreateMilestone: { name in
@@ -372,6 +392,7 @@ struct TaskBoardView: View {
                 WandBoardDashboardView(
                     projectName: projectName,
                     tasks: visible,
+                    allTasks: tasks,
                     onOpenTask: { selectedId = $0 },
                     onOpenSession: onOpenSession
                 )
@@ -491,8 +512,18 @@ struct TaskBoardView: View {
         await loadSupporting()
     }
 
+    private func loadWorkspaceChoices() async {
+        guard let next = try? await api.listWorkspaces() else { return }
+        workspaces = next
+        if !workspaceFilter.isEmpty && !next.contains(where: { $0.id == workspaceFilter }) {
+            workspaceFilter = ""
+            notice = "原筛选目录已不存在，已返回所有目录；请重新确认整理范围。"
+        }
+    }
+
     private func loadSupporting() async {
-        workspaces = (try? await api.listWorkspaces()) ?? workspaces
+        await loadWorkspaceChoices()
+        employees = (try? await api.employeeContacts()) ?? employees
         catalog = try? await api.models()
         milestones = (try? await api.listBoardMilestones()) ?? milestones
         if let agent = try? await api.boardTaskAgentDefaults() {
@@ -534,10 +565,11 @@ struct TaskBoardView: View {
     }
 
     private func openCreate(_ status: String) {
+        createParent = nil
         createStatus = status
         showCreate = true
         Task {
-            workspaces = (try? await api.listWorkspaces()) ?? workspaces
+            await loadWorkspaceChoices()
             milestones = (try? await api.listBoardMilestones()) ?? milestones
             catalog = try? await api.models()
         }
@@ -578,20 +610,24 @@ struct TaskBoardView: View {
                 dueDate: draft.dueDate.isEmpty ? nil : draft.dueDate,
                 milestoneId: draft.milestoneId.isEmpty ? nil : draft.milestoneId,
                 workspaceId: draft.workspaceId.isEmpty ? nil : draft.workspaceId,
-                agent: draft.agent
+                agent: draft.agent,
+                parentTaskId: draft.parentTaskId,
+                employeeId: draft.employeeId.isEmpty ? nil : draft.employeeId,
+                employeeOverride: draft.employeeOverride
             )
             created = task
-            rememberAgent(draft.agent)
             await reload(showProgress: false)
             // 只有「处理中」列 + 有描述才顺带第一次指派；失败只提示，不回滚已创建的任务。
             let prompt = draft.description.trimmingCharacters(in: .whitespacesAndNewlines)
-            if wandBoardCreateDispatches(status: draft.status) && !prompt.isEmpty {
+            if draft.saveAndDispatch && !prompt.isEmpty {
                 do {
                     let result = try await api.dispatchBoardTask(
                         id: task.id,
                         agent: draft.agent,
-                        prompt: prompt,
-                        workspaceId: draft.workspaceId.isEmpty ? nil : draft.workspaceId
+                        prompt: wandBoardExecutionPrompt(task, parent: tasks.first { $0.id == draft.parentTaskId }, instruction: prompt),
+                        workspaceId: draft.workspaceId.isEmpty ? nil : draft.workspaceId,
+                        employeeId: draft.employeeId.isEmpty ? nil : draft.employeeId,
+                        employeeOverride: draft.employeeOverride
                     )
                     showNotice("\(wandBoardProviderLabel(result.provider)) 已开始处理「\(task.title)」")
                 } catch {
@@ -628,7 +664,9 @@ struct TaskBoardView: View {
         }
     }
 
-    private func dispatch(_ task: WandBoardTask, agent: WandBoardTaskAgent, prompt: String) async {
+    private func dispatch(_ task: WandBoardTask, agent: WandBoardTaskAgent, prompt: String, employeeId: String? = nil, employeeOverride: Bool = false) async {
+        let requestId = dispatchRequestIds[task.id] ?? UUID().uuidString
+        dispatchRequestIds[task.id] = requestId
         rememberAgent(agent)
         await runFor(task.id) {
             // 派发接口自己会把 agent 写回任务（并把「等待认领」推到「处理中」），不用先 PATCH。
@@ -636,8 +674,12 @@ struct TaskBoardView: View {
                 id: task.id,
                 agent: agent,
                 prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
-                workspaceId: task.workspaceId
+                workspaceId: task.workspaceId,
+                employeeId: employeeId,
+                employeeOverride: employeeOverride,
+                requestId: requestId
             )
+            dispatchRequestIds.removeValue(forKey: task.id)
             showNotice("\(wandBoardProviderLabel(result.provider)) 已开始处理「\(task.title)」")
             await reload(showProgress: false)
         }
