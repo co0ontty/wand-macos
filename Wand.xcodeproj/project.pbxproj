@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		119000000000000000000001 /* DesktopPageLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119000000000000000000002 /* DesktopPageLink.swift */; };
 		D610000000000000000000A5 /* DesktopExecutionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B5 /* DesktopExecutionProgress.swift */; };
 		D610000000000000000000A4 /* DesktopActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B4 /* DesktopActivityTests.swift */; };
 		D610000000000000000000A3 /* DesktopActivitySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B3 /* DesktopActivitySurface.swift */; };
@@ -33,6 +34,7 @@
 		D800000000000000000000A5 /* THIRD-PARTY-NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B5 /* THIRD-PARTY-NOTICES.md */; };
 		D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B4 /* NativeTerminalTests.swift */; };
 		D800000000000000000000A1 /* NativeTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B1 /* NativeTerminalView.swift */; };
+		E12100000000000000000001 /* QuickTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = E12100000000000000000002 /* QuickTerminal.swift */; };
 		D800000000000000000000A2 /* PtyTerminalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D800000000000000000000B2 /* PtyTerminalStore.swift */; };
 		D800000000000000000000A3 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = D800000000000000000000D1 /* SwiftTerm */; };
 		A100000000000000000000A1 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1 /* App.swift */; };
@@ -101,6 +103,7 @@
 		D7000000000000000000A105 /* ProviderCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7000000000000000000B105 /* ProviderCatalogTests.swift */; };
 		FA11000000000000000000A1 /* ClientFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11000000000000000000B1 /* ClientFeedback.swift */; };
 		FA11000000000000000000A2 /* TaskComments.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11000000000000000000B2 /* TaskComments.swift */; };
+		D12020261018000100000001 /* TaskCommentComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12020261018000100000002 /* TaskCommentComposer.swift */; };
 		FA11000000000000000000A3 /* ClientFeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11000000000000000000B3 /* ClientFeedbackTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -115,6 +118,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		119000000000000000000002 /* DesktopPageLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopPageLink.swift; sourceTree = "<group>"; };
 		D610000000000000000000B5 /* DesktopExecutionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopExecutionProgress.swift; sourceTree = "<group>"; };
 		D610000000000000000000B4 /* DesktopActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActivityTests.swift; sourceTree = "<group>"; };
 		D610000000000000000000B3 /* DesktopActivitySurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActivitySurface.swift; sourceTree = "<group>"; };
@@ -141,6 +145,7 @@
 		D800000000000000000000B5 /* THIRD-PARTY-NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = "THIRD-PARTY-NOTICES.md"; sourceTree = "<group>"; };
 		D800000000000000000000B4 /* NativeTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalTests.swift; sourceTree = "<group>"; };
 		D800000000000000000000B1 /* NativeTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalView.swift; sourceTree = "<group>"; };
+		E12100000000000000000002 /* QuickTerminal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickTerminal.swift; sourceTree = "<group>"; };
 		D800000000000000000000B2 /* PtyTerminalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PtyTerminalStore.swift; sourceTree = "<group>"; };
 		A100000000000000000000B1 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A100000000000000000000B2 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -212,6 +217,7 @@
 		D7000000000000000000B105 /* ProviderCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderCatalogTests.swift; sourceTree = "<group>"; };
 		FA11000000000000000000B1 /* ClientFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFeedback.swift; sourceTree = "<group>"; };
 		FA11000000000000000000B2 /* TaskComments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskComments.swift; sourceTree = "<group>"; };
+		D12020261018000100000002 /* TaskCommentComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskCommentComposer.swift; sourceTree = "<group>"; };
 		FA11000000000000000000B3 /* ClientFeedbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFeedbackTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -281,6 +287,7 @@
 				FA11000000000000000000B1 /* ClientFeedback.swift */,
 				D800000000000000000000B1 /* NativeTerminalView.swift */,
 				D800000000000000000000B2 /* PtyTerminalStore.swift */,
+				E12100000000000000000002 /* QuickTerminal.swift */,
 				A200000000000000000000B4 /* ChatStore.swift */,
 				A200000000000000000000B5 /* ChatView.swift */,
 				F7000000000000000000B001 /* ChatImagePreview.swift */,
@@ -296,6 +303,7 @@
 				A200000000000000000000D4 /* TroubleshootingView.swift */,
 				A200000000000000000000D5 /* MacUpdateManager.swift */,
 				A200000000000000000000D6 /* UpdateInstaller.swift */,
+				119000000000000000000002 /* DesktopPageLink.swift */,
 				D5000000000000000000BC01 /* TaskBoardModels.swift */,
 				D5000000000000000000BC02 /* TaskBoardView.swift */,
 				D5000000000000000000BC03 /* TaskBoardComponents.swift */,
@@ -304,6 +312,7 @@
 				D5000000000000000000BC06 /* TaskBoardPickers.swift */,
 				D5000000000000000000BC07 /* TaskBoardDetailView.swift */,
 				FA11000000000000000000B2 /* TaskComments.swift */,
+				D12020261018000100000002 /* TaskCommentComposer.swift */,
 				D5000000000000000000BC08 /* TaskBoardCreateView.swift */,
 				F6000000000000000000BC01 /* SessionTimeFormatting.swift */,
 				F6000000000000000000BC02 /* WorkspaceModels.swift */,
@@ -502,6 +511,7 @@
 				FA11000000000000000000A1 /* ClientFeedback.swift in Sources */,
 				D800000000000000000000A1 /* NativeTerminalView.swift in Sources */,
 				D800000000000000000000A2 /* PtyTerminalStore.swift in Sources */,
+				E12100000000000000000001 /* QuickTerminal.swift in Sources */,
 				A200000000000000000000A4 /* ChatStore.swift in Sources */,
 				A200000000000000000000A5 /* ChatView.swift in Sources */,
 				F7000000000000000000A001 /* ChatImagePreview.swift in Sources */,
@@ -517,6 +527,7 @@
 				A200000000000000000000C4 /* TroubleshootingView.swift in Sources */,
 				A200000000000000000000C5 /* MacUpdateManager.swift in Sources */,
 				A200000000000000000000C6 /* UpdateInstaller.swift in Sources */,
+				119000000000000000000001 /* DesktopPageLink.swift in Sources */,
 				D5000000000000000000AC01 /* TaskBoardModels.swift in Sources */,
 				D5000000000000000000AC02 /* TaskBoardView.swift in Sources */,
 				D5000000000000000000AC03 /* TaskBoardComponents.swift in Sources */,
@@ -525,6 +536,7 @@
 				D5000000000000000000AC06 /* TaskBoardPickers.swift in Sources */,
 				D5000000000000000000AC07 /* TaskBoardDetailView.swift in Sources */,
 				FA11000000000000000000A2 /* TaskComments.swift in Sources */,
+				D12020261018000100000001 /* TaskCommentComposer.swift in Sources */,
 				D5000000000000000000AC08 /* TaskBoardCreateView.swift in Sources */,
 				F6000000000000000000AC01 /* SessionTimeFormatting.swift in Sources */,
 				F6000000000000000000AC02 /* WorkspaceModels.swift in Sources */,

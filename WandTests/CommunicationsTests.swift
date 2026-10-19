@@ -20,6 +20,16 @@ final class CommunicationsTests: XCTestCase {
         ConversationScope(conversationID: id, target: target)
     }
 
+    func testEmployeeSystemSessionLimitDecodesUnlimitedZeroAndConfigured() throws {
+        for value: Any in [NSNull(), 0, 25, 10000] {
+            let data = try JSONSerialization.data(withJSONObject: ["id": "e_wand_ops", "name": "初二", "duty": "", "systemSessionLimit": value])
+            let employee = try JSONDecoder().decode(EmployeeContact.self, from: data)
+            XCTAssertEqual(employee.systemSessionLimit, value as? Int)
+        }
+        let legacy = try JSONDecoder().decode(EmployeeContact.self, from: Data(#"{"id":"legacy","name":"旧员工","duty":""}"#.utf8))
+        XCTAssertNil(legacy.systemSessionLimit)
+    }
+
     func testConversationActivityAndArchiveFiltersAreIndependent() async throws {
         let api = CommunicationsStub()
         api.items = try JSONDecoder().decode([NativeConversation].self, from: JSONSerialization.data(withJSONObject: [
@@ -324,6 +334,32 @@ final class CommunicationsTests: XCTestCase {
         _ = await store.invite(draft, into: snapshot, operation: ConversationOperationState())
         XCTAssertEqual(api.posts[1].body["memberVersion"] as? Int, 7)
         XCTAssertEqual(api.posts[1].path, "/api/conversations/group/invitations")
+    }
+
+    func testEmployeeSystemSessionLimitSavesLockedAndOrdinaryPayloads() async throws {
+        let host = UUID().uuidString.lowercased() + ".wand.test"
+        let lock = NSLock()
+        var bodies: [[String: Any]] = []
+        CommunicationsContractURLProtocol.register(host: host) { request in
+            XCTAssertEqual(request.httpMethod, "PUT")
+            let body = try Self.requestBody(request)
+            lock.withLock { bodies.append(body) }
+            return try JSONSerialization.data(withJSONObject: ["id": "employee", "name": "员工", "duty": "", "systemSessionLimit": body["systemSessionLimit"]!])
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel(); CommunicationsContractURLProtocol.unregister(host: host) }
+        let api = WandAPI(baseURL: URL(string: "https://" + host)!, token: nil, session: session)
+        _ = try await api.saveEmployeeIdentity(id: "stone", name: "石一", avatar: "", systemSessionLimit: 0, locked: true)
+        _ = try await api.saveEmployeeIdentity(id: "stone", name: "石一", avatar: "", systemSessionLimit: nil, locked: true)
+        _ = try await api.saveEmployeeIdentity(id: "ordinary", name: "员工", avatar: "", systemSessionLimit: 25, locked: false)
+        let result = lock.withLock { bodies }
+        XCTAssertEqual(Set(result[0].keys), ["systemSessionLimit"])
+        XCTAssertEqual(result[0]["systemSessionLimit"] as? Int, 0)
+        XCTAssertTrue(result[1]["systemSessionLimit"] is NSNull)
+        XCTAssertEqual(result[2]["systemSessionLimit"] as? Int, 25)
+        XCTAssertEqual(result[2]["name"] as? String, "员工")
     }
 
     func testNativeAPIUsesConversationRoutesAndNeverRequestsKnowledge() async throws {

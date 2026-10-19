@@ -16,6 +16,11 @@ struct WorkspaceTaskWindowRequest: Equatable {
     let path: String
     let body: [String: WorkspaceRequestValue]
 
+    init(path: String, body: [String: WorkspaceRequestValue]) {
+        self.path = path
+        self.body = body
+    }
+
     var foundationBody: [String: Any] {
         body.mapValues(\.foundationValue)
     }
@@ -35,14 +40,17 @@ func workspaceTaskWindowRequest(
     if let provider = target.provider {
         body["provider"] = .string(provider.rawValue)
         if kind == .structured {
+            body["kind"] = .string("structured")
             body["runner"] = .string(provider.structuredRunner)
-            return WorkspaceTaskWindowRequest(path: "/api/structured-sessions", body: body)
+        } else {
+            body["kind"] = .string("pty")
+            body["command"] = .string(provider == .qoder ? "qodercli" : provider.rawValue)
         }
-        body["command"] = .string(provider == .qoder ? "qodercli" : provider.rawValue)
     } else {
+        body["kind"] = .string("pty")
         body["shell"] = .bool(true)
     }
-    return WorkspaceTaskWindowRequest(path: "/api/commands", body: body)
+    return WorkspaceTaskWindowRequest(path: "/api/sessions", body: body)
 }
 
 /// Worktree 合并 Agent 的托管会话请求：mode=managed + initialInput 任务书，
@@ -53,8 +61,9 @@ func worktreeMergeAgentRequest(
     prompt: String
 ) -> WorkspaceTaskWindowRequest {
     WorkspaceTaskWindowRequest(
-        path: "/api/commands",
+        path: "/api/sessions",
         body: [
+            "kind": .string("pty"),
             "command": .string(provider == .qoder ? "qodercli" : provider.rawValue),
             "provider": .string(provider.rawValue),
             "cwd": .string(workspace.cwd),

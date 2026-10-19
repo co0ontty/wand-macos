@@ -287,3 +287,52 @@ private final class FeedbackURLProtocol: URLProtocol {
     }
     override func stopLoading() {}
 }
+
+extension ClientFeedbackTests {
+
+    func testTaskCommentDispatchDecodesTrustedIdentityAndStatus() throws {
+        let data = Data(#"{"id":"c","taskId":"task","authorName":"用户","body":"@赛博虎妞 本轮","createdAt":"now","sourceCommentId":"source","dispatch":{"employeeId":"stable-id","employeeName":"赛博虎妞","state":"accepted","sessionId":"exact-session","status":"stopped","error":null}}"#.utf8)
+        let comment = try JSONDecoder().decode(WandTaskComment.self, from: data)
+        XCTAssertEqual(comment.sourceCommentId, "source")
+        XCTAssertEqual(comment.dispatch?.employeeId, "stable-id")
+        XCTAssertEqual(comment.dispatch?.sessionId, "exact-session")
+        XCTAssertEqual(comment.dispatch?.label, "已停止")
+        let plain = try JSONDecoder().decode(WandTaskComment.self, from: Data(#"{"id":"old","taskId":"task","authorName":"用户","body":"@文本不派发","createdAt":"now"}"#.utf8))
+        XCTAssertNil(plain.dispatch)
+    }
+}
+
+extension ClientFeedbackTests {
+
+    func testUnknownReceiptRetainsIdentityAcrossRefreshAndEditingOtherDrafts() throws {
+        let name = "task-comment-review-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let first = TaskCommentRequestIdentity(taskId: "task", body: "old instruction", employeeId: "stable", sourceCommentId: "source", defaults: defaults)
+        let unknown = try JSONDecoder().decode(WandTaskComment.self, from: Data(#"{"id":"c","taskId":"task","authorName":"用户","body":"old instruction","createdAt":"now","dispatch":{"employeeId":"stable","employeeName":"员工","state":"unknown","sessionId":"exact","status":"unknown","error":null}}"#.utf8))
+        first.settle(unknown)
+        let refreshed = TaskCommentRequestIdentity(taskId: "task", body: "old instruction", employeeId: "stable", sourceCommentId: "source", defaults: defaults)
+        XCTAssertEqual(first.requestId, refreshed.requestId)
+        let other = TaskCommentRequestIdentity(taskId: "task", body: "new instruction", employeeId: "stable", sourceCommentId: "source", defaults: defaults)
+        XCTAssertNotEqual(first.requestId, other.requestId)
+        other.settle(WandTaskComment(id: "plain", taskId: "task", authorName: "用户", body: "new instruction", createdAt: "now"))
+        XCTAssertNil(defaults.string(forKey: other.key))
+        let returned = TaskCommentRequestIdentity(taskId: "task", body: "old instruction", employeeId: "stable", sourceCommentId: "source", defaults: defaults)
+        XCTAssertEqual(first.requestId, returned.requestId, "a newer accepted draft must not release the older unknown identity")
+        XCTAssertTrue(unknown.dispatch!.deliveryUncertain)
+    }
+}
+
+extension ClientFeedbackTests {
+    @MainActor func testSameTaskReversePollingResponsesCannotReplaceNewerState() async {
+        let store = TaskCommentsStore()
+        var complete: CheckedContinuation<[WandTaskComment], Error>?
+        let slow = Task { await store.load(taskId: "same") { _ in try await withCheckedThrowingContinuation { complete = $0 } } }
+        while complete == nil { await Task.yield() }
+        let latest = WandTaskComment(id: "new", taskId: "same", authorName: "用户", body: "newer", createdAt: "now")
+        await store.load(taskId: "same") { _ in [latest] }
+        complete?.resume(returning: [WandTaskComment(id: "old", taskId: "same", authorName: "用户", body: "stale", createdAt: "before")])
+        await slow.value
+        XCTAssertEqual(store.comments, [latest])
+    }
+}

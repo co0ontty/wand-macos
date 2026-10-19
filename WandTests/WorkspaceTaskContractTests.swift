@@ -476,6 +476,28 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(sharedTask.body["worktree"], .bool(false))
     }
 
+    func testWorkspaceTaskWindowUsesUnifiedSessionEndpointAndExplicitKind() {
+        let binding = WorkspaceBinding(workspaceId: "w", workspaceTaskId: "t", cwd: "/repo")
+        let structured = workspaceTaskWindowRequest(target: .qoder, binding: binding, kind: .structured)
+        XCTAssertEqual(structured.path, "/api/sessions")
+        XCTAssertEqual(structured.body["kind"], .string("structured"))
+        XCTAssertEqual(structured.body["runner"], .string("qoder-cli-print"))
+        XCTAssertNil(structured.body["command"])
+
+        let pty = workspaceTaskWindowRequest(target: .qoder, binding: binding, kind: .pty)
+        XCTAssertEqual(pty.path, "/api/sessions")
+        XCTAssertEqual(pty.body["kind"], .string("pty"))
+        XCTAssertEqual(pty.body["command"], .string("qodercli"))
+        XCTAssertNil(pty.body["runner"])
+
+        let shell = workspaceTaskWindowRequest(target: .shell, binding: binding, kind: .pty)
+        XCTAssertEqual(shell.path, "/api/sessions")
+        XCTAssertEqual(shell.body["shell"], .bool(true))
+        XCTAssertEqual(shell.body["kind"], .string("pty"))
+        XCTAssertNil(shell.body["provider"])
+        XCTAssertNil(shell.body["command"])
+    }
+
     func testBothSessionKindsUseTaskDirectoryAndKeepExplicitModelOptions() async throws {
         let binding = WorkspaceBinding(
             workspaceId: "workspace-1",
@@ -491,12 +513,14 @@ final class WorkspaceTaskContractTests: XCTestCase {
             XCTAssertEqual(body["model"] as? String, "chosen-model")
             XCTAssertEqual(body["mode"] as? String, "managed")
             XCTAssertEqual(body["thinkingEffort"] as? String, "high")
-            if request.url?.path == "/api/structured-sessions" {
+            XCTAssertEqual(request.url?.path, "/api/sessions")
+            if body["kind"] as? String == "structured" {
+                XCTAssertEqual(body["kind"] as? String, "structured")
                 XCTAssertEqual(body["runner"] as? String, "qoder-cli-print")
                 XCTAssertEqual(body["prompt"] as? String, "Inspect the selected task")
                 XCTAssertNil(body["command"])
             } else {
-                XCTAssertEqual(request.url?.path, "/api/commands")
+                XCTAssertEqual(body["kind"] as? String, "pty")
                 XCTAssertEqual(body["command"] as? String, "qodercli")
                 XCTAssertEqual(body["initialInput"] as? String, "Inspect the selected task")
                 XCTAssertNil(body["runner"])
@@ -525,11 +549,12 @@ final class WorkspaceTaskContractTests: XCTestCase {
             XCTAssertNil(body["model"])
             XCTAssertNil(body["mode"])
             XCTAssertNil(body["thinkingEffort"])
-            if request.url?.path == "/api/structured-sessions" {
+            XCTAssertEqual(request.url?.path, "/api/sessions")
+            if body["kind"] as? String == "structured" {
                 XCTAssertEqual(body["prompt"] as? String, message)
                 XCTAssertNil(body["initialInput"])
             } else {
-                XCTAssertEqual(request.url?.path, "/api/commands")
+                XCTAssertEqual(body["kind"] as? String, "pty")
                 XCTAssertEqual(body["initialInput"] as? String, message)
                 XCTAssertNil(body["prompt"])
             }
@@ -578,6 +603,50 @@ final class WorkspaceTaskContractTests: XCTestCase {
     }
 
     @MainActor
+    func testNewSessionTaskWorktreeDefaultHonorsExplicitFalseConfig() async throws {
+        let api = makeAPI { request in
+            switch request.url?.path {
+            case "/api/config":
+                return Data(#"{"defaultTaskWorktree":false}"#.utf8)
+            case "/api/tasks":
+                return Data("[]".utf8)
+            case "/api/workspaces":
+                return Data("[]".utf8)
+            case "/api/silicon-employees":
+                return Data(#"{"employees":[]}"#.utf8)
+            case "/api/models":
+                return Data(#"{"models":[],"codexModels":[]}"#.utf8)
+            case "/api/recent-paths":
+                return Data("[]".utf8)
+            default:
+                XCTFail("Unexpected creation-default request: \(request.url?.path ?? "unknown")")
+                throw URLError(.unsupportedURL)
+            }
+        }
+        let draft = SessionCreationDraft(context: .init(startsNewTask: true))
+        let host = NSHostingView(rootView: NewSessionView(api: api, draft: draft, embedded: true) { _ in
+            XCTFail("Loading defaults must not create a session")
+        })
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 650)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if draft.initialized && !draft.loading { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        XCTAssertTrue(draft.initialized)
+        XCTAssertFalse(draft.loading)
+        XCTAssertEqual(draft.destination, "new")
+        XCTAssertFalse(draft.worktree, "A new task must use config.defaultTaskWorktree=false")
+        XCTAssertEqual(draft.firstMessage, "")
+    }
+
+    @MainActor
     func testTaskCreationAppliesRememberedWorktreeDefaultAndKeepsScratchDirectoryUnisolated() async throws {
         let api = makeAPI { request in
             if request.httpMethod == "GET" { return Data("[]".utf8) }
@@ -618,7 +687,6 @@ final class WorkspaceTaskContractTests: XCTestCase {
         draft.providerWasEdited = true
         draft.selectedModel = "chosen-model"
         draft.mode = .fullAccess
-        draft.fullAccessAcknowledged = true
         draft.thinkingEffort = "high"
         draft.sessionType = .pty
         draft.taskName = "用户填写的名称"
@@ -639,7 +707,6 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertTrue(draft.providerWasEdited)
         XCTAssertEqual(draft.selectedModel, "chosen-model")
         XCTAssertEqual(draft.mode, .fullAccess)
-        XCTAssertTrue(draft.fullAccessAcknowledged)
         XCTAssertEqual(draft.thinkingEffort, "high")
         XCTAssertEqual(draft.sessionType, .pty)
         XCTAssertEqual(draft.taskName, "用户填写的名称")
@@ -777,11 +844,12 @@ final class WorkspaceTaskContractTests: XCTestCase {
 
 
     @MainActor
-    func testPromptCreationReturnsAcceptedRunningSessionWithoutWaitingForTurn() async throws {
+    func testPromptCreationReturnsAcceptedRunningSession() async throws {
         let api = makeAPI { request in
-            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            XCTAssertEqual(request.url?.path, "/api/sessions")
             let body = try Self.requestBody(request)
-            XCTAssertEqual(body["respondImmediately"] as? Bool, true)
+            XCTAssertEqual(body["kind"] as? String, "structured")
+            XCTAssertNil(body["respondImmediately"])
             XCTAssertEqual(body["prompt"] as? String, "fixture only")
             return Data(#"{"id":"accepted","provider":"pi","status":"running","structuredState":{"inFlight":true}}"#.utf8)
         }
@@ -799,10 +867,12 @@ final class WorkspaceTaskContractTests: XCTestCase {
             switch request.url?.path {
             case "/api/tasks":
                 return Data(#"{"id":"task-new","workspaceId":"global","name":"New task","status":"active","cwd":"/fixture"}"#.utf8)
-            case "/api/structured-sessions":
+            case "/api/sessions":
                 let body = try Self.requestBody(request)
-                XCTAssertEqual(body["respondImmediately"] as? Bool, true)
+                XCTAssertEqual(body["kind"] as? String, "structured")
+                XCTAssertNil(body["respondImmediately"])
                 XCTAssertEqual(body["workspaceTaskId"] as? String, "task-new")
+                XCTAssertNil(body["respondImmediately"])
                 return Data(#"{"id":"session-new","provider":"claude","status":"running","cwd":"/fixture","workspaceId":"global","workspaceTaskId":"task-new","structuredState":{"inFlight":true}}"#.utf8)
             default:
                 XCTFail("Creation must not write employee or server defaults")
@@ -820,7 +890,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         }
         XCTAssertTrue(navigated)
         XCTAssertEqual(draft.firstMessage, "")
-        XCTAssertEqual(posts, ["/api/tasks", "/api/structured-sessions"])
+        XCTAssertEqual(posts, ["/api/tasks", "/api/sessions"])
     }
 
     @MainActor
@@ -833,7 +903,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
                 lock.withLock { taskCount += 1 }
                 return Data(#"{"id":"task-kept","workspaceId":"global","name":"Retained","status":"active","cwd":"/fixture"}"#.utf8)
             }
-            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            XCTAssertEqual(request.url?.path, "/api/sessions")
             let count = lock.withLock { sessionCount += 1; return sessionCount }
             if count == 1 { throw WandAPI.APIError.server(status: 403, message: "fixture rejection") }
             XCTAssertEqual(try Self.requestBody(request)["workspaceTaskId"] as? String, "task-kept")
@@ -868,7 +938,8 @@ final class WorkspaceTaskContractTests: XCTestCase {
                 XCTAssertEqual(try Self.requestBody(request)["defaultProvider"] as? String, "claude", "Save captured settings, not later edits")
                 return Data("{}".utf8)
             }
-            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+            XCTAssertEqual(request.url?.path, "/api/sessions")
+            XCTAssertEqual(try Self.requestBody(request)["kind"] as? String, "structured")
             started.fulfill()
             XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
             return Data(#"{"id":"session-late","status":"running"}"#.utf8)
@@ -1031,8 +1102,49 @@ final class WorkspaceTaskContractTests: XCTestCase {
     }
 
     @MainActor
+    func testManagedRestoredDraftDispatchesWithoutAnExtraPermissionAcknowledgement() async throws {
+        var calls = 0
+        let api = makeAPI { request in
+            calls += 1
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["employeeId"] as? String, "e_wand_default")
+            XCTAssertEqual(body["mode"] as? String, "managed")
+            XCTAssertEqual(body["prompt"] as? String, "TASK-124 restored fixture")
+            return Data(#"{"id":"managed-once","status":"running","provider":"pi"}"#.utf8)
+        }
+        let draft = SessionCreationDraft(context: .init(cwd: "/fixture", employeeId: "e_wand_default"), initialMessage: "TASK-124 restored fixture")
+        draft.loading = false
+        draft.provider = .pi; draft.selectedModel = "openai-codex/gpt-6.1-sol"; draft.mode = .managed
+        XCTAssertNil(draft.submissionBlockReason)
+        await draft.create(api: api, workspaceStore: nil) { XCTAssertEqual($0.id, "managed-once") }
+        draft.firstMessage = "next input before receipt navigation"
+        await draft.create(api: api, workspaceStore: nil) { _ in XCTFail("Accepted identity must never create twice") }
+        XCTAssertEqual(calls, 1)
+    }
+
+    @MainActor
+    func testCreationHasNoSeparatePermissionConfirmationGate() {
+        let draft = SessionCreationDraft(context: .init(cwd: "/fixture"), initialMessage: "")
+        draft.loading = false
+        XCTAssertNotNil(draft.submissionBlockReason, "Empty work is still rejected")
+        XCTAssertNil(draft.submissionStatus, "Idle validation has no visible status row")
+        draft.firstMessage = "restored"
+        for kind in [NewSessionView.SessionType.structured, .pty, .shell] {
+            draft.sessionType = kind
+            for provider in NewSessionView.Provider.allCases {
+                draft.provider = provider
+                for mode in NewSessionView.ModeOption.allCases {
+                    draft.mode = mode
+                    XCTAssertNil(draft.submissionBlockReason, "\(kind) \(provider) \(mode) never blocks on a permission checkbox")
+                    XCTAssertNil(draft.submissionStatus, "Ready work does not reserve a blank status row")
+                }
+            }
+        }
+    }
+
+    @MainActor
     func testLostTaskOrSessionReceiptBlocksReplayUntilExplicitReview() async throws {
-        for lostPath in ["/api/tasks", "/api/structured-sessions"] {
+        for lostPath in ["/api/tasks", "/api/sessions"] {
             let lock = NSLock()
             var taskRequests = 0, sessionRequests = 0
             let api = makeAPI { request in
@@ -1041,7 +1153,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
                     if lostPath == "/api/tasks" { return Data("accepted but response lost".utf8) }
                     return Data(#"{"id":"task-unknown","workspaceId":"global","name":"Committed","status":"active","cwd":"/fixture"}"#.utf8)
                 }
-                XCTAssertEqual(request.url?.path, "/api/structured-sessions")
+                XCTAssertEqual(request.url?.path, "/api/sessions")
                 lock.withLock { sessionRequests += 1 }
                 return Data("accepted but response lost".utf8)
             }
@@ -1081,8 +1193,9 @@ final class WorkspaceTaskContractTests: XCTestCase {
         defer { release.signal() }
         let api = makeAPI { request in
             if request.httpMethod == "GET" { return Data("[]".utf8) }
-            XCTAssertEqual(request.url?.path, "/api/structured-sessions")
-            XCTAssertEqual(try Self.requestBody(request)["respondImmediately"] as? Bool, true)
+            XCTAssertEqual(request.url?.path, "/api/sessions")
+            XCTAssertEqual(try Self.requestBody(request)["kind"] as? String, "structured")
+            XCTAssertNil(try Self.requestBody(request)["respondImmediately"])
             started.fulfill()
             XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
             throw WandAPI.APIError.server(status: 403, message: "本地夹具：启动被拒绝，未执行模型")
@@ -1106,6 +1219,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         }
         host.appearance = NSAppearance(named: .aqua)
         try await settle(); try capture("creation-idle")
+        XCTAssertNil(draft.submissionBlockReason)
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         let editor = try XCTUnwrap(descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
         let idleEditorRect = editor.convert(editor.bounds, to: host)
@@ -1115,6 +1229,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertTrue(editor.performKeyEquivalent(with: commandReturn))
         await fulfillment(of: [started], timeout: 2)
         XCTAssertEqual(draft.submissionPhase, .startingSession)
+        XCTAssertNotNil(draft.submissionStatus, "Creation progress remains visible")
         try await settle(); try capture("creation-starting")
         release.signal()
         for _ in 0..<50 {

@@ -250,7 +250,169 @@ final class DesktopConversationTests: XCTestCase {
         XCTAssertNil(ConversationSearch.excerpt(from: turn, query: "无匹配"))
     }
 
+    @MainActor
+    func testQueueRetrievalWaitsForConfirmationAndPreservesLatestDraftAndAttachments() async throws {
+        let cache = ConversationDraftCache()
+        let server = URL(string: "https://queue.test")!
+        let transport = ControlledQueueRetrieval()
+        let store = ChatStore(sessionId: "A", api: WandAPI(baseURL: server, token: nil), drafts: cache, queueRetrievalTransport: transport)
+        store.queuedMessages = ["待办原文", "后续"]
+        cache.save(.init(text: "旧草稿", attachments: []), serverURL: server, sessionID: "A")
+        let task = try XCTUnwrap(store.retrieveQueued(index: 0))
+        XCTAssertTrue(store.queueMutationPending)
+        XCTAssertEqual(store.queuedMessages, ["待办原文", "后续"])
+        XCTAssertNil(store.retrieveQueued(index: 0), "Double clicks cannot issue a second DELETE")
+        XCTAssertEqual(cache.draft(serverURL: server, sessionID: "A")?.text, "旧草稿")
+        cache.save(.init(text: "请求期间的新草稿", attachments: [attachment("new.png")]), serverURL: server, sessionID: "A")
+        cache.save(.init(text: "另一会话", attachments: []), serverURL: server, sessionID: "B")
+        let otherServer = URL(string: "https://other-queue.test")!
+        cache.save(.init(text: "另一服务器", attachments: []), serverURL: otherServer, sessionID: "A")
+        await Task.yield()
+        transport.complete(.success(try queueReceipt(id: "A", queue: ["后续"])))
+        await task.value
+        XCTAssertEqual(transport.calls.first?.id, "A")
+        XCTAssertEqual(transport.calls.first?.index, 0)
+        XCTAssertEqual(transport.calls.first?.text, "待办原文")
+        XCTAssertEqual(store.queuedMessages, ["后续"])
+        XCTAssertFalse(store.queueMutationPending)
+        XCTAssertEqual(cache.draft(serverURL: server, sessionID: "A")?.text, "请求期间的新草稿\n\n待办原文")
+        XCTAssertEqual(cache.draft(serverURL: server, sessionID: "A")?.attachments.map(\.originalName), ["new.png"])
+        XCTAssertEqual(cache.draft(serverURL: server, sessionID: "B")?.text, "另一会话")
+        XCTAssertEqual(cache.draft(serverURL: otherServer, sessionID: "A")?.text, "另一服务器")
+        XCTAssertNil(cache.queueRecovery(serverURL: server, sessionID: "A"))
+    }
+
+    @MainActor
+    func testQueueReceiptDoesNotOverwriteNewerRealtimeQueueOrMergeWrongSession() async throws {
+        for wrongSession in [false, true] {
+            let cache = ConversationDraftCache()
+            let server = URL(string: "https://queue.test")!
+            let transport = ControlledQueueRetrieval()
+            let store = ChatStore(sessionId: "A", api: WandAPI(baseURL: server, token: nil), drafts: cache, queueRetrievalTransport: transport)
+            store.queuedMessages = ["原文"]
+            let task = try XCTUnwrap(store.retrieveQueued(index: 0))
+            store.queuedMessages = ["更新的WS待办"]
+            await Task.yield()
+            transport.complete(.success(try queueReceipt(id: wrongSession ? "B" : "A", queue: ["过期回执"])))
+            await task.value
+            XCTAssertEqual(store.queuedMessages, ["更新的WS待办"])
+            XCTAssertEqual(cache.draft(serverURL: server, sessionID: "A")?.text, wrongSession ? nil : "原文")
+            XCTAssertEqual(cache.queueRecovery(serverURL: server, sessionID: "A")?.text, wrongSession ? "原文" : nil)
+        }
+    }
+
+    @MainActor
+    func testUnknownQueueDeletionKeepsCopyableSourceWithoutAutomaticRefillOrRetry() async throws {
+        for error: Error in [WandAPI.APIError.server(status: 409, message: "shifted"), WandAPI.APIError.server(status: 503, message: "unknown"), URLError(.timedOut)] {
+            let cache = ConversationDraftCache()
+            let server = URL(string: "https://queue.test")!
+            let transport = ControlledQueueRetrieval()
+            let store = ChatStore(sessionId: "A", api: WandAPI(baseURL: server, token: nil), drafts: cache, queueRetrievalTransport: transport)
+            store.queuedMessages = ["可能已移除的完整原文"]
+            cache.save(.init(text: "继续输入", attachments: [attachment("kept.txt")]), serverURL: server, sessionID: "A")
+            let task = try XCTUnwrap(store.retrieveQueued(index: 0))
+            await Task.yield()
+            transport.complete(.failure(error))
+            await task.value
+            XCTAssertEqual(cache.queueRecovery(serverURL: server, sessionID: "A")?.text, "可能已移除的完整原文")
+            XCTAssertFalse(cache.queueRecovery(serverURL: server, sessionID: "A")?.pending ?? true)
+            XCTAssertEqual(cache.draft(serverURL: server, sessionID: "A")?.text, "继续输入")
+            XCTAssertNil(store.retrieveQueued(index: 0), "Unknown deletion must not be retried automatically or by a repeated click")
+            XCTAssertEqual(transport.calls.count, 1)
+            cache.dismissQueueRecovery(serverURL: server, sessionID: "A")
+            XCTAssertNil(cache.queueRecovery(serverURL: server, sessionID: "A"))
+            XCTAssertEqual(cache.draft(serverURL: server, sessionID: "A")?.attachments.map(\.originalName), ["kept.txt"])
+        }
+    }
+
+    @MainActor
+    func testQueueRetrievalWaitsForNativeIMECommitBeforeMerging() async throws {
+        let cache = ConversationDraftCache()
+        let server = URL(string: "https://queue.test")!
+        let transport = ControlledQueueRetrieval()
+        let store = ChatStore(sessionId: "A", api: WandAPI(baseURL: server, token: nil), drafts: cache, queueRetrievalTransport: transport)
+        let editor = ComposerNSTextView(frame: .zero)
+        editor.onMarkedTextChange = { cache.setComposing($0, serverURL: server, sessionID: "A") }
+        store.queuedMessages = ["待办原文"]
+        let task = try XCTUnwrap(store.retrieveQueued(index: 0))
+        editor.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        cache.save(.init(text: editor.string, attachments: [attachment("ime.png")]), serverURL: server, sessionID: "A")
+        await Task.yield()
+        transport.complete(.success(try queueReceipt(id: "A", queue: [])))
+        await task.value
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.string, "zhong")
+        XCTAssertEqual(cache.draft(serverURL: server, sessionID: "A")?.text, "zhong")
+        var recovered: ConversationDraft?
+        let subscription = cache.recoveries.sink { recovered = $0.draft }
+        // NSTextView's delegate publishes the final buffer before the composition-end callback.
+        cache.save(.init(text: "中文", attachments: [attachment("ime.png")]), serverURL: server, sessionID: "A")
+        editor.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertEqual(editor.string, "中文")
+        XCTAssertEqual(recovered?.text, "中文\n\n待办原文")
+        XCTAssertEqual(recovered?.attachments.map(\.originalName), ["ime.png"])
+        XCTAssertNil(cache.queueRecovery(serverURL: server, sessionID: "A"))
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testQueueDeleteAPIIncludesExpectedTextAndParsesConfirmation() async throws {
+        let server = URL(string: "https://queue-api.test")!
+        let data = Data(#"{"id":"A","queuedMessages":["remaining"]}"#.utf8)
+        CommunicationsContractURLProtocol.register(host: server.host!) { request in
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(request.url?.path, "/api/structured-sessions/A/queued/2")
+            var body = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    body.append(buffer, count: count)
+                }
+            }
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+            XCTAssertEqual(json["expectedText"], "原文\n附件路径")
+            return data
+        }
+        defer { CommunicationsContractURLProtocol.unregister(host: server.host!) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let receipt = try await WandAPI(baseURL: server, token: nil, session: session).deleteQueued(id: "A", index: 2, expectedText: "原文\n附件路径")
+        XCTAssertEqual(receipt.id, "A")
+        XCTAssertEqual(receipt.queuedMessages, ["remaining"])
+    }
+
+    private func queueReceipt(id: String, queue: [String]) throws -> SessionSnapshot {
+        let data = try JSONSerialization.data(withJSONObject: ["id": id, "queuedMessages": queue])
+        return try JSONDecoder().decode(SessionSnapshot.self, from: data)
+    }
+
     private func attachment(_ name: String) -> UploadedFile {
         UploadedFile(originalName: name, savedPath: "/uploads/" + name, size: 10, mimeType: "application/octet-stream")
+    }
+}
+
+@MainActor
+private final class ControlledQueueRetrieval: QueueRetrievalTransport {
+    struct Call { let id: String; let index: Int; let text: String }
+    private(set) var calls: [Call] = []
+    private var continuation: CheckedContinuation<SessionSnapshot, Error>?
+    private var result: Result<SessionSnapshot, Error>?
+
+    func deleteQueued(id: String, index: Int, expectedText: String) async throws -> SessionSnapshot {
+        calls.append(Call(id: id, index: index, text: expectedText))
+        if let result { return try result.get() }
+        return try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+
+    func complete(_ result: Result<SessionSnapshot, Error>) {
+        self.result = result
+        continuation?.resume(with: result)
+        continuation = nil
     }
 }

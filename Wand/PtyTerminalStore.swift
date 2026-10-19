@@ -77,6 +77,7 @@ final class PtyTerminalStore: ObservableObject {
     private var started = false
     private var resizeWork: DispatchWorkItem?
     private var lastSize = ""
+    private var layoutActive = true
     private var permissionTask: Task<Void, Never>?
     private var resumeTask: Task<Void, Never>?
 
@@ -209,7 +210,14 @@ final class PtyTerminalStore: ObservableObject {
         socket.sendPtyInput(text, userInput: userInput)
     }
 
+    /// Hidden quick panels retain the PTY's last useful geometry.
+    func setLayoutActive(_ active: Bool) {
+        layoutActive = active
+        if !active { resizeWork?.cancel(); resizeWork = nil }
+    }
+
     private func sizeChanged(cols: Int, rows: Int) {
+        guard layoutActive else { return }
         guard PtyTerminalSnapshot.validSize(cols: cols, rows: rows) else { return }
         let label = "\(cols)×\(rows)"
         sizeLabel = label

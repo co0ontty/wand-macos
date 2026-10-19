@@ -154,6 +154,14 @@ final class WandAPI {
         }
     }
 
+    func postBoardTaskComment(id: String, requestId: String, body: String, employeeId: String?, sourceCommentId: String?) async throws -> WandTaskComment {
+        struct Response: Decodable { let comment: WandTaskComment }
+        var payload: [String: Any] = ["requestId": requestId, "body": body]
+        if let employeeId { payload["employeeId"] = employeeId }
+        if let sourceCommentId { payload["sourceCommentId"] = sourceCommentId }
+        return try await request(Response.self, method: "POST", path: "/api/wand-tasks/\(percentEncodePathComponent(id))/comments", body: payload).comment
+    }
+
     func boardTaskComments(id: String) async throws -> [WandTaskComment] {
         struct Response: Decodable { let comments: [WandTaskComment] }
         do {
@@ -362,12 +370,16 @@ final class WandAPI {
                           body: ["expectedText": expectedText, "text": text])
     }
 
-    func deleteQueued(id: String, index: Int) async throws {
-        _ = try await requestData(method: "DELETE", path: "/api/structured-sessions/\(id)/queued/\(index)")
+    /// The expected text prevents a shifted queue index from deleting a different message.
+    func deleteQueued(id: String, index: Int, expectedText: String) async throws -> SessionSnapshot {
+        try await request(SessionSnapshot.self, method: "DELETE",
+                          path: "/api/structured-sessions/\(id)/queued/\(index)",
+                          body: ["expectedText": expectedText])
     }
 
-    func clearQueued(id: String) async throws {
-        _ = try await requestData(method: "DELETE", path: "/api/structured-sessions/\(id)/queued")
+    func clearQueued(id: String, expectedQueue: [String]) async throws -> SessionSnapshot {
+        try await request(SessionSnapshot.self, method: "DELETE", path: "/api/structured-sessions/\(id)/queued",
+                          body: ["expectedQueue": expectedQueue])
     }
 
     @discardableResult
@@ -467,7 +479,7 @@ final class WandAPI {
 
     // MARK: - 新建会话
 
-    /// 结构化会话（非 PTY）：POST /api/structured-sessions。
+    /// 普通会话统一创建：POST /api/sessions，以 kind 区分 structured 与 pty。
     @discardableResult
     func createStructuredSession(
         provider: String,
@@ -482,6 +494,7 @@ final class WandAPI {
         engine: String? = nil
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = [
+            "kind": "structured",
             "provider": provider,
             "runner": structuredRunner(for: provider),
             "cwd": workspaceBinding?.cwd ?? cwd,
@@ -497,20 +510,17 @@ final class WandAPI {
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
         if let prompt, !prompt.isEmpty {
             body["prompt"] = prompt
-            // Creation hands off an accepted session; execution streams over /ws.
-            // Without this flag the route waits for the entire first AI turn.
-            body["respondImmediately"] = true
         }
         return try await request(
             SessionSnapshot.self,
             method: "POST",
-            path: "/api/structured-sessions",
+            path: "/api/sessions",
             body: body,
             timeout: 180
         )
     }
 
-    /// PTY 会话：POST /api/commands，command 与 provider 保持一致。
+    /// CLI PTY 会话：POST /api/sessions，保留 provider 到可执行 command 的映射。
     @discardableResult
     func createPtySession(
         provider: String,
@@ -522,6 +532,7 @@ final class WandAPI {
         workspaceBinding: WorkspaceBinding? = nil
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = [
+            "kind": "pty",
             "command": provider == "qoder" ? "qodercli" : provider,
             "provider": provider,
             "cwd": workspaceBinding?.cwd ?? cwd,
@@ -534,17 +545,17 @@ final class WandAPI {
         if let model, !model.isEmpty { body["model"] = model }
         if let thinkingEffort, !thinkingEffort.isEmpty { body["thinkingEffort"] = thinkingEffort }
         if let initialInput, !initialInput.isEmpty { body["initialInput"] = initialInput }
-        return try await request(SessionSnapshot.self, method: "POST", path: "/api/commands", body: body)
+        return try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions", body: body)
     }
 
     func createBlankTerminal(cwd: String, initialInput: String?, workspaceBinding: WorkspaceBinding? = nil) async throws -> SessionSnapshot {
-        var body: [String: Any] = ["shell": true, "cwd": workspaceBinding?.cwd ?? cwd, "sessionSource": "interactive"]
+        var body: [String: Any] = ["kind": "pty", "shell": true, "cwd": workspaceBinding?.cwd ?? cwd, "sessionSource": "interactive"]
         if let workspaceBinding {
             body["workspaceId"] = workspaceBinding.workspaceId
             body["workspaceTaskId"] = workspaceBinding.workspaceTaskId
         }
         if let initialInput, !initialInput.isEmpty { body["initialInput"] = initialInput }
-        return try await request(SessionSnapshot.self, method: "POST", path: "/api/commands", body: body)
+        return try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions", body: body)
     }
 
     // MARK: - Git 快速提交

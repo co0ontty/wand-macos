@@ -62,6 +62,31 @@ final class SettingsLayoutTests: XCTestCase {
         return (host, window)
     }
 
+    func testEmployeeDetailsSettingsSelectsCurrentEmployeeAndShowsRetentionWithoutDirectory() async throws {
+        let hostName = "employee-settings-\(UUID().uuidString).example.test"
+        CommunicationsContractURLProtocol.register(host: hostName) { _ in Data("{}".utf8) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel(); CommunicationsContractURLProtocol.unregister(host: hostName) }
+        let api = WandAPI(baseURL: URL(string: "https://\(hostName)")!, token: nil, session: session)
+        let employee = try JSONDecoder().decode(EmployeeContact.self, from: Data(#"{"id":"e_target","name":"当前员工","duty":"测试","systemSessionLimit":7}"#.utf8))
+        let host = NSHostingView(rootView: SettingsEmployeeIdentities(api: api, loadData: {
+            (NativeUserProfile(name: "不是当前员工"), [employee])
+        }, initialEmployeeID: employee.id))
+        host.frame = NSRect(x: 0, y: 0, width: 720, height: 1000)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        await settle(host)
+        let fields = descendants(host).compactMap { $0 as? NSTextField }
+        XCTAssertTrue(fields.contains { $0.stringValue == "当前员工" })
+        XCTAssertTrue(fields.contains { $0.stringValue == "7" && $0.isEditable }, "Retention is editable directly in this employee's settings")
+        // SwiftUI TextField exposes its accessibility ID through AX, not NSView.identifier.
+        XCTAssertEqual(fields.filter { $0.stringValue == "7" && $0.isEditable }.count, 1)
+        XCTAssertFalse(descendants(host).contains { $0.identifier?.rawValue == "settings-employee-directory" })
+    }
+
     func testNativePreferencePickersKeepStorageKeysAndFitMinimumWindow() async throws {
         let storage = defaults()
         let (host, window) = makeHost(pane: "general", width: 540, height: 500, storage: storage)

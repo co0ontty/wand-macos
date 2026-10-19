@@ -626,14 +626,6 @@ final class WorkspaceStore: ObservableObject {
         if let provider, provider != .shell { selectedTarget = provider }
         if let kind { selectedKind = kind }
         if let worktree { defaultTaskWorktree = worktree }
-        Task {
-            guard let api = api as? WandAPI else { return }
-            try? await api.updateCreationDefaults(
-                defaultProvider: provider.flatMap { $0 == .shell ? nil : $0.rawValue },
-                defaultSessionKind: kind?.rawValue,
-                defaultTaskWorktree: worktree
-            )
-        }
     }
 
     func presentTargetPicker() {

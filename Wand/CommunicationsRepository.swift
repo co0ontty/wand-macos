@@ -26,9 +26,12 @@ extension WandAPI: CommunicationsServing {
         return try await request(Response.self, method: "POST", path: "/api/settings/config",
             body: ["userProfile": ["name": profile.name, "avatar": profile.avatar]]).config.userProfile ?? NativeUserProfile()
     }
-    func saveEmployeeIdentity(id: String, name: String, avatar: String) async throws -> EmployeeContact {
-        var body: [String: Any] = ["name": name]
-        if PlushAvatarIdentity.fixedAsset(id: id) == nil { body["avatar"] = avatar }
+    func saveEmployeeIdentity(id: String, name: String, avatar: String, systemSessionLimit: Int?, locked: Bool) async throws -> EmployeeContact {
+        var body: [String: Any] = ["systemSessionLimit": systemSessionLimit.map { $0 as Any } ?? NSNull()]
+        if !locked {
+            body["name"] = name
+            if PlushAvatarIdentity.fixedAsset(id: id) == nil { body["avatar"] = avatar }
+        }
         return try await request(EmployeeContact.self, method: "PUT", path: "/api/silicon-employees/\(percentEncodePathComponent(id))", body: body)
     }
     func communicationsModels() async throws -> ModelsResponse? { try await models() }

@@ -271,10 +271,11 @@ final class NativeTerminalView: TerminalView, TerminalViewDelegate {
 
 struct NativeTerminalSurface: NSViewRepresentable {
     let terminal: NativeTerminalView
+    var focusOnMount = true
 
     func makeNSView(context: Context) -> NativeTerminalView {
         terminal.inputEnabled = context.environment.isEnabled && context.environment.desktopPageActive
-        DispatchQueue.main.async { [weak terminal] in terminal?.focusTerminal() }
+        if focusOnMount { DispatchQueue.main.async { [weak terminal] in terminal?.focusTerminal() } }
         return terminal
     }
 

@@ -362,6 +362,37 @@ final class NativeTerminalTests: XCTestCase {
         XCTAssertEqual(socket.sizes.count, count)
     }
 
+    func testQuickTerminalDockPreferenceIsClientAndServerScoped() {
+        let name = "QuickTerminalTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = QuickTerminalModel(api: api, defaults: defaults)
+        XCTAssertEqual(model.dock, .right)
+        model.setDock(.bottom)
+        XCTAssertEqual(QuickTerminalModel(api: api, defaults: defaults).dock, .bottom)
+        let another = WandAPI(baseURL: URL(string: "https://another.example.test")!, token: nil)
+        XCTAssertEqual(QuickTerminalModel(api: another, defaults: defaults).dock, .right)
+        XCTAssertEqual(QuickTerminalDock(stored: "bad-value"), .right)
+    }
+
+    func testHiddenQuickTerminalDoesNotResizeOrStopTheProcess() async throws {
+        let socket = RecordingTerminalSocket()
+        let store = store(socket)
+        store.start()
+        socket.onEvent?(try event("init", data: ["status": "running"]))
+        store.setLayoutActive(false)
+        let count = socket.sizes.count
+        store.terminal.setFrameSize(NSSize(width: 0, height: 0))
+        try await Task.sleep(nanoseconds: 180_000_000)
+        XCTAssertEqual(socket.sizes.count, count)
+        XCTAssertTrue(store.ready)
+        store.setLayoutActive(true)
+        store.terminal.setFrameSize(NSSize(width: 800, height: 400))
+        try await Task.sleep(nanoseconds: 180_000_000)
+        XCTAssertGreaterThan(socket.sizes.count, count)
+        store.shutdown()
+    }
+
     func testSocketDropsGapFramesUntilNewSnapshotAndIgnoresOtherSessions() throws {
         let socket = WandSocket(baseURL: api.baseURL)
         socket.subscribe(sessionId: "pty-1", ptyAck: true)

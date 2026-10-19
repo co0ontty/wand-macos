@@ -8,6 +8,8 @@ import SwiftUI
  */
 struct WandBoardDetailView: View {
     let task: WandBoardTask
+    let api: WandAPI?
+    @State private var replyCommentId: String?
     let allTasks: [WandBoardTask]
     let loadComments: (String) async throws -> [WandTaskComment]
     let onOpenTask: ((String) -> Void)?
@@ -45,6 +47,7 @@ struct WandBoardDetailView: View {
     init(
         task: WandBoardTask,
         allTasks: [WandBoardTask] = [],
+        api: WandAPI? = nil,
         loadComments: @escaping (String) async throws -> [WandTaskComment] = { _ in [] },
         onOpenTask: ((String) -> Void)? = nil,
         workspaces: [Workspace],
@@ -63,6 +66,7 @@ struct WandBoardDetailView: View {
         onCreateMilestone: @escaping (String) async throws -> WandBoardMilestone
     ) {
         self.task = task
+        self.api = api
         let preferredEmployeeId = employees.first(where: { $0.id == "e_wand_default" && !$0.isArchived })?.id ?? ""
         let initialEmployeeId = task.executionSubject?.type == "employee" ? task.executionSubject?.id ?? "" : (task.agent == nil && task.executionSubject == nil ? preferredEmployeeId : "")
         _selectedEmployeeId = State(initialValue: initialEmployeeId)
@@ -88,8 +92,7 @@ struct WandBoardDetailView: View {
         let initialCandidate = employees.first(where: { $0.id == initialEmployeeId })?.candidates.first?.taskAgent
         _agent = State(initialValue: task.executionSubject?.agentOverride ?? initialCandidate ?? task.agent ?? .default)
         _employeeOverride = State(initialValue: task.executionSubject?.agentOverride != nil)
-        let assigned = !task.sessions.isEmpty
-        _composeOpen = State(initialValue: !assigned)
+        _composeOpen = State(initialValue: false)
         _composePrompt = State(initialValue: "")
     }
 
@@ -117,8 +120,13 @@ struct WandBoardDetailView: View {
                         .textSelection(.enabled)
                     titleField
                     descriptionSection
-                    TaskCommentsSection(comments: commentsStore.comments, loading: commentsStore.loading, failed: commentsStore.failed) {
+                    TaskCommentsSection(comments: commentsStore.comments, loading: commentsStore.loading, failed: commentsStore.failed, retry: {
                         Task { await commentsStore.load(taskId: task.id, fetch: loadComments) }
+                    }, onReply: { replyCommentId = $0 }, onOpenSession: onOpenSession)
+                    if let api {
+                        TaskCommentComposer(api: api, taskId: task.id, employees: employees.filter { !$0.isArchived }.map { (id: $0.id, name: $0.name) }, sourceCommentId: $replyCommentId) {
+                            await commentsStore.load(taskId: task.id, fetch: loadComments)
+                        }.id(task.id)
                     }
                     taskRelationships
                     WandTaskAcceptanceEditor(task: task, children: wandBoardChildren(of: task, in: allTasks), busy: busy, onPatch: onPatch).id(task.id)
@@ -150,7 +158,12 @@ struct WandBoardDetailView: View {
         } message: {
             Text("\(approvedDispatchPrompt)\n\n执行配置：\(approvedConfiguration)\n沿用现有权限与费用边界；已有会话从原记录精确继续，此处新建执行，不代表验收通过。")
         }
-        .task(id: task.id + ":" + task.updatedAt) { await commentsStore.load(taskId: task.id, fetch: loadComments) }
+        .task(id: task.id) {
+            while !Task.isCancelled {
+                await commentsStore.load(taskId: task.id, fetch: loadComments)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
         .onChange(of: task.description) { value in
             if !editingDescription || submittedDescription == value {
                 description = value
@@ -166,18 +179,20 @@ struct WandBoardDetailView: View {
             submittedDescription = nil
             employeeOverride = task.executionSubject?.agentOverride != nil
             agent = task.executionSubject?.agentOverride ?? employees.first(where: { $0.id == selectedEmployeeId })?.candidates.first?.taskAgent ?? task.agent ?? .default
-            let assigned = !task.sessions.isEmpty
-            composeOpen = !assigned
+            composeOpen = false
+            replyCommentId = nil
             composePrompt = TaskDispatchDraftCache.drafts[task.id] ?? ""
         }
         .onChange(of: composePrompt) { value in TaskDispatchDraftCache.drafts[task.id] = value }
         .onAppear {
             composePrompt = TaskDispatchDraftCache.drafts[task.id] ?? ""
             guard composeToken != nil else { return }
+            selectedEmployeeId = ""
             composeOpen = true
         }
         .onChange(of: composeToken) { token in
             guard token != nil else { return }
+            selectedEmployeeId = ""
             composeOpen = true
             composePrompt = TaskDispatchDraftCache.drafts[task.id] ?? ""
         }
@@ -321,7 +336,7 @@ struct WandBoardDetailView: View {
             if composeOpen {
                 VStack(alignment: .leading, spacing: 10) {
                     WandBoardSectionTitle(
-                        title: task.sessions.isEmpty ? "指派 Agent" : "再指派一个 Agent",
+                        title: "CLI 兼容派发",
                         detail: "先输入提示词，再选参数直接派发"
                     )
                     TextEditor(text: $composePrompt)
@@ -345,7 +360,7 @@ struct WandBoardDetailView: View {
                             }
                         }
                         .accessibilityLabel("派发提示词")
-                    WandBoardEmployeeAssignment(employees: employees, employeeId: $selectedEmployeeId, agent: $agent, overridden: $employeeOverride, catalog: catalog, disabled: busy)
+                    WandBoardEmployeeAssignment(employees: [], employeeId: $selectedEmployeeId, agent: $agent, overridden: $employeeOverride, catalog: catalog, disabled: busy)
                     HStack(spacing: 8) {
                         Spacer(minLength: 0)
                         if !task.sessions.isEmpty {
@@ -369,12 +384,13 @@ struct WandBoardDetailView: View {
                 }
             } else {
                 Button {
+                    selectedEmployeeId = ""
                     composePrompt = ""
                     composeOpen = true
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
-                        Text("再指派一个 Agent").font(.system(size: 12))
+                        Text("CLI 兼容派发").font(.system(size: 12))
                     }
                     .foregroundColor(Theme.textSecondary)
                     .padding(.horizontal, 10)

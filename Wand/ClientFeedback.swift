@@ -55,7 +55,6 @@ struct ClientFeedbackReport: Encodable {
         case "conversations": return "conversations"
         case "wand-tasks", "workspace-tasks", "workspaces", "wand-milestones": return "tasks"
         case "files", "upload": return "files"
-        case "speech": return "speech"
         case "settings", "config", "user-profile": return "settings"
         case "models", "model-groups": return "models"
         case "login", "logout": return "authentication"

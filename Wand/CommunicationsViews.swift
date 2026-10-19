@@ -144,7 +144,8 @@ struct CommunicationsContent: View {
             Divider()
             if store.section == .contacts {
                 if let contact = store.contact(store.selectedContactID) {
-                    ConversationContactProfile(contact: contact) { store.selectEmployee(contact) }
+                    ConversationContactProfile(contact: contact, api: store.api as? WandAPI) { store.selectEmployee(contact) }
+                        .id(contact.id)
                 } else {
                     communicationEmpty("选择一位员工", detail: "查看职责与执行候选，再打开独立私聊。", symbol: "person.crop.rectangle")
                 }
@@ -220,8 +221,10 @@ private struct ConversationMessageSearch: View {
 
 private struct ConversationContactProfile: View {
     let contact: EmployeeContact
+    let api: WandAPI?
     let open: () -> Void
     @State private var expandedDuty = false
+    @State private var settingsExpanded = false
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -258,6 +261,24 @@ private struct ConversationContactProfile: View {
                         }
                     }
                     if contact.candidates.isEmpty { Text("执行配置未就绪；打开私聊后以服务端实际可用状态为准。").font(.system(size: 12)).foregroundColor(Theme.textSecondary) }
+                }
+                if let api {
+                    DisclosureGroup(isExpanded: $settingsExpanded) {
+                        SettingsEmployeeIdentities(api: api, loadData: {
+                            async let profile = api.communicationsUserProfile()
+                            async let contacts = api.employeeContacts()
+                            return try await (profile, contacts)
+                        }, initialEmployeeID: contact.id)
+                        .padding(.top, 12)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("员工设置").font(.system(size: 13, weight: .semibold))
+                            Text(contact.systemSessionLimit.map { $0 == 0 ? "系统调用历史：不保留已结束记录" : "系统调用历史：保留最新 \($0) 条已结束记录" } ?? "系统调用历史：不限")
+                                .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                    .accessibilityIdentifier("contact-employee-settings")
+                    .wandMotion(value: settingsExpanded, layout: true)
                 }
                 Button(contact.isArchived ? "查看私聊记录" : "打开私聊", action: open)
                     .buttonStyle(WandPrimaryButtonStyle())

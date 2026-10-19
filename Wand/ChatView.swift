@@ -363,8 +363,10 @@ struct ChatView: View {
 
     @StateObject private var store: ChatStore
     @StateObject private var attachments: ComposerAttachmentController
+    @ObservedObject private var draftCache = ConversationDraftCache.shared
     @State private var draft = ""
     @State private var draftRestored = false
+    @State private var showQueuedMessages = false
     @AppStorage("wand.sendWithCommandEnter") private var sendWithCommandEnter = false
     @State private var showSubtasks = false
     @State private var selectedSubtaskID = ""
@@ -500,10 +502,16 @@ struct ChatView: View {
         }
         .onReceive(ConversationDraftCache.shared.recoveries) { recovery in
             guard recovery.serverURL == api.baseURL, recovery.sessionID == sessionId else { return }
-            composerFocus.failed(); sendPresentationPhase = .failed
+            if recovery.reason == .sendFailure {
+                composerFocus.failed(); sendPresentationPhase = .failed
+                store.toast = "上一条消息发送失败，已恢复到输入框。"
+            }
             draft = recovery.draft.text
             attachments.attachments = recovery.draft.attachments
-            store.toast = "上一条消息发送失败，已恢复到输入框。"
+            if recovery.reason == .queueRetrieval, pageActive {
+                showQueuedMessages = false
+                composerFocus.focus(); inputFocused = true
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .wandDesktopCommand)) { notification in
             guard pageActive, let command = notification.object as? DesktopCommand else { return }
@@ -522,6 +530,7 @@ struct ChatView: View {
         }
         .onDisappear {
             saveDraft()
+            ConversationDraftCache.shared.setComposing(false, serverURL: api.baseURL, sessionID: sessionId)
             store.shutdown()
             attachments.cancelPendingUploads()
         }
@@ -1021,7 +1030,7 @@ struct ChatView: View {
 
     // MARK: - 底部栏（权限卡 + 队列 + 输入框）
 
-    /// 输入栏上方悬浮的待办进度条数据：当前 turn 的 todos，全部完成后隐藏（对齐 Web）。
+    /// 输入面上沿的待办摘要：当前 turn 的 todos，全部完成后隐藏（对齐 Web）。
     /// 同时在会话不再 running（turn 已结束 / idle / exited）时隐藏——模型常忘了发最后
     /// 一条全 completed 的更新，否则进度条会卡在「5/6」干瞪眼（对齐 Web sessionActive）。
     private var visibleTodos: [TodoItem] {
@@ -1034,11 +1043,6 @@ struct ChatView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
-            if !visibleTodos.isEmpty {
-                TodoProgressBar(todos: visibleTodos)
-                    .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
-                    .padding(.bottom, 6)
-            }
             if store.pendingEscalation != nil || store.legacyPermissionPrompt != nil {
                 PermissionCard(
                     escalation: store.pendingEscalation,
@@ -1047,11 +1051,6 @@ struct ChatView: View {
                 )
                 .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
                 .padding(.bottom, 8)
-            }
-            if !store.queuedMessages.isEmpty {
-                QueueBar(store: store)
-                    .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
-                    .padding(.bottom, 6)
             }
             if store.isReadOnlySystemCall {
                 Label("系统调用记录 · 只读日志，不能继续发送或恢复执行", systemImage: "doc.text")
@@ -1070,9 +1069,22 @@ struct ChatView: View {
         )
     }
 
+    private var composerProgress: AnyView? {
+        guard !visibleTodos.isEmpty || !store.queuedMessages.isEmpty else { return nil }
+        return AnyView(HStack(spacing: 4) {
+            if !visibleTodos.isEmpty { TodoProgressBar(todos: visibleTodos).frame(maxWidth: .infinity) }
+            if !store.queuedMessages.isEmpty {
+                ComposerQueue(store: store, expanded: $showQueuedMessages,
+                    canRetrieve: !composerIsComposing && !attachments.isUploading)
+                    .frame(maxWidth: .infinity)
+            }
+        })
+    }
+
     private var inputBar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ComposerIdentityHeader(hasPortrait: store.snapshot?.employeeId != nil, portrait: {
+            ComposerIdentityHeader(hasPortrait: store.snapshot?.employeeId != nil,
+                progress: composerProgress, portrait: {
                 ComposerCompanion(focus: { composerFocus.focus(); inputFocused = true }) {
                     WorkingAvatar(id: store.snapshot?.employeeId ?? sessionId, name: store.displayEmployeeName, avatar: store.displayEmployeeAvatar,
                         activity: avatarFileActivity(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked),
@@ -1091,9 +1103,24 @@ struct ChatView: View {
                 summary: attachments.attachments.isEmpty ? (draft.isEmpty ? (store.isResponding ? "回复中，可继续输入" : "输入消息…") : "草稿 · \(draft.count) 字") : "草稿 · \(attachments.attachments.count) 附件",
                 onFocus: { composerFocus.focus(); inputFocused = true }, editor: { composerInputContent },
                 add: { composerActionsMenu }, send: { trailingButtons },
-                isFocused: inputFocused, showsAdvancedSettings: store.snapshot?.provider == "pi")
+                isFocused: inputFocused, showsAdvancedSettings: store.snapshot?.provider == "pi",
+                accessory: store.unconfirmedInputs.isEmpty
+                    && draftCache.queueRecovery(serverURL: api.baseURL, sessionID: sessionId) == nil ? nil : AnyView(VStack(alignment: .leading, spacing: 4) {
+                    QueueRecoveryNotice(serverURL: api.baseURL, sessionID: sessionId)
+                    ForEach(store.unconfirmedInputs.sorted(), id: \.self) { text in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("送达待核对 · 不会自动重发").font(.caption)
+                            ScrollView { Text(text).font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                                .frame(maxHeight: 96)
+                            Button("已核对，解除此条防重保护") { store.acknowledgeUnconfirmedInput(text) }
+                                .buttonStyle(.borderless).disabled(store.sending)
+                        }
+                    }
+                }))
         }
         .padding(.horizontal, ChatLayoutMetrics.horizontalInset).padding(.top, 8).padding(.bottom, 8)
+        .onChange(of: store.queuedMessages.isEmpty) { if $0 { showQueuedMessages = false } }
+        .onChange(of: pageActive) { if !$0 { showQueuedMessages = false } }
         .onChange(of: showComposerActions) {
             if !$0 {
                 showModelThinkingPanel = false; showThinkingPanel = false; showModePanel = false
@@ -1400,10 +1427,17 @@ struct ChatView: View {
             isFocused: inputFocused,
             sendWithCommandEnter: sendWithCommandEnter,
             onFocusChange: { value in inputFocused = value; composerFocus.focused = value; if value { composerFocus.editing = true } },
-            onCompositionChange: { composerIsComposing = $0 },
+            onCompositionChange: { active in
+                composerIsComposing = active
+                ConversationDraftCache.shared.setComposing(active, serverURL: api.baseURL, sessionID: sessionId)
+            },
             onSubmit: handleReturnKey,
             onHeightChange: { composerInputHeight = $0 },
-            onEscape: { if showSubtasks { closeSubtasks() } else { composerFocus.collapse(); inputFocused = false } },
+            onEscape: {
+                if showQueuedMessages { showQueuedMessages = false }
+                else if showSubtasks { closeSubtasks() }
+                else { composerFocus.collapse(); inputFocused = false }
+            },
             onPasteAttachment: { attachments.importFromPasteboard($0) }
         )
         .frame(height: composerInputHeight)
@@ -1418,7 +1452,7 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !store.isReadOnlySystemCall && !store.loading && store.loadError == nil && !store.sending
+        !store.isReadOnlySystemCall && !store.loading && store.loadError == nil && !store.sending && !store.queueMutationPending
             && !composerIsComposing && !attachments.isUploading && (
             !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.attachments.isEmpty
@@ -1428,6 +1462,7 @@ struct ChatView: View {
     private func sendDraft() {
         guard canSend else { return }
         showComposerActions = false
+        showQueuedMessages = false
         // 多行 TextField 触发的 onSubmit 可能在草稿末尾多带一个换行(回车字符先于 onSubmit
         // 提交落进 draft),trim 一下避免发出去的消息带尾换行。
         let text = buildAttachmentPrompt(attachments.attachments, body: draft)
@@ -1446,6 +1481,9 @@ struct ChatView: View {
             sendPresentationPhase = .sent
             composerFocus.accepted(hasPendingContent: !draft.isEmpty || !attachments.attachments.isEmpty || composerIsComposing)
             inputFocused = composerFocus.focused
+        }, onUnknown: {
+            sendPresentationPhase = .unknown
+            composerFocus.accepted(hasPendingContent: !draft.isEmpty || !attachments.attachments.isEmpty || composerIsComposing)
         }) {
             ConversationDraftCache.shared.recover(
                 submitted: ConversationDraft(text: submittedDraft, attachments: submittedAttachments),
@@ -1619,29 +1657,84 @@ struct ConversationDraft {
 }
 
 @MainActor
-final class ConversationDraftCache {
+final class ConversationDraftCache: ObservableObject {
     static let shared = ConversationDraftCache()
     private struct Key: Hashable {
         let serverURL: URL
         let sessionID: String
     }
     private var drafts: [Key: ConversationDraft] = [:]
+    struct QueueRecovery {
+        let text: String
+        var pending = true
+        var confirmed = false
+    }
+    @Published private var queueRecoveries: [Key: QueueRecovery] = [:]
+    private var composing = Set<Key>()
+
+    func queueRecovery(serverURL: URL, sessionID: String) -> QueueRecovery? {
+        queueRecoveries[Key(serverURL: serverURL, sessionID: sessionID)]
+    }
+
+    func beginQueueRetrieval(_ text: String, serverURL: URL, sessionID: String) -> Bool {
+        let key = Key(serverURL: serverURL, sessionID: sessionID)
+        guard queueRecoveries[key] == nil else { return false }
+        queueRecoveries[key] = QueueRecovery(text: text)
+        return true
+    }
+
+    func finishQueueRetrieval(confirmed: Bool, serverURL: URL, sessionID: String) {
+        let key = Key(serverURL: serverURL, sessionID: sessionID)
+        guard queueRecoveries[key]?.pending == true else { return }
+        queueRecoveries[key]?.pending = false
+        queueRecoveries[key]?.confirmed = confirmed
+        restoreQueueIfReady(serverURL: serverURL, sessionID: sessionID)
+    }
+
+    func setComposing(_ active: Bool, serverURL: URL, sessionID: String) {
+        let key = Key(serverURL: serverURL, sessionID: sessionID)
+        if active { composing.insert(key) } else {
+            composing.remove(key)
+            restoreQueueIfReady(serverURL: serverURL, sessionID: sessionID)
+        }
+    }
+
+    func dismissQueueRecovery(serverURL: URL, sessionID: String) {
+        let key = Key(serverURL: serverURL, sessionID: sessionID)
+        guard queueRecoveries[key]?.pending == false else { return }
+        queueRecoveries.removeValue(forKey: key)
+    }
+
+    private func restoreQueueIfReady(serverURL: URL, sessionID: String) {
+        let key = Key(serverURL: serverURL, sessionID: sessionID)
+        guard !composing.contains(key), let recovery = queueRecoveries[key], recovery.confirmed else { return }
+        queueRecoveries.removeValue(forKey: key)
+        // Append after the latest input, preserving the IME's committed text and attachments.
+        let current = draft(serverURL: serverURL, sessionID: sessionID) ?? ConversationDraft(text: "", attachments: [])
+        let merged = ConversationDraft(text: [current.text, recovery.text].filter { !$0.isEmpty }.joined(separator: "\n\n"), attachments: current.attachments)
+        save(merged, serverURL: serverURL, sessionID: sessionID)
+        recoveries.send(Recovery(serverURL: serverURL, sessionID: sessionID, draft: merged, reason: .queueRetrieval))
+    }
+
+    enum RecoveryReason { case sendFailure, queueRetrieval }
     struct Recovery {
         let serverURL: URL
         let sessionID: String
         let draft: ConversationDraft
+        let reason: RecoveryReason
     }
     let recoveries = PassthroughSubject<Recovery, Never>()
 
     /// A request can finish after its original view disappeared. Read the current cache,
     /// then notify whichever view is now displaying this session.
     @discardableResult
-    func recover(submitted: ConversationDraft, serverURL: URL, sessionID: String) -> ConversationDraft {
+    func recover(submitted: ConversationDraft, serverURL: URL, sessionID: String,
+                 reason: RecoveryReason = .sendFailure) -> ConversationDraft {
         let current = draft(serverURL: serverURL, sessionID: sessionID)
             ?? ConversationDraft(text: "", attachments: [])
         let recovered = ConversationDraft.recover(submitted: submitted, current: current)
         save(recovered, serverURL: serverURL, sessionID: sessionID)
-        recoveries.send(Recovery(serverURL: serverURL, sessionID: sessionID, draft: recovered))
+        recoveries.send(Recovery(serverURL: serverURL, sessionID: sessionID, draft: recovered, reason: reason))
         return recovered
     }
 
@@ -5677,18 +5770,16 @@ private struct TerminalCard: View {
 
 // MARK: - 待办进度条（TodoWrite，对齐 Web 端 todo-progress）
 
-/// 输入栏上方的悬浮进度条：环形进度 + N/M + 当前任务，点击展开任务列表。
+/// 输入面上沿的紧凑摘要；原生 popover 向上展示完整任务，不挤动编辑器。
 struct TodoProgressBar: View {
     let todos: [TodoItem]
 
     @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduced
 
     private var completed: Int { todos.filter { $0.status == "completed" }.count }
-    /// 1-indexed「正在干第 N 个」：completed+1 封顶（对齐 Web currentStep）。
-    private var currentStep: Int { min(completed + 1, todos.count) }
     /// 右侧当前步骤描述：优先取首个 in_progress 的 activeForm / content；
-    /// 没有进行中项时（模型已标完上一步、还没标下一步 in_progress，此时 N/M 靠
-    /// completed+1 仍显示「正在干第 N 个」），回退到首个 pending 任务的描述；
+    /// 没有进行中项时，回退到首个 pending 任务的描述；
     /// 都没有再兜底「准备中…」——保证右侧空白区始终有内容（对齐 Web fallback）。
     private var activeTask: String {
         if let active = todos.first(where: { $0.status == "in_progress" }) {
@@ -5703,49 +5794,48 @@ struct TodoProgressBar: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                expanded.toggle()
-            } label: {
-                HStack(spacing: 8) {
-                    progressRing
-                    Text("\(currentStep)/\(todos.count)")
+        Button {
+            expanded.toggle()
+        } label: {
+            GeometryReader { geometry in
+                HStack(spacing: 6) {
+                    if geometry.size.width >= 110 { progressRing }
+                    Text("\(completed) / \(todos.count)")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundColor(Theme.brand)
-                    Text(activeTask)
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(-1)
-                    Spacer(minLength: 8)
-                    Image(systemName: expanded ? "chevron.down" : "chevron.up")
+                        .foregroundColor(Theme.brand).fixedSize(horizontal: true, vertical: false)
+                    if geometry.size.width >= 150 {
+                        Text(activeTask)
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(-1)
+                    }
+                    Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(Theme.textSecondary)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                        .animation(reduced ? nil : Theme.Motion.feedback, value: expanded)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            if expanded {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(todos.enumerated()), id: \.offset) { _, todo in
-                        todoRow(todo)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 10)
-            }
+            .padding(.horizontal, 6)
+            .frame(height: FocusComposerMetrics.touch)
         }
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .fill(Theme.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .stroke(Theme.border, lineWidth: 1)
-        )
+        .buttonStyle(.plain)
+        .help(activeTask)
+        .accessibilityLabel("待办进度，已完成 \(completed) / \(todos.count)，\(activeTask)")
+        .popover(isPresented: $expanded, arrowEdge: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("待办进度 · \(completed) / \(todos.count)").font(.headline)
+                    ForEach(Array(todos.enumerated()), id: \.offset) { _, todo in todoRow(todo) }
+                }.padding(16)
+            }
+            .frame(width: 360)
+            .frame(maxHeight: 320)
+        }
     }
 
     private var progressRing: some View {
@@ -5753,7 +5843,7 @@ struct TodoProgressBar: View {
             Circle()
                 .stroke(Theme.border, lineWidth: 3)
             Circle()
-                .trim(from: 0, to: CGFloat(currentStep) / CGFloat(max(todos.count, 1)))
+                .trim(from: 0, to: CGFloat(completed) / CGFloat(max(todos.count, 1)))
                 .stroke(Theme.brand, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
@@ -5787,68 +5877,88 @@ struct TodoProgressBar: View {
     }
 }
 
-private struct QueueBar: View {
-    @ObservedObject var store: ChatStore
-    @State private var expanded = false
+struct QueueRecoveryNotice: View {
+    let serverURL: URL
+    let sessionID: String
+    @ObservedObject var drafts = ConversationDraftCache.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                expanded.toggle()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "tray.full")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("已排队 \(store.queuedMessages.count) 条消息")
-                        .font(.system(size: 12))
+        if let recovery = drafts.queueRecovery(serverURL: serverURL, sessionID: sessionID) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recovery.pending ? "正在取回…" : recovery.confirmed ? "输入法确认后放回输入框" : "取回结果待核对 · 原文已保留")
+                    .font(.caption).foregroundColor(Theme.textSecondary)
+                ScrollView { Text(recovery.text).font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                    .frame(maxHeight: 96)
+                if !recovery.pending && !recovery.confirmed {
+                    Button("已核对，关闭原文保留") { drafts.dismissQueueRecovery(serverURL: serverURL, sessionID: sessionID) }
+                        .buttonStyle(.borderless)
+                }
+            }.accessibilityElement(children: .contain)
+        }
+    }
+}
+
+/// A compact input-edge summary; native disclosure keeps the editor and footer anchored.
+struct ComposerQueue: View {
+    @ObservedObject var store: ChatStore
+    @Binding var expanded: Bool
+    var canRetrieve = true
+    @Environment(\.accessibilityReduceMotion) private var reduced
+
+    var body: some View {
+        Button { expanded.toggle() } label: {
+            GeometryReader { geometry in
+                HStack(spacing: 4) {
+                    Text("待发消息").fixedSize()
+                    Text("\(store.queuedMessages.count)").monospacedDigit().fixedSize()
+                    if geometry.size.width >= 180 {
+                        Text(store.queuedMessages.map { $0.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ") }.joined(separator: " · "))
+                            .lineLimit(1).truncationMode(.tail)
+                    }
                     Spacer(minLength: 0)
+                    if store.queueMutationPending { ProgressView().controlSize(.mini) }
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
-                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                        .rotationEffect(.degrees(expanded && !reduced ? 180 : 0))
                 }
-                .foregroundColor(Theme.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-
-            if expanded {
-                VStack(alignment: .leading, spacing: 5) {
-                    ForEach(Array(store.queuedMessages.enumerated()), id: \.offset) { index, text in
-                        QueueItemRow(
-                            index: index,
-                            text: text,
-                            onPromote: { store.promoteQueued(index: index) },
-                            onDelete: { store.deleteQueued(index: index) },
-                            onEdit: { store.editQueued(index: index, text: $0) }
-                        )
-                    }
-                    HStack {
-                        Spacer()
-                        Button {
-                            store.clearQueued()
-                        } label: {
-                            Label("全部清空", systemImage: "trash")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(Theme.danger)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.top, 2)
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
-            }
+            .frame(height: FocusComposerMetrics.touch)
         }
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .fill(Theme.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .stroke(Theme.border, lineWidth: 1)
-        )
+        .buttonStyle(.plain)
+        .accessibilityLabel("待发送消息，\(store.queuedMessages.count) 条")
+        .accessibilityValue(expanded ? "已展开" : "已收起")
+        .help(store.queuedMessages.joined(separator: "\n"))
+        .sidebarPresence("composer-queue-toggle")
+        .popover(isPresented: $expanded, arrowEdge: .bottom) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("在支持的安全时机继续处理").font(.caption).foregroundColor(Theme.textSecondary)
+                        ForEach(Array(store.queuedMessages.enumerated()), id: \.offset) { index, text in
+                            QueueItemRow(index: index, text: text,
+                                onPromote: { store.promoteQueued(index: index) },
+                                onDelete: { store.deleteQueued(index: index) },
+                                onRetrieve: { store.retrieveQueued(index: index) },
+                                canRetrieve: canRetrieve)
+                        }
+                        Button("清空待发送消息", role: .destructive) { store.clearQueued() }
+                            .font(.system(size: 12)).buttonStyle(.borderless)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.vertical, 4)
+                    }
+                    .padding(.horizontal, 6)
+                }
+                .frame(width: 400).frame(maxHeight: 240).padding(8)
+                .disabled(store.queueMutationPending || store.sending)
+                .onExitCommand { expanded = false }
+        }
+        .wandMotion(value: expanded, layout: true)
+        .onExitCommand { expanded = false }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("输入框待发送列表")
+        .sidebarPresence("composer-queue")
     }
 }
 
@@ -5857,59 +5967,40 @@ private struct QueueItemRow: View {
     let text: String
     let onPromote: () -> Void
     let onDelete: () -> Void
-    let onEdit: (String) -> Void
-    @State private var editing = false
-    @State private var draft = ""
+    let onRetrieve: () -> Void
+    let canRetrieve: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text("\(index + 1)")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(Theme.brand)
-                .frame(width: 18)
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "circle")
+                .font(.system(size: 11)).foregroundColor(Theme.textMuted)
+                .frame(width: 18, height: 26).accessibilityHidden(true)
             Text(text)
-                .font(.system(size: 12))
-                .foregroundColor(Theme.textPrimary)
-                .lineLimit(2)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-            Button {
-                draft = text
-                editing = true
-            } label: {
-                Image(systemName: "pencil")
-                    .frame(width: 26, height: 26)
+                .font(.system(size: 12)).foregroundColor(Theme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+                .textSelection(.enabled)
+            Button(action: onRetrieve) {
+                Image(systemName: "pencil").frame(width: 26, height: 26)
             }
-            .buttonStyle(.plain)
-            .help("编辑")
+            .help("取回输入框重新编辑，保留现有草稿与附件")
+            .accessibilityLabel("重新编辑第 \(index + 1) 条待发送消息")
+            .disabled(!canRetrieve)
             Button(action: onPromote) {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Theme.brand)
+                Image(systemName: "bolt.fill").foregroundColor(Theme.brand)
                     .frame(width: 26, height: 26)
             }
-            .buttonStyle(.plain)
-            .help("立即发送")
+            .help("立即发送；必要时中断当前回复")
+            .accessibilityLabel("立即发送第 \(index + 1) 条待发送消息")
             Button(action: onDelete) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(Theme.danger)
+                Image(systemName: "xmark").foregroundColor(Theme.danger)
                     .frame(width: 26, height: 26)
             }
-            .buttonStyle(.plain)
-            .help("删除")
+            .help("删除待发送消息")
+            .accessibilityLabel("删除第 \(index + 1) 条待发送消息")
         }
-        .alert("编辑排队消息", isPresented: $editing) {
-            TextField("消息", text: $draft)
-            Button("取消", role: .cancel) { }
-            Button("保存") { onEdit(draft) }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                .fill(Theme.background.opacity(0.55))
-        )
+        .buttonStyle(.borderless)
+        .padding(.vertical, 4)
     }
 }
 

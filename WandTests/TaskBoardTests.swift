@@ -5,6 +5,28 @@ import XCTest
 @testable import Wand
 
 final class TaskBoardTests: XCTestCase {
+    func testDesktopPageLinksKeepStableTargetsAndStripCredentials() throws {
+        let base = try XCTUnwrap(URL(string: "https://user:secret@wand.test:8443/?token=private#secret"))
+        let url = try XCTUnwrap(DesktopPageLink.url(base: base, parameters: [
+            "view": "taskboard", "task": "stable-id", "q": "URL & 刷新", "boardView": "list",
+            "filters": DesktopPageLink.json(["statuses": ["doing"], "labels": ["a,b"]]),
+            "token": "secret", "ticket": "secret", "unknown": "ignored",
+            "sidebarMode": "folded", "display": "grid", "zoom": "150", "hideCompleted": "1",
+            "queue": "1", "expandedTask": "private-local-state", "boardCollapsed": "1", "scheduleExpanded": "1"
+        ]))
+        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        XCTAssertNil(components.user); XCTAssertNil(components.password); XCTAssertNil(components.fragment)
+        let params = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(params["task"], "stable-id")
+        XCTAssertEqual(params["q"], "URL & 刷新")
+        XCTAssertEqual(params["boardView"], "list")
+        XCTAssertNil(params["token"]); XCTAssertNil(params["ticket"]); XCTAssertNil(params["unknown"])
+        for key in ["sidebarMode", "display", "zoom", "hideCompleted", "queue", "expandedTask", "boardCollapsed", "scheduleExpanded"] {
+            XCTAssertNil(params[key], "Local preferences must not be copied into shareable Web links")
+        }
+        XCTAssertNil(DesktopPageLink.url(base: URL(string: "file:///tmp")!, parameters: [:]))
+    }
+
     func testTaskScopedEmployeeOverrideAndIdentityDecode() throws {
         let json = #"{"id":"task","executionSubject":{"type":"employee","id":"e1","agentOverride":{"provider":"pi","engine":"sdk","model":"fixture"}},"assignedExecutor":{"id":"e1","name":"员工一","avatar":"cat:0"},"sessions":[{"id":"s1","employeeId":"e1","employeeName":"员工一","employeeAvatar":"cat:0","provider":"pi"}]}"#
         let task = try JSONDecoder().decode(WandBoardTask.self, from: Data(json.utf8))
@@ -697,5 +719,19 @@ extension TaskBoardTests {
         XCTAssertEqual(wandBoardChildren(of: tasks[0], in: tasks).count, 3)
         XCTAssertFalse(WandBoardDraft().saveAndDispatch)
         XCTAssertEqual(tasks[0].status, "todo")
+    }
+
+    func testMentionQueryFollowsTheCaretAndOnlyTheChosenTokenStaysBound() {
+        XCTAssertEqual(TaskCommentMention.query(in: "literal @name", caret: "literal @name".count)?.text, "name")
+        XCTAssertNil(TaskCommentMention.query(in: "mail@host", caret: 9))
+        XCTAssertEqual(TaskCommentMention.query(in: "@瑞辰 已写完", caret: 2)?.text, "瑞")
+        XCTAssertNil(TaskCommentMention.query(in: "@瑞辰 已写完", caret: 4))
+        XCTAssertNil(TaskCommentMention.query(in: "@开头", caret: 0))
+        let inserted = TaskCommentMention.insert(body: "请 @虎", caret: 5, name: "赛博虎妞")
+        XCTAssertEqual(inserted.body, "请 @赛博虎妞 ")
+        XCTAssertTrue(TaskCommentMention.holds(inserted.body, name: "赛博虎妞"))
+        XCTAssertFalse(TaskCommentMention.holds("@赛博", name: "赛博虎妞"))
+        XCTAssertFalse(TaskCommentMention.holds("@瑞辰同学", name: "瑞辰"))
+        XCTAssertEqual(TaskCommentMention.caretOffset(from: "请", to: "请@"), 2)
     }
 }

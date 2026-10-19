@@ -55,16 +55,17 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
     var primaryVisible = true
     var isFocused = false
     var showsAdvancedSettings = false
+    var accessory: AnyView? = nil
     @Environment(\.accessibilityReduceMotion) private var reduced
     var body: some View {
         VStack(spacing: 4) {
+            if let accessory { accessory }
             // Same editor, full width. Web keeps the footer anchored while it grows up.
             editor()
                 .frame(height: expanded ? nil : 0).clipped().opacity(expanded ? 1 : 0)
                 .allowsHitTesting(expanded).accessibilityHidden(!expanded)
             HStack(spacing: 6) {
                 add().frame(width: FocusComposerMetrics.touch, height: FocusComposerMetrics.touch)
-                ComposerVoiceUnavailableButton()
                 if showsAdvancedSettings, expanded {
                     Button {} label: { Image(systemName: "gearshape").font(.system(size: 14)) }
                         .buttonStyle(.plain).frame(width: 32, height: 32).disabled(true)
@@ -102,23 +103,32 @@ enum ComposerHeaderKind { case task, conversation }
 struct ComposerIdentityHeader<Portrait: View, Identity: View, Runtime: View>: View {
     var hasPortrait = true
     var kind: ComposerHeaderKind = .task
+    var progress: AnyView? = nil
     @ViewBuilder let portrait: () -> Portrait
     @ViewBuilder let identity: () -> Identity
     @ViewBuilder let runtime: () -> Runtime
     @State private var viewportWidth: CGFloat? = nil
     var body: some View {
         GeometryReader { geometry in
+            let compact = (viewportWidth ?? geometry.size.width) <= 640
+            let progressWidth = min(300, geometry.size.width * (compact ? 0.46 : 0.3))
+            let sideWidth = max(0, (geometry.size.width - progressWidth) / 2 - 8)
             ZStack(alignment: .bottomLeading) {
                 if hasPortrait {
                     portrait().frame(width: 72, height: 72).offset(y: kind == .task ? 7 : -4)
                     if (viewportWidth ?? geometry.size.width) > 640 {
                         identity().font(.system(size: 12, weight: .medium)).lineLimit(1)
-                            .frame(maxWidth: max(0, geometry.size.width - 320), minHeight: 24, alignment: .leading)
+                            .frame(maxWidth: progress == nil ? max(0, geometry.size.width - 320) : max(0, sideWidth - 84), minHeight: 24, alignment: .leading)
                             .padding(.leading, 84).offset(y: kind == .task ? 3 : -4)
                     }
                 }
-                runtime().frame(maxWidth: max(0, geometry.size.width - (hasPortrait ? 84 : 0)), minHeight: kind == .task ? 32 : 24, alignment: .trailing)
+                runtime().frame(maxWidth: progress == nil || compact ? max(0, geometry.size.width - (hasPortrait ? 84 : 0)) : sideWidth, minHeight: kind == .task ? 32 : 24, alignment: .trailing)
                     .frame(maxWidth: .infinity, alignment: .trailing).offset(y: kind == .task ? 7 : -32)
+                if let progress {
+                    progress.frame(width: progressWidth)
+                        .frame(maxWidth: .infinity, alignment: compact ? .trailing : .center)
+                        .offset(y: compact ? -25 : 3)
+                }
             }.frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomLeading)
         }
         .frame(height: hasPortrait ? (kind == .task ? 65 : 76) : 28)
@@ -163,16 +173,6 @@ struct ComposerControlStyle: ButtonStyle {
             .background(RoundedRectangle(cornerRadius: 8).fill(configuration.isPressed ? Theme.surfaceSoft : Theme.surface))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
             .contentShape(Rectangle())
-    }
-}
-
-/// The native client has no speech owner yet. Keep Web's slot without pretending to record.
-private struct ComposerVoiceUnavailableButton: View {
-    var body: some View {
-        Button {} label: { Image(systemName: "mic").font(.system(size: 16)) }
-            .buttonStyle(ComposerControlStyle()).disabled(true)
-            .help("macOS 语音输入尚未接入；可使用系统听写")
-            .accessibilityLabel("语音输入，macOS 尚未接入")
     }
 }
 

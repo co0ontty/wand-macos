@@ -694,9 +694,17 @@ struct SettingsView: View {
 }
 
 /// Directory and details occupy the same content column, never a third navigation rail.
-private struct SettingsEmployeeIdentities: View {
+struct SettingsEmployeeIdentities: View {
     let api: WandAPI
     let loadData: () async throws -> (NativeUserProfile, [EmployeeContact])
+    private let showsDirectory: Bool
+
+    init(api: WandAPI, loadData: @escaping () async throws -> (NativeUserProfile, [EmployeeContact]), initialEmployeeID: String? = nil) {
+        self.api = api
+        self.loadData = loadData
+        showsDirectory = initialEmployeeID == nil
+        _selectedID = State(initialValue: initialEmployeeID ?? "user")
+    }
     @State private var profile = NativeUserProfile()
     @State private var employees: [EmployeeContact] = []
     @State private var selectedID: String? = "user"
@@ -704,6 +712,8 @@ private struct SettingsEmployeeIdentities: View {
     @State private var avatar = ""
     @State private var savedName = ""
     @State private var savedAvatar = ""
+    @State private var systemSessionLimitInput = ""
+    @State private var savedSystemSessionLimitInput = ""
     @State private var loading = true
     @State private var busy = false
     @State private var error: String?
@@ -714,7 +724,11 @@ private struct SettingsEmployeeIdentities: View {
     @State private var imDirty = false
     @State private var imBusy = false
     private var selected: EmployeeContact? { employees.first { $0.id == selectedID } }
-    private var dirty: Bool { name != savedName || avatar != savedAvatar }
+    private var dirty: Bool { name != savedName || avatar != savedAvatar || systemSessionLimitInput != savedSystemSessionLimitInput }
+    private var invalidSystemSessionLimit: Bool {
+        !systemSessionLimitInput.isEmpty && (systemSessionLimitInput.contains { !$0.isASCII || !$0.isNumber }
+            || Int(systemSessionLimitInput) == nil || !(0...10000).contains(Int(systemSessionLimitInput) ?? -1))
+    }
     private var locked: Bool { selected?.systemKey != nil && PlushAvatarIdentity.fixedAsset(id: selectedID ?? "") == nil }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -733,8 +747,10 @@ private struct SettingsEmployeeIdentities: View {
                     identityRow(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", subtitle: employee.duty)
                 }
             } else {
-                Button("返回员工列表") { if dirty || imDirty { discard = true } else { selectedID = nil } }
-                    .buttonStyle(WandSecondaryButtonStyle()).disabled(busy || imBusy).accessibilityIdentifier("settings-employee-directory")
+                if showsDirectory {
+                    Button("返回员工列表") { if dirty || imDirty { discard = true } else { selectedID = nil } }
+                        .buttonStyle(WandSecondaryButtonStyle()).disabled(busy || imBusy).accessibilityIdentifier("settings-employee-directory")
+                }
                 Text(selectedID == "user" ? "我的资料" : selected?.name ?? "员工").font(.system(size: 20, weight: .semibold))
                 Text(selectedID == "user" ? "消息署名与头像；只影响显示，不改变执行身份或权限。名字留空时显示「我」。" : "员工身份与群聊显示使用同一份资料。")
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
@@ -749,6 +765,13 @@ private struct SettingsEmployeeIdentities: View {
                     }
                     if locked { Text("内置员工身份固定；保留其现有执行配置。").font(.system(size: 12)).foregroundColor(Theme.textSecondary) }
                     if selectedID != "user" {
+                        Text("系统调用历史保留上限").font(.headline)
+                        TextField("留空表示不限", text: $systemSessionLimitInput)
+                            .textFieldStyle(.roundedBorder).disabled(loading || busy)
+                            .accessibilityIdentifier("employee-system-session-limit")
+                        Text("0–10000，留空不限，0 不保留。仅保留标题生成等系统辅助功能的最新 N 条已结束记录，保存后永久清理超出部分。任务派发、agent 间调用（含决策）、手动聊天与运行中会话不计入，也不会清理。")
+                            .font(.caption).foregroundColor(Theme.textSecondary)
+                        if invalidSystemSessionLimit { Text("请输入 0 到 10000 的整数，或留空表示不限。").font(.caption).foregroundColor(Theme.danger) }
                         Divider().padding(.vertical, 4)
                         EmployeeImConfigEditor(api: api, employeeID: selected.id, onNeedsAdmin: { needsAdmin = true },
                             onDirtyChange: { imDirty = $0 }, onBusyChange: { imBusy = $0 })
@@ -762,13 +785,14 @@ private struct SettingsEmployeeIdentities: View {
                         if busy { ProgressView().controlSize(.small) }
                         if let result { Text(result).lineLimit(1) }
                     }.frame(width: 160, height: 20)
-                }.buttonStyle(WandPrimaryButtonStyle()).disabled(loading || busy || needsAdmin || locked || name.count > (selectedID == "user" ? 24 : 80))
+                }.buttonStyle(WandPrimaryButtonStyle()).disabled(loading || busy || needsAdmin || invalidSystemSessionLimit || name.count > (selectedID == "user" ? 24 : 80))
                 .accessibilityIdentifier("settings-profile-save")
             }
         }
         .task { await load() }
         .onChange(of: name) { _ in if !busy { result = nil } }
         .onChange(of: avatar) { _ in if !busy { result = nil } }
+        .onChange(of: systemSessionLimitInput) { _ in if !busy { result = nil } }
         .confirmationDialog("放弃尚未保存的修改？", isPresented: $discard, titleVisibility: .visible) {
             Button("放弃修改", role: .destructive) { selectedID = nil; imDirty = false }
             Button("继续编辑", role: .cancel) {}
@@ -780,6 +804,8 @@ private struct SettingsEmployeeIdentities: View {
             let employee = employees.first { $0.id == id }
             self.name = id == "user" ? profile.name : employee?.name ?? ""
             self.avatar = id == "user" ? profile.avatar : employee?.avatar ?? ""
+            systemSessionLimitInput = employee?.systemSessionLimit.map(String.init) ?? ""
+            savedSystemSessionLimitInput = systemSessionLimitInput
             savedName = self.name; savedAvatar = self.avatar; result = nil
         } label: {
             HStack(spacing: 12) {
@@ -799,20 +825,29 @@ private struct SettingsEmployeeIdentities: View {
             let (profile, employees) = try await loadData()
             guard !Task.isCancelled else { return }
             self.profile = profile; self.employees = employees; error = nil
-            if selectedID == "user" && !dirty { name = profile.name; avatar = profile.avatar; savedName = name; savedAvatar = avatar }
+            if !dirty {
+                let employee = employees.first { $0.id == selectedID }
+                name = selectedID == "user" ? profile.name : employee?.name ?? ""
+                avatar = selectedID == "user" ? profile.avatar : employee?.avatar ?? ""
+                systemSessionLimitInput = employee?.systemSessionLimit.map(String.init) ?? ""
+                savedName = name; savedAvatar = avatar; savedSystemSessionLimitInput = systemSessionLimitInput
+            }
         } catch { self.error = "资料读取失败，请重试。" }
     }
     private func save() async {
-        guard !busy, !loading else { return }
+        guard !busy, !loading, !invalidSystemSessionLimit else { return }
         let id = selectedID ?? "user", submittedName = name, submittedAvatar = avatar
+        let submittedLimit = Int(systemSessionLimitInput)
         busy = true; error = nil; result = nil
         defer { busy = false }
         do {
             if id == "user" { profile = try await api.saveUserProfile(NativeUserProfile(name: submittedName, avatar: submittedAvatar)); name = profile.name; avatar = profile.avatar }
             else {
-                let employee = try await api.saveEmployeeIdentity(id: id, name: submittedName, avatar: submittedAvatar)
+                let employee = try await api.saveEmployeeIdentity(id: id, name: submittedName, avatar: submittedAvatar, systemSessionLimit: submittedLimit, locked: locked)
                 employees = employees.map { $0.id == id ? employee : $0 }; name = employee.name; avatar = employee.avatar ?? ""
+                systemSessionLimitInput = employee.systemSessionLimit.map(String.init) ?? ""
             }
+            savedSystemSessionLimitInput = systemSessionLimitInput
             savedName = name; savedAvatar = avatar; result = "已保存"
             NotificationCenter.default.post(name: .wandIdentitySaved, object: nil)
         } catch {

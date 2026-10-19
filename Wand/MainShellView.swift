@@ -72,6 +72,7 @@ struct MainShellView: View {
     @State private var showCommunications = false
     @StateObject private var communicationsStore: CommunicationsStore
     @StateObject private var gitStatusStore = GitStatusStore()
+    @StateObject private var quickTerminal: QuickTerminalModel
     @StateObject private var workspaceStore: WorkspaceStore
 
     init(serverURL: URL, token: String?, makeSettings: ((@escaping () -> Void) -> SettingsView)? = nil) {
@@ -80,6 +81,7 @@ struct MainShellView: View {
         self.makeSettings = makeSettings ?? { close in
             SettingsView(serverURL: serverURL, token: token, onClose: close, titlebarLeadingInset: 40)
         }
+        _quickTerminal = StateObject(wrappedValue: QuickTerminalModel(api: WandAPI(baseURL: serverURL, token: token)))
         _communicationsStore = StateObject(wrappedValue: CommunicationsStore(
             api: WandAPI(baseURL: serverURL, token: token), serverURL: serverURL
         ))
@@ -561,7 +563,7 @@ struct MainShellView: View {
                             Button(recoveryTitle, action: recoverConnection)
                         }.font(.system(size: 12)).foregroundColor(Theme.warning).padding(10)
                     }
-                    mainColumn
+                    QuickTerminalWorkspace(model: quickTerminal) { mainColumn }
                 }
                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     .background(Theme.workspaceBackground)
@@ -967,6 +969,28 @@ struct MainShellView: View {
         }.padding(12)
     }
 
+    private var shareURL: URL? {
+        var parameters = [
+            "view": showCommunications ? (communicationsStore.section == .contacts ? "contacts" : "chats") : "workspace",
+            "sidebar": showCommunications ? "chats" : "tasks",
+            "sidebarQuery": sidebarQuery, "workspaceView": sidebarRecent ? "recent" : "directory",
+            "sidebarMode": sidebarActiveOnly ? "active" : "full"
+        ]
+        if showCommunications {
+            parameters["conversation"] = communicationsStore.selectedID
+            parameters[communicationsStore.section == .contacts ? "directoryQuery" : "chatQuery"] = communicationsStore.query
+            parameters["chatFilter"] = communicationsStore.archiveFilter == .unarchived ? "active" : communicationsStore.archiveFilter.rawValue
+            parameters["chatActivity"] = String(communicationsStore.activityOnly)
+            parameters["conversationTask"] = communicationsStore.target?.taskId
+            parameters["conversationRun"] = communicationsStore.target?.runId
+        } else {
+            parameters["session"] = selectedSessionId
+            parameters["workspace"] = selectedWorkspaceTask?.workspace.id
+            parameters["workspaceTask"] = selectedWorkspaceTask?.task.id
+        }
+        return DesktopPageLink.url(base: serverURL, parameters: parameters)
+    }
+
     private var desktopToolbar: some View {
         HStack(spacing: 10) {
             if !sidebarVisible {
@@ -994,6 +1018,17 @@ struct MainShellView: View {
                     .font(.system(size: 15, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
             }
             WindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 52)
+            Button {
+                quickTerminal.open(cwd: selectedSession?.cwd ?? selectedSessionCwdHint
+                    ?? selectedWorkspaceTask?.task.worktree?.path ?? selectedWorkspaceTask?.workspace.cwd
+                    ?? creationDraft.context.cwd)
+            } label: { Image(systemName: "terminal").frame(width: 28, height: 28) }
+                .buttonStyle(WandIconButtonStyle(isActive: quickTerminal.isOpen))
+                .help("打开终端（运行在 Wand / PTY 主机）")
+                .accessibilityLabel("打开终端")
+            if !showCreation, !showTaskBoard {
+                DesktopCopyPageLinkButton(url: shareURL, label: selectedSessionId == nil ? "复制当前页面链接" : "复制会话链接")
+            }
             if !showCreation, !showTaskBoard, !showCommunications, selectedSessionId != nil || selectedWorkspaceTask != nil {
                 filePanelToggleButton
             }

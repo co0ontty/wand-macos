@@ -7,9 +7,19 @@ import XCTest
 private struct RuntimeSettingsProbe: View {
     @ObservedObject var focus: ComposerFocusController
     var model = "Ultimate"
+    var todos: [TodoItem] = []
+    var queueStore: ChatStore? = nil
+    @State private var queueExpanded = false
+    private var progress: AnyView? {
+        guard !todos.isEmpty || queueStore != nil else { return nil }
+        return AnyView(HStack(spacing: 4) {
+            if !todos.isEmpty { TodoProgressBar(todos: todos).frame(maxWidth: .infinity).background(ComposerGeometryProbe(id: "runtime-todo")) }
+            if let queueStore { ComposerQueue(store: queueStore, expanded: $queueExpanded).frame(maxWidth: .infinity).background(ComposerGeometryProbe(id: "runtime-queue")) }
+        })
+    }
     var body: some View {
         VStack(spacing: 0) {
-            ComposerIdentityHeader(portrait: {
+            ComposerIdentityHeader(progress: progress, portrait: {
                 Image(nsImage: NSImage(named: "plush_cat_silver")!).resizable().scaledToFit()
                     .background(ComposerGeometryProbe(id: "runtime-avatar"))
             }, identity: { Text("赛博虎妞：") }, runtime: {
@@ -146,6 +156,82 @@ final class AvatarComposerParityTests: XCTestCase {
                     try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name))
                 }
             } } }
+        }
+    }
+
+    func testTodoSharesInputEdgeWithoutMovingActions() async throws {
+        let focus = ComposerFocusController()
+        let host = NSHostingView(rootView: RuntimeSettingsProbe(focus: focus))
+        host.frame = NSRect(x: 0, y: 0, width: 940, height: 240)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func rect(_ id: String) throws -> NSRect {
+            let view = try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id })
+            return view.convert(view.bounds, to: host)
+        }
+        let todos = [TodoItem(content: String(repeating: "核对界面与输入", count: 12), status: "in_progress", activeForm: nil)]
+        for width: CGFloat in [390, 940] {
+            window.setContentSize(NSSize(width: width, height: 240)); host.frame.size.width = width
+            host.rootView = RuntimeSettingsProbe(focus: focus)
+            host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+            let send = try rect("runtime-send")
+            host.rootView = RuntimeSettingsProbe(focus: focus, todos: todos)
+            host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+            let todo = try rect("runtime-todo"), runtime = try rect("runtime-settings")
+            XCTAssertEqual(try rect("runtime-send"), send, "Todo must not create a detached row")
+            XCTAssertGreaterThanOrEqual(todo.minX, 0); XCTAssertLessThanOrEqual(todo.maxX, width)
+            XCTAssertFalse(todo.intersects(runtime), "Todo and execution settings need independent lanes")
+            if width > 640 { XCTAssertEqual(todo.midX, width / 2, accuracy: 1) }
+            if let directory = ProcessInfo.processInfo.environment["WAND_COMPOSER_OUTPUT"] {
+                let output = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("todo-\(Int(width)).png"))
+            }
+        }
+    }
+
+    func testPendingQueueSharesTodoEdgeWithoutMovingActions() async throws {
+        let focus = ComposerFocusController()
+        let store = ChatStore(sessionId: "queue-layout", api: WandAPI(baseURL: URL(string: "http://127.0.0.1:1")!, token: nil))
+        store.queuedMessages = [String(repeating: "待发消息内容与长文本 ", count: 60), "第二条消息"]
+        let todos = [TodoItem(content: "正在核对布局", status: "in_progress", activeForm: nil)]
+        let host = NSHostingView(rootView: RuntimeSettingsProbe(focus: focus))
+        host.frame = NSRect(x: 0, y: 0, width: 940, height: 240)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func rect(_ id: String) throws -> NSRect {
+            let view = try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id })
+            return view.convert(view.bounds, to: host)
+        }
+        for width: CGFloat in [390, 940] {
+            window.setContentSize(NSSize(width: width, height: 240)); host.frame.size.width = width
+            host.rootView = RuntimeSettingsProbe(focus: focus)
+            host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+            let send = try rect("runtime-send")
+            for withTodo in [false, true] {
+                host.rootView = RuntimeSettingsProbe(focus: focus, todos: withTodo ? todos : [], queueStore: store)
+                host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+                let queue = try rect("runtime-queue")
+                XCTAssertEqual(try rect("runtime-send"), send)
+                XCTAssertGreaterThan(queue.width, 0); XCTAssertLessThanOrEqual(queue.height, FocusComposerMetrics.touch)
+                XCTAssertGreaterThanOrEqual(queue.minX, 0); XCTAssertLessThanOrEqual(queue.maxX, width)
+                XCTAssertFalse(queue.intersects(try rect("runtime-settings")))
+                XCTAssertFalse(queue.intersects(try rect("runtime-avatar")))
+                if withTodo { XCTAssertFalse(queue.intersects(try rect("runtime-todo"))) }
+                if let directory = ProcessInfo.processInfo.environment["WAND_COMPOSER_OUTPUT"] {
+                    let output = URL(fileURLWithPath: directory, isDirectory: true)
+                    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("queue-\(Int(width))-todo-\(withTodo).png"))
+                }
+            }
         }
     }
 

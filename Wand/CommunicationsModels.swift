@@ -10,6 +10,7 @@ struct EmployeeContact: Decodable, Identifiable {
     let tags: [String]?
     let systemKey: String?
     let archivedAt: String?
+    var systemSessionLimit: Int? = nil
 
     var isArchived: Bool { archivedAt?.isEmpty == false }
     var conversationID: String { "dm_" + id }

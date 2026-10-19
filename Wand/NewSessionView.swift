@@ -41,7 +41,6 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
         Self.pagePreference = EmployeeExecutionCandidate(provider: provider.rawValue, engine: engine, model: selectedModel.isEmpty ? "default" : selectedModel,
             kind: "structured", mode: mode.apiValue, thinkingEffort: thinkingEffort)
     }
-    @Published var fullAccessAcknowledged = false
     @Published var recentPaths: [RecentPath] = []
     @Published var availableModels: [ModelInfo] = []
     @Published var codexModels: [ModelInfo] = []
@@ -132,6 +131,24 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
         }
     }
 
+    var submissionBlockReason: String? {
+        if loading { return "正在读取工作配置…" }
+        if loadError != nil { return "配置读取失败，请重试加载；草稿保留。" }
+        if loadingTask { return "正在读取所选任务…" }
+        if creating { return "正在创建工作，请勿重复提交。" }
+        if submissionPhase == .accepted { return "工作已创建，请打开已创建的工作；不要重复提交。" }
+        if creationUnconfirmed { return "创建结果未确认，请先核对会话列表，不要重复启动。" }
+        if sessionType == .structured && firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请输入工作内容。" }
+        if destination != "new" && cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "请先选择运行目录。" }
+        if destination != "new" && destination != "none" && binding?.workspaceTaskId != destination { return "所选任务目录未就绪，请重新读取任务。" }
+        return nil
+    }
+
+    /// Only delivery/lifecycle feedback occupies the composer status row; form validation stays on the submit control.
+    var submissionStatus: String? {
+        creating || submissionPhase == .accepted || creationUnconfirmed ? submissionBlockReason : nil
+    }
+
     func allowRetryAfterReview() {
         guard creationUnconfirmed else { return }
         submissionPhase = .idle
@@ -140,7 +157,7 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
 
     /// The shell retains this owner while pages change; only the accepted receipt hands off navigation.
     func create(api: WandAPI, workspaceStore: WorkspaceStore?, onCreated: (SessionSnapshot) -> Void) async {
-        guard !loading, loadError == nil, !loadingTask, !creating, !creationUnconfirmed else { return }
+        guard submissionBlockReason == nil else { return }
         let path = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
         let submittedRevision = messageRevision
         let prompt = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -416,7 +433,7 @@ struct NewSessionView: View {
 
         func hint(for tool: Provider) -> String {
             if tool == .codex {
-                return "Codex 支持 PTY 终端与结构化（JSONL）两种会话，结构化模式按 full-access 启动。"
+                return "Codex 自动批准工具调用，并关闭 Codex 的沙盒限制。"
             }
             if tool == .grok {
                 return self == .managed || self == .fullAccess
@@ -429,19 +446,10 @@ struct NewSessionView: View {
                     : "OpenCode 使用自身权限确认；支持 TUI 与 JSON 结构化会话。"
             }
             if tool == .qoder {
-                switch self {
-                case .managed, .fullAccess:
-                    return "Qoder 将以自动确认模式运行；支持 TUI 与 stream-json 结构化会话。"
-                case .autoEdit:
-                    return "Qoder 自动确认文件修改，其他操作保持 CLI 的权限流程。"
-                default:
-                    return "Qoder 使用自身权限确认；支持 TUI 与 stream-json 结构化会话。"
-                }
+                return "Qoder 在所有模式下都跳过工具权限确认。"
             }
             if tool == .pi {
-                return self == .managed || self == .fullAccess
-                    ? "Pi 将自动批准工具调用；支持 TUI 与 JSON 结构化会话。"
-                    : "Pi 使用自身权限确认；支持 TUI 与 JSON 结构化会话。"
+                return "Pi CLI 使用自身工具与扩展配置。"
             }
             switch self {
             case .fullAccess:
@@ -487,7 +495,10 @@ struct NewSessionView: View {
     }
 
     private var modeHint: String {
-        draft.mode.hint(for: draft.provider)
+        if draft.provider == .pi && draft.engine == "sdk" && draft.sessionType == .structured {
+            return "Wand Agent 在 Wand 内执行，使用当前会话配置的工具与扩展。"
+        }
+        return draft.mode.hint(for: draft.provider)
     }
 
     private var sessionKindHint: String {
@@ -522,7 +533,7 @@ struct NewSessionView: View {
         }
         .task { await loadInitial() }
         .onAppear { composerFocused = true }
-        .onChange(of: draft.mode) { _ in draft.fullAccessAcknowledged = false }
+
         .confirmationDialog("已核对没有新任务或会话？", isPresented: $confirmUnknownRetry) {
             Button("允许重新启动", role: .destructive) { draft.allowRetryAfterReview() }
             Button("取消", role: .cancel) {}
@@ -541,19 +552,73 @@ struct NewSessionView: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 0) {
+                    Spacer(minLength: 32)
                     VStack(spacing: 20) {
-                        WandBrandMark(size: 44).accessibilityHidden(true)
-                        Text(draft.sessionType == .structured ? "你想让我们在 \(projectName) 中完成什么？" : draft.sessionType == .pty ? "从这里开始 CLI 工作" : "从这里打开空白终端")
-                            .font(.system(size: geometry.size.width < 600 ? 22 : 28, weight: .regular))
-                            .foregroundColor(Theme.textPrimary).multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
+                        if draft.sessionType == .structured {
+                            HStack(alignment: .center, spacing: 8) {
+                                Text("今天你想与")
+                                Button { showEmployeePicker.toggle() } label: {
+                                    HStack(spacing: 4) {
+                                        if let employee = draft.employees.first(where: { $0.id == draft.employeeId }) {
+                                            WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 28)
+                                        } else {
+                                            Image(systemName: "sparkles")
+                                                .frame(width: 28, height: 28)
+                                        }
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(Theme.textSecondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .help(draft.employeeId?.isEmpty != false ? "选择员工" : (draft.employees.first(where: { $0.id == draft.employeeId })?.name ?? "选择员工"))
+                                Text("在")
+                                Button { showDirectoryOptions = true } label: {
+                                    HStack(spacing: 4) {
+                                        Text(projectName)
+                                            .underline(true, color: Theme.border)
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(Theme.textSecondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .help(draft.cwd.isEmpty ? "选择工作目录" : draft.cwd)
+                                Text("的")
+                                Button { showTaskOptions = true } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "square.stack")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(Theme.textSecondary)
+                                        Text(taskLabel)
+                                            .underline(true, color: Theme.border)
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(Theme.textSecondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .help("归属任务：\(taskLabel)")
+                                Text("中创造些什么？")
+                            }
+                            .font(.system(size: geometry.size.width < 600 ? 20 : 26, weight: .regular))
+                            .foregroundColor(Theme.textPrimary)
+                            .multilineTextAlignment(.center)
                             .accessibilityAddTraits(.isHeader)
-                    }.padding(.top, 12)
-                    Spacer(minLength: 64)
+                        } else {
+                            Text(draft.sessionType == .pty ? "从这里开始 CLI 工作" : "从这里打开空白终端")
+                                .font(.system(size: geometry.size.width < 600 ? 22 : 28, weight: .regular))
+                                .foregroundColor(Theme.textPrimary).multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityAddTraits(.isHeader)
+                        }
+                    }
+                    Spacer(minLength: 32)
                     creationFeedback
                         .frame(maxWidth: 760)
                         .padding(.bottom, draft.errorMessage == nil ? 0 : 12)
                     VStack(spacing: 0) {
+                        submissionReadiness
                         HStack(spacing: 4) {
                             directoryButton
                             Spacer(minLength: 4)
@@ -754,7 +819,7 @@ struct NewSessionView: View {
 
     private var taskLabel: String {
         if draft.destination == "new" { return "新建任务" }
-        if draft.destination == "none" { return "不归属任务" }
+        if draft.destination == "none" { return "默认任务" }
         return draft.resolvedTaskName ?? "所选任务"
     }
 
@@ -808,7 +873,7 @@ struct NewSessionView: View {
                     fieldLabel("权限模式")
                     modePicker
                     fieldHint(modeHint)
-                    if draft.mode == .fullAccess { fullAccessWarning }
+
                     }
                     HStack { Spacer(); Button("完成") { showRunSettings = false }.buttonStyle(WandSecondaryButtonStyle()) }
                 }.padding(20).frame(width: 360).background(Theme.workspaceBackground)
@@ -825,10 +890,10 @@ struct NewSessionView: View {
                 ProgressView().controlSize(.small).tint(.white).opacity(draft.creating ? 1 : 0)
             }.frame(width: 34, height: 34)
         }
-        .buttonStyle(WandSendButtonStyle(isBusy: draft.creating)).disabled(!readyToStart)
+        .buttonStyle(WandSendButtonStyle(isBusy: draft.creating)).disabled(!canCreate)
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityLabel(draft.submissionPhase.label)
-        .help(draft.submissionPhase.label + " · ⌘↵")
+        .help(draft.submissionBlockReason ?? (draft.submissionPhase.label + " · ⌘↵"))
         .wandMotion(value: draft.submissionPhase)
     }
 
@@ -838,9 +903,8 @@ struct NewSessionView: View {
     }
 
     private func prepareCreate() {
-        guard readyToStart else { return }
-        if draft.sessionType != .shell && draft.mode == .fullAccess && !draft.fullAccessAcknowledged { showRunSettings = true }
-        else { create() }
+        guard canCreate else { return }
+        create()
     }
 
     /// 当前选择真正会用的模型名：`default` 哨兵换成服务端配置的默认模型，没配就是 CLI 自己的默认模型。
@@ -866,7 +930,7 @@ struct NewSessionView: View {
     private var destinationPicker: some View {
         Picker("归属任务", selection: Binding(get: { draft.destination }, set: selectDestination)) {
             Text("新建任务").tag("new")
-            Text("暂不归属任务").tag("none")
+            Text("默认任务").tag("none")
             Divider()
             ForEach(draft.tasks) { task in Text(task.label).tag(task.id) }
         }
@@ -1114,33 +1178,19 @@ struct NewSessionView: View {
         )
     }
 
-    private var fullAccessWarning: some View {
-        Toggle(isOn: $draft.fullAccessAcknowledged) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("我确认此目录和环境可以自动执行高权限操作")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Text("全权限模式会自动同意权限请求。未确认前不能启动会话。")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textSecondary)
-            }
+    @ViewBuilder
+    private var submissionReadiness: some View {
+        if let status = draft.submissionStatus {
+            Text(status)
+                .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                .accessibilityIdentifier("new-work-submit-status")
+                .padding(.horizontal, 12).padding(.bottom, 8)
         }
-        .toggleStyle(.checkbox)
-        .padding(12)
-        .background(Theme.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.warning.opacity(0.4), lineWidth: 1))
     }
 
     private var isExistingTask: Bool { draft.destination != "new" && draft.destination != "none" }
 
-    private var readyToStart: Bool {
-        !draft.loading && draft.loadError == nil && !draft.loadingTask && !draft.creating && !draft.creationUnconfirmed && !composing
-            && (draft.sessionType != .structured || !draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            && (draft.destination == "new" || !draft.cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            && (!isExistingTask || draft.binding?.workspaceTaskId == draft.destination)
-    }
-
-    private var canCreate: Bool { readyToStart && (draft.sessionType == .shell || draft.mode != .fullAccess || draft.fullAccessAcknowledged) }
+    private var canCreate: Bool { !composing && draft.submissionBlockReason == nil }
 
     private func selectEmployee(_ employee: EmployeeContact) {
         draft.employeeId = employee.id
@@ -1157,6 +1207,8 @@ struct NewSessionView: View {
             draft.engine = draft.sessionType == .pty ? "cli" : preference.engine
             draft.selectedModel = preference.model ?? "default"
             draft.thinkingEffort = preference.thinkingEffort ?? "off"
+            let preferredMode = ModeOption(apiValue: preference.mode ?? "default") ?? .standard
+            draft.mode = ModeOption.supported(for: draft.provider).contains(preferredMode) ? preferredMode : .fullAccess
             draft.providerWasEdited = true
         }
         showEmployeePicker = false
@@ -1172,7 +1224,6 @@ struct NewSessionView: View {
         let preferred = ModeOption(apiValue: draft.defaultMode) ?? .managed
         draft.mode = supported.contains(preferred) ? preferred : supported.contains(.managed) ? .managed : .fullAccess
         draft.thinkingEffort = draft.defaultThinkingEffort
-        draft.fullAccessAcknowledged = false
         if userInitiated { draft.rememberExecutionPreference() }
     }
 
@@ -1251,7 +1302,9 @@ struct NewSessionView: View {
                 ?? draft.defaultProvider
             chooseProvider(Provider(rawValue: preferredProvider) ?? .claude, userInitiated: false)
             draft.sessionType = .structured
-            draft.worktree = config.defaultTaskWorktree != false
+            if draft.destination == "new" {
+                draft.worktree = config.defaultTaskWorktree != false
+            }
             draft.serverDefaultModels = config.defaultModels ?? ProviderDefaultModels(
                 claude: config.defaultModel, codex: config.defaultCodexModel,
                 opencode: config.defaultOpenCodeModel, grok: config.defaultGrokModel,

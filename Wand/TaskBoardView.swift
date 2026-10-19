@@ -65,6 +65,17 @@ struct TaskBoardView: View {
         return executionQueue ? matched : wandBoardGoalProjection(all: tasks, matched: matched)
     }
 
+    private var shareURL: URL? {
+        DesktopPageLink.url(base: api.baseURL, parameters: [
+            "view": "taskboard", "task": selectedId, "boardView": view.rawValue, "q": query,
+            "directory": workspaceFilter, "sort": "manual",
+            "filters": DesktopPageLink.json(["statuses": filters.statuses.sorted(), "priorities": filters.priorities.sorted(), "labels": filters.labels.sorted()]),
+            "display": DesktopPageLink.json(["body": display.body, "mainStatuses": display.mainStatuses.sorted()]),
+            "zoom": ganttZoom.rawValue, "hideCompleted": String(hideCompleted), "queue": String(executionQueue),
+            "boardCollapsed": DesktopPageLink.json(Dictionary(uniqueKeysWithValues: ["todo", "doing", "done", "archived"].map { ($0, collapsedList.contains($0)) }))
+        ])
+    }
+
     private var grouped: [String: [WandBoardTask]] {
         wandBoardGroup(tasks: visible)
     }
@@ -207,6 +218,7 @@ struct TaskBoardView: View {
                     .foregroundColor(Theme.textSecondary)
             }
             Spacer(minLength: 12)
+            DesktopCopyPageLinkButton(url: shareURL, label: selectedId.isEmpty ? "复制当前页面链接" : "复制任务链接")
             if selectedTask == nil {
                 WandTaskOrganizationButton(api: api, target: workspaceFilter.isEmpty ? .all : .workspace(workspaceFilter), onOpenSession: onOpenSession) {
                     await reload(showProgress: false)
@@ -333,6 +345,7 @@ struct TaskBoardView: View {
             WandBoardDetailView(
                 task: task,
                 allTasks: tasks,
+                api: api,
                 loadComments: { try await api.boardTaskComments(id: $0) },
                 onOpenTask: { selectedId = $0 },
                 workspaces: workspaces,

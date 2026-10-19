@@ -11,7 +11,7 @@ struct NewTaskSheetBody: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var cwd = ""
-    @State private var worktreeEnabled = true
+    @State private var worktreeEnabled = false
     @State private var target: WorkspaceSessionTarget = .claude
     @State private var sessionKind: WorkspaceSessionKind = .structured
     @State private var creating = false
@@ -158,7 +158,7 @@ struct NewTaskSheetBody: View {
             let (workspace, creation) = try await store.createTask(
                 name: trimmed,
                 directory: directory,
-                worktree: directory.isEmpty ? false : (worktreeEnabled ? nil : false),
+                worktree: directory.isEmpty ? false : worktreeEnabled,
                 workspaceId: request.workspaceId
             )
             dismiss()

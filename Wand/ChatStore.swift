@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 
+protocol QueueRetrievalTransport {
+    func deleteQueued(id: String, index: Int, expectedText: String) async throws -> SessionSnapshot
+}
+
+extension WandAPI: QueueRetrievalTransport {}
+
 /// AskUserQuestion 卡片的本地选择状态（对齐 Web 端 state.askUserSelections）。
 struct AskUserSelectionState {
     /// questionIndex → 已选 optionIndex 集合。
@@ -18,7 +24,10 @@ final class ChatStore: ObservableObject {
     @Published var messages: [ConversationTurn] = []
     @Published var isResponding = false
     @Published var status: String = "running"
-    @Published var queuedMessages: [String] = []
+    @Published var queuedMessages: [String] = [] {
+        didSet { queueMutationRevision &+= 1 }
+    }
+    @Published private(set) var queueMutationPending = false
     @Published var pendingEscalation: EscalationRequest?
     /// PTY 旧式权限提示（permissionBlocked 为 true 但没有结构化 escalation 时）。
     @Published var legacyPermissionPrompt: PermissionRequestInfo?
@@ -48,11 +57,12 @@ final class ChatStore: ObservableObject {
     private var started = false
     private var modelCatalog: ModelsResponse?
     private let earlierPageSize = 40
-    private var queuePromotePending = false
     private var settingsMutationTail: Task<Void, Never>?
     private var modelUpdateRevision: UInt64 = 0
     private var thinkingUpdateRevision: UInt64 = 0
     private var queueMutationRevision: UInt64 = 0
+    /// Unconfirmed submissions stay in this session's memory and are never replayed.
+    @Published private(set) var unconfirmedInputs = Set<String>()
     private var modeUpdateRevision: UInt64 = 0
     @Published private(set) var currentEmployee: EmployeeContact?
     var mode: String { snapshot?.mode ?? "default" }
@@ -63,11 +73,16 @@ final class ChatStore: ObservableObject {
     var isReadOnlySystemCall: Bool { snapshot?.isReadOnlySystemCall == true }
     var sessionEnded: Bool { ["exited", "failed", "stopped"].contains(status) }
     var canLoadEarlier: Bool { loadedOffset > 0 }
-    private var isInFlight: Bool { isStructured && isResponding && status == "running" }
 
-    init(sessionId: String, api: WandAPI) {
+    private let drafts: ConversationDraftCache
+    private let queueRetrievalTransport: any QueueRetrievalTransport
+
+    init(sessionId: String, api: WandAPI, drafts: ConversationDraftCache = .shared,
+         queueRetrievalTransport: (any QueueRetrievalTransport)? = nil) {
         self.sessionId = sessionId
         self.api = api
+        self.drafts = drafts
+        self.queueRetrievalTransport = queueRetrievalTransport ?? api
         self.socket = WandSocket(baseURL: api.baseURL, feedbackConnection: api.feedbackConnection)
     }
 
@@ -371,54 +386,73 @@ final class ChatStore: ObservableObject {
     // MARK: - 用户动作
 
     /// 发送一条消息。PTY 会话分包发送正文与 Return，结构化会话直接发文本。
-    func send(text: String, onAccepted: @escaping () -> Void = {}, onFailure: @escaping () -> Void = {}) {
+    func send(text: String, onAccepted: @escaping () -> Void = {},
+              onUnknown: @escaping () -> Void = {}, onFailure: @escaping () -> Void = {}) {
         guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能继续发送。"; onFailure(); return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !sending else { return }
+        guard !trimmed.isEmpty, !sending, !queueMutationPending else { return }
+        guard !unconfirmedInputs.contains(trimmed) else {
+            toast = "这条消息的送达尚未确认，请先核对会话，避免重复发送。"
+            onUnknown()
+            return
+        }
         sending = true
         let queueing = isStructured && isResponding && status == "running"
         let previousMessages = messages
-        let previousQueue = queuedMessages
-        if isStructured {
-            if queueing {
-                queuedMessages.append(trimmed)
-                toast = "已加入排队，等当前回复完成会自动发送。"
-            } else {
-                messages.append(ConversationTurn(role: "user", content: [.text(text: trimmed, subagent: nil)]))
-                isResponding = true
-            }
+        if isStructured && !queueing {
+            messages.append(ConversationTurn(role: "user", content: [.text(text: trimmed, subagent: nil)]))
+            isResponding = true
         }
         Task {
             defer { sending = false }
+            var acceptedPtyText = false
             do {
                 if isStructured {
                     let snap = try await api.sendInput(id: sessionId, input: trimmed, respondImmediately: true)
                     apply(snapshot: snap)
                     socket.requestResync()
                 } else {
-                    try await sendPtyChatInput(trimmed)
+                    try await sendPtyInput(trimmed, view: "chat", onTextAccepted: { acceptedPtyText = true })
                 }
                 onAccepted()
             } catch {
                 toast = error.localizedDescription
-                if isStructured {
-                    if queueing {
-                        queuedMessages = previousQueue
-                    } else {
-                        messages = previousMessages
-                        isResponding = false
-                    }
+                socket.requestResync()
+                guard !acceptedPtyText, Self.inputWasRejected(error) else {
+                    unconfirmedInputs.insert(trimmed)
+                    toast = "消息送达结果尚未确认，请核对会话后继续；不会自动重发。"
+                    onUnknown()
+                    return
+                }
+                if isStructured && !queueing {
+                    messages = previousMessages
+                    isResponding = false
                 }
                 onFailure()
             }
         }
     }
 
+    /// Explicit acknowledgment only unlocks manual input; it never replays a request.
+    func acknowledgeUnconfirmedInput(_ text: String) {
+        guard !sending else { return }
+        unconfirmedInputs.remove(text)
+    }
+
     private func sendPtyChatInput(_ text: String) async throws {
         try await sendPtyInput(text, view: "chat")
     }
 
-    private func sendPtyInput(_ text: String, view: String) async throws {
+    static func inputWasRejected(_ error: Error) -> Bool {
+        guard let error = error as? WandAPI.APIError else { return false }
+        switch error {
+        case .invalidURL, .unauthorized: return true
+        case .server(let status, _): return (400..<500).contains(status) && ![408, 409].contains(status)
+        case .network: return false
+        }
+    }
+
+    private func sendPtyInput(_ text: String, view: String, onTextAccepted: () -> Void = {}) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if status != "running" {
@@ -433,6 +467,7 @@ final class ChatStore: ObservableObject {
             view: view,
             shortcutKey: "enter_text"
         )
+        onTextAccepted()
         try await Task.sleep(nanoseconds: 30_000_000)
         try await api.sendPtyInputChunk(
             id: sessionId,
@@ -559,75 +594,82 @@ final class ChatStore: ObservableObject {
 
     // MARK: - 排队消息（仅结构化会话）
 
-    /// 把第 index 条排队消息立即发送。服务端负责摘队列项，客户端只做乐观显示和失败回滚。
+    /// Queue mutations wait for server confirmation. A late response must not replace
+    /// a newer WebSocket queue, and an unknown result must never resurrect an item.
+    private func applyQueueReceipt(_ snap: SessionSnapshot, revision: UInt64) throws {
+        guard snap.id == sessionId, let queue = snap.queuedMessages else { throw WandAPI.APIError.network("队列确认无效，请核对最新状态") }
+        if queueMutationRevision == revision { queuedMessages = queue }
+        socket.requestResync()
+    }
+
     func promoteQueued(index: Int) {
-        guard !queuePromotePending, queuedMessages.indices.contains(index) else { return }
-        let previous = queuedMessages
-        let picked = previous[index]
-        var rest = previous
-        rest.remove(at: index)
-        let inFlight = isInFlight
-        queuePromotePending = true
-        queuedMessages = rest
-        toast = inFlight ? "已请求中断当前回复，立即发送这条。" : "已立即发送这条消息。"
+        guard !queueMutationPending, !sending, queuedMessages.indices.contains(index) else { return }
+        let picked = queuedMessages[index]
+        let revision = queueMutationRevision
+        queueMutationPending = true
         Task {
+            defer { queueMutationPending = false }
             do {
                 let snap = try await api.promoteQueued(id: sessionId, index: index, expectedText: picked)
-                apply(snapshot: snap)
+                try applyQueueReceipt(snap, revision: revision)
             } catch {
-                queuedMessages = previous
+                socket.requestResync()
                 toast = error.localizedDescription
             }
-            queuePromotePending = false
         }
     }
 
-    func editQueued(index: Int, text: String) {
-        guard queuedMessages.indices.contains(index) else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { toast = "排队消息不能为空。"; return }
-        let original = queuedMessages[index]
-        Task {
+    /// The source stays in the session cache until confirmation or explicit dismissal.
+    @discardableResult
+    func retrieveQueued(index: Int) -> Task<Void, Never>? {
+        guard !queueMutationPending, !sending, queuedMessages.indices.contains(index) else { return nil }
+        let picked = queuedMessages[index]
+        guard drafts.beginQueueRetrieval(picked, serverURL: api.baseURL, sessionID: sessionId) else { return nil }
+        let revision = queueMutationRevision
+        queueMutationPending = true
+        return Task {
+            defer { queueMutationPending = false }
             do {
-                let snap = try await api.editQueued(id: sessionId, index: index,
-                                                    expectedText: original, text: trimmed)
-                apply(snapshot: snap)
-            } catch { toast = error.localizedDescription }
+                let snap = try await queueRetrievalTransport.deleteQueued(id: sessionId, index: index, expectedText: picked)
+                try applyQueueReceipt(snap, revision: revision)
+                drafts.finishQueueRetrieval(confirmed: true, serverURL: api.baseURL, sessionID: sessionId)
+            } catch {
+                drafts.finishQueueRetrieval(confirmed: false, serverURL: api.baseURL, sessionID: sessionId)
+                socket.requestResync()
+                toast = "未确认取回结果，请核对队列；原文已保留，可复制。"
+            }
         }
     }
 
-    /// 删除第 index 条排队消息（乐观 + 失败回滚）。
     func deleteQueued(index: Int) {
-        let previous = queuedMessages
-        guard previous.indices.contains(index) else { return }
-        queueMutationRevision &+= 1
+        guard !queueMutationPending, !sending, queuedMessages.indices.contains(index) else { return }
+        let picked = queuedMessages[index]
         let revision = queueMutationRevision
-        queuedMessages.remove(at: index)
+        queueMutationPending = true
         Task {
+            defer { queueMutationPending = false }
             do {
-                try await api.deleteQueued(id: sessionId, index: index)
+                let snap = try await api.deleteQueued(id: sessionId, index: index, expectedText: picked)
+                try applyQueueReceipt(snap, revision: revision)
             } catch {
-                guard revision == queueMutationRevision else { return }
-                queuedMessages = previous
+                socket.requestResync()
                 toast = error.localizedDescription
             }
         }
     }
 
-    /// 清空全部排队消息（乐观 + 失败回滚）。
     func clearQueued() {
-        let previous = queuedMessages
-        guard !previous.isEmpty else { return }
-        queueMutationRevision &+= 1
+        guard !queueMutationPending, !sending, !queuedMessages.isEmpty else { return }
+        let expected = queuedMessages
         let revision = queueMutationRevision
-        queuedMessages = []
+        queueMutationPending = true
         Task {
+            defer { queueMutationPending = false }
             do {
-                try await api.clearQueued(id: sessionId)
-                toast = "已清空 \(previous.count) 条排队消息。"
+                let snap = try await api.clearQueued(id: sessionId, expectedQueue: expected)
+                try applyQueueReceipt(snap, revision: revision)
             } catch {
-                guard revision == queueMutationRevision else { return }
-                queuedMessages = previous
+                socket.requestResync()
                 toast = error.localizedDescription
             }
         }
