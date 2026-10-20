@@ -4,6 +4,19 @@ import SwiftUI
 @testable import Wand
 
 final class ChatPresentationTests: XCTestCase {
+    /// 补更早历史时必须恢复阅读锚点：prepend 会把整列往下推，
+    /// 不恢复锚点就等于把读者正在读的内容扫走（与 iOS earlierLoadAnchorID、Web pendingAnchor 同一语义）。
+    func testEarlierLoadRestoresTheReadingAnchor() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Wand/ChatView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("private func loadEarlierKeepingAnchor()"), "Mac 侧补更早历史必须先记锚点再 prepend")
+        XCTAssertTrue(source.contains("earlierLoadAnchorID = groupedMessageItems.first.map"), "锚点取当前窗口第一条消息的绝对 turn id")
+        XCTAssertTrue(source.contains("private func restoreEarlierLoadAnchor(_ proxy: ScrollViewProxy)"), "prepend 完成后必须按锚点复位")
+        XCTAssertTrue(source.contains("restoreEarlierLoadAnchor(proxy)"), "loadedOffset 变化时必须触发锚点复位")
+        XCTAssertTrue(source.contains("if !loadingEarlier, earlierLoadAnchorID != nil"), "空页或请求失败不能让过期锚点误作用于之后的推送")
+        XCTAssertTrue(source.contains("followsLatest = false\n        store.loadEarlier()"), "补历史期间不贴尾，否则会把读者拽回最新一条")
+    }
+
     func testSessionSubtasksKeepStableIdentityAcrossTurnsAndIgnoreParentClaims() {
         let a = SubagentMeta(taskId: "child-a", agentType: "general", taskDescription: "检查 A")
         let b = SubagentMeta(taskId: "child-b", agentType: "general", taskDescription: "检查 B")
@@ -354,4 +367,6 @@ final class NativeSubtaskLiveTests: XCTestCase {
         try await click("subtasks-trigger")
         XCTAssertEqual(input.string, draft)
     }
+
 }
+

@@ -379,6 +379,11 @@ struct ChatView: View {
     @State private var followsLatest = true
     @State private var historyExpanded = false
     @State private var pendingNavigationID: TurnNavigationID?
+    /// 补更早历史前记下视口顶部那条消息的稳定 id；prepend 完成后滚回它，
+    /// 否则插入的内容会把读者眼前的消息推下去（与 iOS earlierLoadAnchorID、
+    /// Web pendingAnchor 同一语义）。用 turn 的绝对下标当 id：prepend 只改
+    /// loadedOffset 与局部下标，两者之和不变。
+    @State private var earlierLoadAnchorID: String?
     @State private var expandedCurrentReplyAbsoluteIndex = -1
     @State private var observedLastUserAbsoluteIndex = Int.min
     @State private var observedLatestAssistantAbsoluteIndex = Int.min
@@ -587,7 +592,7 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if store.canLoadEarlier {
-                        Button(action: { store.loadEarlier() }) {
+                        Button(action: { loadEarlierKeepingAnchor() }) {
                             loadingEarlierRow(store.loadingEarlier ? "正在加载更早消息…" : "加载更早的消息")
                         }
                         .buttonStyle(.plain)
@@ -681,8 +686,15 @@ struct ChatView: View {
                 }
                 .onChange(of: selectedFindResult) { _ in scrollToFindResult(proxy) }
                 .onChange(of: store.loadedOffset) { _ in
+                    restoreEarlierLoadAnchor(proxy)
                     if showingFind && selectedFindResult == nil {
                         selectedFindResult = findResults.first
+                    }
+                }
+                .onChange(of: store.loadingEarlier) { loadingEarlier in
+                    // 空页或请求失败不会改变 offset，不能让过期锚点误作用于之后的推送。
+                    if !loadingEarlier, earlierLoadAnchorID != nil {
+                        DispatchQueue.main.async { earlierLoadAnchorID = nil }
                     }
                 }
         }
@@ -820,6 +832,27 @@ struct ChatView: View {
             }
         }
         return ""
+    }
+
+    /// 补更早一页前先记住当前窗口第一条消息的稳定身份，prepend 后滚回它。
+    /// prepend 会把整列往下推，不恢复锚点就等于把读者正在读的内容扫走；
+    /// 这里与 iOS `earlierLoadAnchorID` 同一语义（用绝对 turn 下标，prepend 只改
+    /// loadedOffset 与局部下标，两者之和不变）。
+    private func loadEarlierKeepingAnchor() {
+        earlierLoadAnchorID = groupedMessageItems.first.map {
+            "turn-\(store.loadedOffset + messageItemTurnIndex($0))"
+        }
+        followsLatest = false
+        store.loadEarlier()
+    }
+
+    private func restoreEarlierLoadAnchor(_ proxy: ScrollViewProxy) {
+        guard let anchorID = earlierLoadAnchorID else { return }
+        earlierLoadAnchorID = nil
+        // 等这一帧布局完成再定位，否则 LazyVStack 还没把新行插进去。
+        DispatchQueue.main.async {
+            proxy.scrollTo(anchorID, anchor: .top)
+        }
     }
 
     private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
