@@ -10,8 +10,12 @@ struct WandBoardDetailView: View {
     let task: WandBoardTask
     let api: WandAPI?
     @State private var replyCommentId: String?
+    @State private var selectedExecutionCommentId: String?
+    @State private var commentToReveal: String?
+    let initialCommentToReveal: String?
+    let onCommentsRevealed: () -> Void
     let allTasks: [WandBoardTask]
-    let loadComments: (String) async throws -> [WandTaskComment]
+    let loadComments: (String, String?, Int) async throws -> WandTaskCommentsPage
     let onOpenTask: ((String) -> Void)?
     let workspaces: [Workspace]
     let milestones: [WandBoardMilestone]
@@ -48,8 +52,10 @@ struct WandBoardDetailView: View {
         task: WandBoardTask,
         allTasks: [WandBoardTask] = [],
         api: WandAPI? = nil,
-        loadComments: @escaping (String) async throws -> [WandTaskComment] = { _ in [] },
+        loadComments: @escaping (String, String?, Int) async throws -> WandTaskCommentsPage = { _, _, _ in WandTaskCommentsPage(comments: [], totalCount: 0, nextCursor: nil) },
         onOpenTask: ((String) -> Void)? = nil,
+        commentToReveal: String? = nil,
+        onCommentsRevealed: @escaping () -> Void = {},
         workspaces: [Workspace],
         milestones: [WandBoardMilestone],
         catalog: ModelsResponse?,
@@ -73,6 +79,9 @@ struct WandBoardDetailView: View {
         self.allTasks = allTasks
         self.loadComments = loadComments
         self.onOpenTask = onOpenTask
+        self.initialCommentToReveal = commentToReveal
+        self.onCommentsRevealed = onCommentsRevealed
+        _commentToReveal = State(initialValue: commentToReveal)
         self.workspaces = workspaces
         self.milestones = milestones
         self.catalog = catalog
@@ -97,6 +106,17 @@ struct WandBoardDetailView: View {
     }
 
     private var status: WandBoardStatus { WandBoardStatus(rawValue: task.status) ?? .todo }
+    private var taskIdentifierLabel: String {
+        let identifier = task.identifier.isEmpty ? String(task.id.prefix(8)) : task.identifier
+        return "ID: " + identifier
+    }
+
+    private func refreshCommentStatuses() async {
+        guard let api else { return }
+        await commentsStore.refreshStatuses(taskId: task.id) { taskId, ids in
+            try await api.boardTaskCommentStatuses(taskId: taskId, commentIds: ids)
+        }
+    }
 
     private var workspaceOptions: [(id: String, name: String)] {
         var options = workspaces.map { (id: $0.id, name: $0.name) }
@@ -107,45 +127,94 @@ struct WandBoardDetailView: View {
         return options
     }
 
+    private func mainColumn(scrollProxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(taskIdentifierLabel)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+                .textSelection(.enabled)
+            titleField
+            descriptionSection
+            TaskCommentsSection(
+                comments: commentsStore.comments,
+                totalCount: commentsStore.totalCount,
+                loading: commentsStore.loading,
+                loadingOlder: commentsStore.loadingOlder,
+                olderPageFailed: commentsStore.olderPageFailed,
+                hasOlderPage: commentsStore.hasOlderPage,
+                failed: commentsStore.failed,
+                retry: { Task { await commentsStore.load(taskId: task.id, fetch: loadComments); await refreshCommentStatuses() } },
+                loadOlder: { Task { await commentsStore.loadOlder(taskId: task.id, fetch: loadComments); await refreshCommentStatuses() } },
+                onReply: { replyCommentId = $0 },
+                onOpenSession: onOpenSession,
+                onOpenExecution: { commentId in
+                    selectedExecutionCommentId = commentId
+                    withAnimation(Theme.Motion.structure) {
+                        scrollProxy.scrollTo("execution-\(commentId)", anchor: .center)
+                    }
+                },
+                commentToReveal: commentToReveal,
+                onRevealed: { commentToReveal = nil; onCommentsRevealed() },
+                onRevealComment: { commentId in
+                    withAnimation(Theme.Motion.structure) { scrollProxy.scrollTo("comment-\(commentId)", anchor: .center) }
+                    commentToReveal = nil
+                    onCommentsRevealed()
+                }
+            )
+            if let api {
+                TaskCommentComposer(
+                    api: api,
+                    taskId: task.id,
+                    employees: employees.filter { !$0.isArchived }.map { (id: $0.id, name: $0.name) },
+                    sourceCommentId: $replyCommentId
+                ) {
+                    await commentsStore.load(taskId: task.id, fetch: loadComments)
+                }
+                .id(task.id)
+            }
+            taskRelationships
+            WandTaskAcceptanceEditor(
+                task: task,
+                children: wandBoardChildren(of: task, in: allTasks),
+                busy: busy,
+                onPatch: onPatch
+            )
+            .id(task.id)
+            WandBoardAgentSessionList(
+                assignee: task.assignedExecutor,
+                sessions: task.sessions.filter { $0.taskCommentId == nil },
+                assigned: task.agent,
+                onOpenSession: onOpenSession,
+                catalog: catalog
+            )
+            composeSection
+        }
+        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     var body: some View {
         GeometryReader { geometry in
           let compact = geometry.size.width < 820
           let columns = compact ? [GridItem(.flexible(), alignment: .topLeading)] : [GridItem(.flexible(), alignment: .topLeading), GridItem(.fixed(250), alignment: .topLeading)]
+          ScrollViewReader { scrollProxy in
           ScrollView {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("ID: \(task.identifier.isEmpty ? String(task.id.prefix(8)) : task.identifier)")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(Theme.textTertiary)
-                        .textSelection(.enabled)
-                    titleField
-                    descriptionSection
-                    TaskCommentsSection(comments: commentsStore.comments, loading: commentsStore.loading, failed: commentsStore.failed, retry: {
-                        Task { await commentsStore.load(taskId: task.id, fetch: loadComments) }
-                    }, onReply: { replyCommentId = $0 }, onOpenSession: onOpenSession)
-                    if let api {
-                        TaskCommentComposer(api: api, taskId: task.id, employees: employees.filter { !$0.isArchived }.map { (id: $0.id, name: $0.name) }, sourceCommentId: $replyCommentId) {
-                            await commentsStore.load(taskId: task.id, fetch: loadComments)
-                        }.id(task.id)
-                    }
-                    taskRelationships
-                    WandTaskAcceptanceEditor(task: task, children: wandBoardChildren(of: task, in: allTasks), busy: busy, onPatch: onPatch).id(task.id)
-                    WandBoardAgentSessionList(
-                        assignee: task.assignedExecutor,
-                        sessions: task.sessions,
-                        assigned: task.agent,
-                        onOpenSession: onOpenSession,
-                        catalog: catalog
-                    )
-                    composeSection
-                }
-                .frame(maxWidth: 760, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                mainColumn(scrollProxy: scrollProxy)
                 properties
                     .frame(width: compact ? nil : 250)
             }
             .padding(compact ? 16 : 28)
           }
+          .onChange(of: selectedExecutionCommentId) { id in
+              guard let id else { return }
+              withAnimation(Theme.Motion.structure) { scrollProxy.scrollTo("execution-\(id)", anchor: .center) }
+          }
+          .onChange(of: commentToReveal) { id in
+              guard let id else { return }
+              withAnimation(Theme.Motion.structure) { scrollProxy.scrollTo("comment-\(id)", anchor: .center) }
+          }
+        }
         }
         .background(Theme.workspaceBackground)
         .confirmationDialog("确认新建一次执行", isPresented: $confirmDispatch, titleVisibility: .visible) {
@@ -161,6 +230,7 @@ struct WandBoardDetailView: View {
         .task(id: task.id) {
             while !Task.isCancelled {
                 await commentsStore.load(taskId: task.id, fetch: loadComments)
+                await refreshCommentStatuses()
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
@@ -173,6 +243,8 @@ struct WandBoardDetailView: View {
         }
         .onChange(of: task.id) { _ in
             selectedEmployeeId = task.executionSubject?.type == "employee" ? task.executionSubject?.id ?? "" : ""
+            commentToReveal = initialCommentToReveal
+            selectedExecutionCommentId = nil
             title = task.title
             description = task.description
             editingDescription = false
@@ -217,10 +289,28 @@ struct WandBoardDetailView: View {
                 if let parent { relatedTaskRow(parent, caption: "父任务") }
                 if task.parentTaskId == nil && task.status != "archived" { Button("添加子任务（仅规划）", action: onCreateChild) }
                 if !children.isEmpty {
-                    Text("\(children.count) 个子任务")
+                    Text("\(children.count) 个正式子任务")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Theme.textSecondary)
                     ForEach(children) { child in relatedTaskRow(child, caption: "子任务") }
+                }
+                let executionComments = commentsStore.comments.filter { $0.dispatch != nil }
+                WandBoardSectionTitle(title: "员工执行事项", detail: executionComments.isEmpty ? nil : "\(executionComments.count) 项 · 不计入正式子任务")
+                if executionComments.isEmpty {
+                    Text(commentsStore.loading ? "正在同步员工执行事项…" : "通过评论中的 @ 选择员工并提交后，执行事项会显示在这里。")
+                        .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                } else {
+                    ForEach(executionComments) { comment in
+                        TaskCommentExecutionItemRow(
+                            comment: comment,
+                            api: api,
+                            expanded: selectedExecutionCommentId == comment.id,
+                            onToggle: { isOpen in selectedExecutionCommentId = isOpen ? comment.id : nil },
+                            onOpenComment: { focusedField = nil; commentToReveal = comment.id },
+                            onOpenSession: onOpenSession
+                        )
+                        .id("execution-\(comment.id)")
+                    }
                 }
             }
             .accessibilityIdentifier("task-relationships")

@@ -43,6 +43,7 @@ struct MainShellView: View {
     @State private var rightPanelTab: RightPanelTab = .files
     /// 当前选中的会话 id。
     @State private var selectedSessionId: String?
+    @State private var sessionOpenGeneration = UUID()
     /// 侧栏点开任务会话时先记住它自己的 cwd，等会话快照回来再接替。
     /// 没有它，右侧文件树会在快照到达前向服务器要「默认目录」（问题清单 #3）。
     @State private var selectedSessionCwdHint: String?
@@ -211,6 +212,7 @@ struct MainShellView: View {
             acknowledgeCompletionIfViewed(session)
         }
         .onChange(of: selectedSessionId) { id in
+            sessionOpenGeneration = UUID()
             if id == nil {
                 selectedSession = nil
             }
@@ -330,6 +332,8 @@ struct MainShellView: View {
     }
 
     private func openSessionFromMissions(_ sessionId: String) {
+        let generation = UUID()
+        sessionOpenGeneration = generation
         showCommunications = false
         selectedWorkspaceTask = nil
         selectedSessionCwdHint = nil
@@ -338,18 +342,21 @@ struct MainShellView: View {
         Task {
             do {
                 let session = try await api.getSession(id: sessionId)
+                guard generation == sessionOpenGeneration else { return }
                 selectedSessionId = session.id
                 selectedSessionProvider = session.provider ?? "claude"
                 selectedSession = session
                 connectionState = .connected
                 openCompletionIntent(session.id)
             } catch {
+                guard generation == sessionOpenGeneration else { return }
                 connectionState = .failure(error)
             }
         }
     }
 
     private func presentSession(_ session: SessionSnapshot) {
+        sessionOpenGeneration = UUID()
         showCommunications = false
         showTaskBoard = false
         showCreation = false
@@ -433,6 +440,7 @@ struct MainShellView: View {
         context: SessionCreationContext = .init(),
         taskSelection: WorkspaceTaskSelection? = nil
     ) {
+        sessionOpenGeneration = UUID()
         creationDrafts[CreationDraftKey(creationDraft.context)] = creationDraft
         let key = CreationDraftKey(context)
         if let existingDraft = creationDrafts[key] {
@@ -969,28 +977,6 @@ struct MainShellView: View {
         }.padding(12)
     }
 
-    private var shareURL: URL? {
-        var parameters = [
-            "view": showCommunications ? (communicationsStore.section == .contacts ? "contacts" : "chats") : "workspace",
-            "sidebar": showCommunications ? "chats" : "tasks",
-            "sidebarQuery": sidebarQuery, "workspaceView": sidebarRecent ? "recent" : "directory",
-            "sidebarMode": sidebarActiveOnly ? "active" : "full"
-        ]
-        if showCommunications {
-            parameters["conversation"] = communicationsStore.selectedID
-            parameters[communicationsStore.section == .contacts ? "directoryQuery" : "chatQuery"] = communicationsStore.query
-            parameters["chatFilter"] = communicationsStore.archiveFilter == .unarchived ? "active" : communicationsStore.archiveFilter.rawValue
-            parameters["chatActivity"] = String(communicationsStore.activityOnly)
-            parameters["conversationTask"] = communicationsStore.target?.taskId
-            parameters["conversationRun"] = communicationsStore.target?.runId
-        } else {
-            parameters["session"] = selectedSessionId
-            parameters["workspace"] = selectedWorkspaceTask?.workspace.id
-            parameters["workspaceTask"] = selectedWorkspaceTask?.task.id
-        }
-        return DesktopPageLink.url(base: serverURL, parameters: parameters)
-    }
-
     private var desktopToolbar: some View {
         HStack(spacing: 10) {
             if !sidebarVisible {
@@ -1006,18 +992,35 @@ struct MainShellView: View {
                 SessionCreationToolbarTitle(draft: creationDraft)
             } else if showTaskBoard {
                 Text("任务看板").font(.system(size: 15, weight: .medium))
-            } else if selectedWorkspaceTask == nil, let session = selectedSession {
-                BrandLogo(provider: selectedSessionProvider, color: Theme.textSecondary)
-                    .frame(width: 16, height: 16)
-                    .help(session.providerLabel)
-                    .accessibilityLabel(session.providerLabel)
-                Text(session.displayTitle).font(.system(size: 15, weight: .medium))
-                    .lineLimit(1).help(session.displayTitle)
+            } else if let selection = selectedWorkspaceTask {
+                if workspaceStore.currentTask?.id == selection.task.id, let detail = workspaceStore.taskState.detail {
+                    WorkspaceSessionHeader(store: workspaceStore, sessions: detail.sessions,
+                        selectedId: workspaceStore.visibleSessionID,
+                        onSelect: { id in Task { await workspaceStore.selectSession(id: id) } },
+                        onNew: { beginTaskSession(workspace: selection.workspace, task: selection.task) })
+                } else {
+                    Text(selection.task.name).font(.system(size: 15, weight: .medium)).lineLimit(1)
+                }
+            } else if let session = selectedSession {
+                let peers = DesktopSessionTabScope.standalone(groups: workspaceStore.taskGroups, selected: session)
+                WorkspaceSessionHeader(store: workspaceStore, sessions: peers, selectedId: selectedSessionId,
+                    onSelect: { id in if id != selectedSessionId { openSessionFromMissions(id) } },
+                    onNew: { beginCreation(context: SessionCreationContext(cwd: session.cwd, startsNewTask: false)) },
+                    onDeleted: { id in
+                        guard selectedSessionId == id, selectedWorkspaceTask == nil,
+                              !showCreation, !showTaskBoard, !showCommunications else { return }
+                        let liveIds = DesktopSessionTabScope.liveStandaloneIds(groups: workspaceStore.taskGroups)
+                        if let next = peers.first(where: { $0.id != id && liveIds.contains($0.id) }) {
+                            openSessionFromMissions(next.id)
+                        } else {
+                            selectedSessionId = nil; selectedSession = nil; clearCompletionIntent()
+                        }
+                    })
             } else {
                 Text(selectedWorkspaceTask?.workspace.name ?? "Wand")
                     .font(.system(size: 15, weight: .medium)).foregroundColor(Theme.textSecondary).lineLimit(1)
             }
-            WindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 52)
+            WindowDragRegion().frame(minWidth: 24, maxWidth: (!showCreation && !showTaskBoard && !showCommunications && (selectedSession != nil || selectedWorkspaceTask != nil)) ? 48 : .infinity).frame(height: 52)
             Button {
                 quickTerminal.open(cwd: selectedSession?.cwd ?? selectedSessionCwdHint
                     ?? selectedWorkspaceTask?.task.worktree?.path ?? selectedWorkspaceTask?.workspace.cwd
@@ -1026,9 +1029,6 @@ struct MainShellView: View {
                 .buttonStyle(WandIconButtonStyle(isActive: quickTerminal.isOpen))
                 .help("打开终端（运行在 Wand / PTY 主机）")
                 .accessibilityLabel("打开终端")
-            if !showCreation, !showTaskBoard {
-                DesktopCopyPageLinkButton(url: shareURL, label: selectedSessionId == nil ? "复制当前页面链接" : "复制会话链接")
-            }
             if !showCreation, !showTaskBoard, !showCommunications, selectedSessionId != nil || selectedWorkspaceTask != nil {
                 filePanelToggleButton
             }
@@ -1144,7 +1144,8 @@ struct MainShellView: View {
                 onRequestNewSession: {
                     beginTaskSession(workspace: selection.workspace, task: selection.task)
                 },
-                onSnapshotViewed: completionSnapshotDisplayed
+                onSnapshotViewed: completionSnapshotDisplayed,
+                showsHeader: false
             )
             .id(selection.task.id)
         } else if let sessionId = selectedSessionId {

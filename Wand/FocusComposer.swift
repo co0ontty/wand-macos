@@ -116,14 +116,14 @@ struct ComposerIdentityHeader<Portrait: View, Identity: View, Runtime: View>: Vi
             ZStack(alignment: .bottomLeading) {
                 if hasPortrait {
                     portrait().frame(width: 72, height: 72).offset(y: kind == .task ? 7 : -4)
-                    if (viewportWidth ?? geometry.size.width) > 640 {
-                        identity().font(.system(size: 12, weight: .medium)).lineLimit(1)
-                            .frame(maxWidth: progress == nil ? max(0, geometry.size.width - 320) : max(0, sideWidth - 84), minHeight: 24, alignment: .leading)
-                            .padding(.leading, 84).offset(y: kind == .task ? 3 : -4)
-                    }
+                }
+                if hasPortrait ? (viewportWidth ?? geometry.size.width) > 640 : !compact {
+                    identity().font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        .frame(maxWidth: progress == nil ? max(0, geometry.size.width - 320) : max(0, sideWidth - (hasPortrait ? 84 : 8)), minHeight: 24, alignment: .leading)
+                        .padding(.leading, hasPortrait ? 84 : 0).offset(y: hasPortrait ? (kind == .task ? 3 : -4) : 0)
                 }
                 runtime().frame(maxWidth: progress == nil || compact ? max(0, geometry.size.width - (hasPortrait ? 84 : 0)) : sideWidth, minHeight: kind == .task ? 32 : 24, alignment: .trailing)
-                    .frame(maxWidth: .infinity, alignment: .trailing).offset(y: kind == .task ? 7 : -32)
+                    .frame(maxWidth: .infinity, alignment: .trailing).offset(y: hasPortrait ? (kind == .task ? 7 : -32) : 0)
                 if let progress {
                     progress.frame(width: progressWidth)
                         .frame(maxWidth: .infinity, alignment: compact ? .trailing : .center)
@@ -131,7 +131,7 @@ struct ComposerIdentityHeader<Portrait: View, Identity: View, Runtime: View>: Vi
                 }
             }.frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomLeading)
         }
-        .frame(height: hasPortrait ? (kind == .task ? 65 : 76) : 28)
+        .frame(height: hasPortrait ? (kind == .task ? 65 : 76) : (kind == .task ? 32 : 28))
         .background(ComposerViewportWidth { width in
             if viewportWidth != width { viewportWidth = width }
         }.frame(width: 0, height: 0))

@@ -1,4 +1,33 @@
 import SwiftUI
+import AppKit
+
+/// Sidebar menus copy their own object's server path, never the active conversation's path.
+struct DesktopCopyWorkingDirectoryButton: View {
+    let cwd: String?
+    @State private var failed = false
+
+    static func availablePath(_ cwd: String?) -> String? {
+        guard let cwd, !cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return cwd
+    }
+
+    static func copy(_ cwd: String?, to pasteboard: NSPasteboard) -> Bool {
+        guard let path = availablePath(cwd) else { return false }
+        pasteboard.clearContents()
+        return pasteboard.setString(path, forType: .string)
+    }
+
+    var body: some View {
+        if let path = Self.availablePath(cwd) {
+            Button {
+                failed = !Self.copy(path, to: .general)
+            } label: {
+                Label(failed ? "复制失败，请重试" : "复制工作目录", systemImage: "doc.on.doc")
+            }
+            .help(path)
+        }
+    }
+}
 
 struct WorkspaceTaskSelection: Equatable {
     let workspace: Workspace
@@ -529,6 +558,7 @@ struct WorkspaceListView: View {
             .padding(.vertical, 5)
             .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
             .contextMenu {
+                DesktopCopyWorkingDirectoryButton(cwd: group.isGlobal ? nil : group.workspaceCwd)
                 Menu {
                     if lastOrganizationGroupId == group.id && organizationAction.hasState {
                         Button("查看上次归类结果或进度") {
@@ -827,6 +857,7 @@ struct WorkspaceListView: View {
                 .padding(.leading, TreeIndent.task)
             }
             .contextMenu {
+                DesktopCopyWorkingDirectoryButton(cwd: summary.worktree?.path.isEmpty == false ? summary.worktree?.path : summary.cwd)
                 Button {
                     collapsedTaskIds.remove(summary.id)
                     onOpenTask(workspace, task)
@@ -984,6 +1015,7 @@ struct WorkspaceListView: View {
             .padding(.leading, TreeIndent.session)
         }
         .contextMenu {
+            DesktopCopyWorkingDirectoryButton(cwd: session.cwd)
             Button {
                 Task { await toggleArchive(session) }
             } label: {
@@ -1182,6 +1214,7 @@ struct WorkspaceListView: View {
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .help(session.title ?? session.providerLabel)
         }.contextMenu {
+            DesktopCopyWorkingDirectoryButton(cwd: session.cwd)
             Button { Task { await toggleArchive(session) } } label: {
                 Label("归档会话", systemImage: "archivebox")
             }

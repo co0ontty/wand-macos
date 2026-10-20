@@ -329,6 +329,7 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
     let thinkingEffort: String
     /// 会话实际跑的工作模式；旧会话可能为空，显示时回落到任务上的配置。
     let mode: String
+    let taskCommentId: String?
 
     var isStructured: Bool { sessionKind != "pty" && sessionKind != "shell" }
     var isRunning: Bool { status == "running" }
@@ -349,10 +350,11 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
         model = (try? container.decode(String.self, forKey: .model)) ?? ""
         thinkingEffort = (try? container.decode(String.self, forKey: .thinkingEffort)) ?? "off"
         mode = (try? container.decode(String.self, forKey: .mode)) ?? ""
+        taskCommentId = try? container.decodeIfPresent(String.self, forKey: .taskCommentId)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case employeeName, employeeId, employeeAvatar, id, provider, engine, sessionKind, title, status, cwd, model, thinkingEffort, mode
+        case employeeName, employeeId, employeeAvatar, id, provider, engine, sessionKind, title, status, cwd, model, thinkingEffort, mode, taskCommentId
     }
 }
 
@@ -397,7 +399,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         case assignedExecutor
         case executionSubject, acceptance, id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
         case labels, dueDate, milestoneId, milestone, sortOrder, agent, createdAt, updatedAt
-        case sessionIds, sessions, workspace
+        case sessionIds, sessions, workspace, commentCount
     }
 
     let executionSubject: WandTaskExecutionSubject?
@@ -427,6 +429,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
     let sessionIds: [String]
     let sessions: [WandBoardTaskSession]
     let workspace: WandBoardWorkspace?
+    let commentCount: Int
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -457,6 +460,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         sessions = ((try? container.decode([WandBoardTaskSession].self, forKey: .sessions)) ?? [])
             .filter { !$0.id.isEmpty }
         workspace = try? container.decodeIfPresent(WandBoardWorkspace.self, forKey: .workspace)
+        commentCount = max(0, (try? container.decode(Int.self, forKey: .commentCount)) ?? 0)
     }
 }
 
@@ -477,17 +481,19 @@ func wandBoardChildren(of task: WandBoardTask, in tasks: [WandBoardTask]) -> [Wa
  * 与 Web `ISSUE_COLUMNS` + `ISSUE_ARCHIVE_COLUMN` 一致。
  */
 enum WandBoardStatus: String, CaseIterable, Identifiable {
-    case todo, doing, done, archived
+    case backlog, todo, doing, done, archived
 
     var id: String { rawValue }
 
     /// 看板主列：归档只作为目录出现，不占一列。
-    static let columns: [WandBoardStatus] = [.todo, .doing, .done]
+    static let columns: [WandBoardStatus] = [.backlog, .todo, .doing, .done]
+    static let activeColumns: [WandBoardStatus] = [.todo, .doing, .done]
 
     var isColumn: Bool { self != .archived }
 
     var label: String {
         switch self {
+        case .backlog: return "待立项"
         case .todo: return "等待认领"
         case .doing: return "处理中"
         case .done: return "等你确认"
@@ -497,6 +503,7 @@ enum WandBoardStatus: String, CaseIterable, Identifiable {
 
     var empty: String {
         switch self {
+        case .backlog: return "还没有待立项的任务"
         case .todo: return "还没有等待认领的任务"
         case .doing: return "暂无处理中的任务"
         case .done: return "还没有待确认的任务"
@@ -509,6 +516,7 @@ enum WandBoardStatus: String, CaseIterable, Identifiable {
     /// 列头 / 状态图标的强调色，取自 Web `--tb-column-*`。
     var color: Color {
         switch self {
+        case .backlog: return Theme.textMuted
         case .todo: return Color(red: 176 / 255, green: 122 / 255, blue: 58 / 255)
         case .doing: return Color(red: 197 / 255, green: 101 / 255, blue: 61 / 255)
         case .done: return Color(red: 93 / 255, green: 106 / 255, blue: 88 / 255)
@@ -599,7 +607,7 @@ struct WandBoardFilters: Equatable {
 /// 显示设置：卡片正文与「主列」划分（非主列的状态落入「其他任务」侧栏）。
 struct WandBoardDisplay: Equatable {
     var body = false
-    var mainStatuses: Set<String> = Set(WandBoardStatus.columns.map(\.rawValue))
+    var mainStatuses: Set<String> = Set(WandBoardStatus.activeColumns.map(\.rawValue))
 
     static let `default` = WandBoardDisplay()
 }
@@ -888,6 +896,7 @@ func wandBoardDate(from value: String?) -> Date? {
 
 struct WandBoardStats {
     let total: Int
+    let backlog: Int
     let todo: Int
     let doing: Int
     let done: Int
@@ -903,8 +912,10 @@ func wandBoardStats(tasks: [WandBoardTask]) -> WandBoardStats {
     var done = 0
     var overdue = 0
     var high = 0
+    var backlog = 0
     for task in tasks {
         switch task.status {
+        case WandBoardStatus.backlog.rawValue: backlog += 1
         case WandBoardStatus.todo.rawValue: todo += 1
         case WandBoardStatus.doing.rawValue: doing += 1
         case WandBoardStatus.done.rawValue: done += 1
@@ -915,7 +926,7 @@ func wandBoardStats(tasks: [WandBoardTask]) -> WandBoardStats {
             high += 1
         }
     }
-    return WandBoardStats(total: tasks.count, todo: todo, doing: doing, done: done, overdue: overdue, high: high)
+    return WandBoardStats(total: tasks.count, backlog: backlog, todo: todo, doing: doing, done: done, overdue: overdue, high: high)
 }
 
 struct WandBoardProgressPoint: Identifiable {
@@ -1086,11 +1097,14 @@ func wandBoardReadDisplay(defaults: UserDefaults = .standard) -> WandBoardDispla
         let filtered = statuses.filter { allowed.contains($0) }
         if !filtered.isEmpty { display.mainStatuses = Set(filtered) }
     }
+    if (raw["version"] as? Int ?? 1) < 2 {
+        display.mainStatuses.insert(WandBoardStatus.backlog.rawValue)
+    }
     return display
 }
 
 func wandBoardWriteDisplay(_ display: WandBoardDisplay, defaults: UserDefaults = .standard) {
-    let raw: [String: Any] = ["body": display.body, "mainStatuses": Array(display.mainStatuses)]
+    let raw: [String: Any] = ["version": 2, "body": display.body, "mainStatuses": Array(display.mainStatuses)]
     guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
     defaults.set(data, forKey: wandBoardDisplayKey)
 }

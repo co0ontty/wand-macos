@@ -11,10 +11,8 @@ struct WorkspaceTaskView: View {
     var preferredSessionId: String? = nil
     var onRequestNewSession: (() -> Void)? = nil
     var onSnapshotViewed: ((SessionSnapshot) -> Void)? = nil
+    var showsHeader = true
     @State private var creationDraft: SessionCreationDraft?
-    @State private var pendingDeleteSession: WorkspaceSessionSummary?
-    @State private var deleteSessionBusy = false
-    @State private var deleteSessionError: String?
 
     var body: some View {
         ZStack {
@@ -31,29 +29,7 @@ struct WorkspaceTaskView: View {
             await store.openTask(workspace: workspace, task: task,
                                  preferredSessionId: preferredSessionId)
         }
-        .alert("删除终端？", isPresented: Binding(
-            get: { pendingDeleteSession != nil },
-            set: { if !$0 && !deleteSessionBusy { pendingDeleteSession = nil } }
-        ), presenting: pendingDeleteSession) { target in
-            Button("取消", role: .cancel) {
-                pendingDeleteSession = nil
-                deleteSessionError = nil
-            }
-            Button(deleteSessionBusy ? "删除中…" : "删除", role: .destructive) {
-                Task { await confirmDeleteSession(target) }
-            }
-            .disabled(deleteSessionBusy)
-        } message: { target in
-            Text("终端「\(sessionLabel(target, index: 0))」会结束并被删除，此操作无法撤销。")
-        }
-        .alert("删除未完成", isPresented: Binding(
-            get: { deleteSessionError != nil },
-            set: { if !$0 { deleteSessionError = nil } }
-        )) {
-            Button("好", role: .cancel) { deleteSessionError = nil }
-        } message: {
-            Text(deleteSessionError ?? "")
-        }
+
     }
 
     @ViewBuilder
@@ -111,85 +87,13 @@ struct WorkspaceTaskView: View {
             if let warning = store.layoutWarning {
                 warningBanner(warning)
             }
-            sessionStrip(detail.sessions)
-            Rectangle()
-                .fill(Theme.border)
-                .frame(height: 0.5)
+            if showsHeader {
+                WorkspaceSessionHeader(store: store, sessions: detail.sessions, selectedId: store.visibleSessionID,
+                    onSelect: { id in Task { await store.selectSession(id: id) } }, onNew: requestNewSession)
+                Rectangle().fill(Theme.border).frame(height: 0.5)
+            }
             sessionContent
         }
-    }
-
-    private func sessionStrip(_ sessions: [WorkspaceSessionSummary]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
-                    let selected = store.visibleSessionID == session.id
-                    HStack(spacing: 0) {
-                        Button {
-                            Task { await store.selectSession(id: session.id) }
-                        } label: {
-                            HStack(spacing: 7) {
-                                BrandLogo(
-                                    provider: session.provider ?? "terminal",
-                                    color: selected ? Theme.wandAccent : Theme.textSecondary
-                                )
-                                .frame(width: 13, height: 13)
-                                Text(sessionLabel(session, index: index))
-                                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
-                                    .lineLimit(1)
-                                if ["running", "thinking"].contains(session.activityStatus) {
-                                    Circle()
-                                        .fill(Theme.success)
-                                        .frame(width: 6, height: 6)
-                                }
-                            }
-                            .foregroundColor(selected ? Theme.textPrimary : Theme.textSecondary)
-                            .padding(.leading, 10)
-                            .padding(.trailing, 4)
-                            .frame(height: 30)
-                        }
-                        .buttonStyle(DesktopNavigationButtonStyle())
-
-                        if selected {
-                            Button {
-                                requestDeleteSession(session)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 8, weight: .bold))
-                                    .foregroundColor(Theme.textMuted)
-                                    .frame(width: 20, height: 30)
-                            }
-                            .buttonStyle(WandIconButtonStyle())
-                            .help("删除终端")
-                        }
-                    }
-                    .background(
-                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                            .fill(selected ? Theme.textPrimary.opacity(0.08) : Color.clear)
-                    )
-                    .contextMenu {
-                        Button(role: .destructive) {
-                            requestDeleteSession(session)
-                        } label: {
-                            Label("删除终端", systemImage: "trash")
-                        }
-                    }
-                }
-
-                Button(action: requestNewSession) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(Theme.textSecondary)
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(WandIconButtonStyle())
-                .help("在此任务新建会话")
-                .accessibilityLabel("在此任务新建会话")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-        }
-        .background(Theme.workspaceBackground)
     }
 
     @ViewBuilder
@@ -231,15 +135,6 @@ struct WorkspaceTaskView: View {
         } else {
             loadingState("正在选择工作窗口…")
         }
-    }
-
-    private func sessionLabel(_ session: WorkspaceSessionSummary, index: Int) -> String {
-        TaskListPresentation.listSessionLabel(
-            title: session.title,
-            providerLabel: session.providerLabel,
-            cwd: session.cwd,
-            index: index
-        )
     }
 
     private func warningBanner(_ message: String) -> some View {
@@ -286,22 +181,128 @@ struct WorkspaceTaskView: View {
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    private func requestDeleteSession(_ session: WorkspaceSessionSummary) {
-        deleteSessionError = nil
-        pendingDeleteSession = session
+/// Server directory membership owns sibling tabs; never guess it from matching cwd strings.
+enum DesktopSessionTabScope {
+    static func liveStandaloneIds(groups: [TaskDirectoryGroup]) -> Set<String> {
+        var ids = Set<String>()
+        for group in groups {
+            for session in group.standaloneSessions where session.archived != true && session.workspaceTaskId == nil && session.teamChat == nil {
+                ids.insert(session.id)
+            }
+        }
+        return ids
+    }
+
+    static func standalone(groups: [TaskDirectoryGroup], selected: SessionSnapshot) -> [WorkspaceSessionSummary] {
+        let live = WorkspaceSessionSummary(snapshot: selected)
+        guard selected.archived != true, selected.workspaceTaskId == nil,
+              let group = groups.first(where: { $0.standaloneSessions.contains(where: { $0.id == selected.id }) }) else { return [live] }
+        let sessions = group.standaloneSessions.filter {
+            $0.archived != true && $0.workspaceTaskId == nil && $0.teamChat == nil
+        }.map { $0.id == selected.id ? live : $0 }
+        guard sessions.contains(where: { $0.id == selected.id }) else { return [live] }
+        return sessions.enumerated().sorted { lhs, rhs in
+            let a = lhs.element.startedAt ?? "", b = rhs.element.startedAt ?? ""
+            return a == b ? lhs.offset < rhs.offset : a < b
+        }.map(\.element)
+    }
+}
+
+/// One reusable native tab strip in the main toolbar. Content and deletion remain separate owners.
+struct WorkspaceSessionHeader: View {
+    @ObservedObject var store: WorkspaceStore
+    let sessions: [WorkspaceSessionSummary]
+    let selectedId: String?
+    let onSelect: (String) -> Void
+    let onNew: () -> Void
+    var onDeleted: (String) -> Void = { _ in }
+    @State private var pendingDelete: WorkspaceSessionSummary?
+    @State private var deleting = false
+    @State private var deleteError: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                            tab(session, index: index).id(session.id)
+                        }
+                    }.padding(.vertical, 4)
+                }
+                .onChange(of: selectedId) { id in if let id { proxy.scrollTo(id, anchor: .center) } }
+                .onAppear { if let selectedId { proxy.scrollTo(selectedId, anchor: .center) } }
+            }
+            Button(action: onNew) { Image(systemName: "plus").frame(width: 28, height: 28) }
+                .buttonStyle(WandIconButtonStyle()).help("在当前目录新建会话").accessibilityLabel("新建会话")
+                .sidebarPresence("workbar-new")
+        }
+        .frame(height: 44)
+        .accessibilityIdentifier("unified-workspace-session-tabs")
+        .alert("关闭并删除会话？", isPresented: Binding(
+            get: { pendingDelete != nil }, set: { if !$0 && !deleting { pendingDelete = nil } }
+        ), presenting: pendingDelete) { target in
+            Button("取消", role: .cancel) { pendingDelete = nil }
+            Button(deleting ? "删除中…" : "删除", role: .destructive) {
+                Task { await confirmDeleteSession(target) }
+            }.disabled(deleting)
+        } message: { target in
+            Text("会话「\(label(target, index: 0))」会结束并被删除，此操作无法撤销。")
+        }
+        .alert("删除未完成", isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })) {
+            Button("好", role: .cancel) { deleteError = nil }
+        } message: { Text(deleteError ?? "") }
     }
 
     private func confirmDeleteSession(_ target: WorkspaceSessionSummary) async {
-        guard !deleteSessionBusy else { return }
-        deleteSessionBusy = true
+        guard !deleting else { return }
+        deleting = true
         do {
             try await store.deleteSessions([target.id])
-            pendingDeleteSession = nil
-            deleteSessionError = nil
-        } catch {
-            deleteSessionError = error.localizedDescription
+            pendingDelete = nil
+            onDeleted(target.id)
+        } catch { deleteError = error.localizedDescription }
+        deleting = false
+    }
+
+    private func label(_ session: WorkspaceSessionSummary, index: Int) -> String {
+        TaskListPresentation.listSessionLabel(title: session.title, providerLabel: session.providerLabel, cwd: session.cwd, index: index)
+    }
+
+    private func tab(_ session: WorkspaceSessionSummary, index: Int) -> some View {
+        let selected = selectedId == session.id
+        let title = label(session, index: index)
+        return HStack(spacing: 0) {
+            Button { onSelect(session.id) } label: {
+                HStack(spacing: 8) {
+                    BrandLogo(provider: session.provider, color: Theme.textSecondary).frame(width: 16, height: 16)
+                    Text(title).font(.system(size: 12, weight: selected ? .semibold : .medium))
+                        .lineLimit(1).truncationMode(.tail).frame(maxWidth: 240)
+                    if ["running", "thinking"].contains(session.activityStatus) {
+                        Circle().fill(Theme.success).frame(width: 5, height: 5).accessibilityLabel("运行中")
+                    }
+                }
+                .foregroundColor(selected ? Theme.textPrimary : Theme.textSecondary)
+                .padding(.leading, 10).padding(.trailing, 4).frame(height: 32)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(DesktopNavigationButtonStyle()).help(title)
+            .sidebarPresence("workbar-tab-\(session.id)")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            Button { pendingDelete = session } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .regular)).frame(width: 24, height: 32)
+            }.buttonStyle(WandIconButtonStyle()).disabled(deleting)
+                .help("关闭并删除会话 \(title)").accessibilityLabel("关闭并删除会话 \(title)")
         }
-        deleteSessionBusy = false
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+            .fill(selected ? Theme.wandAccent.opacity(0.06) : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+            .stroke(selected ? Theme.wandAccent : Theme.border, lineWidth: 0.5).allowsHitTesting(false))
+        .contextMenu {
+            Button(role: .destructive) { pendingDelete = session } label: { Label("关闭并删除会话", systemImage: "trash") }
+                .disabled(deleting)
+        }
     }
 }

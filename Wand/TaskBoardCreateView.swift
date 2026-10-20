@@ -32,7 +32,7 @@ struct WandBoardDraft {
 
 /**
  * 新建任务面板：标题可选（留空按描述自动生成）、描述是主输入，
- * 「处理中」列新建时创建即派发；「等待认领」列只落库。
+ * 「待立项」只建记录；「等待认领」及后续状态按用户明确选择处理。
  */
 struct WandBoardCreateView: View {
     var employees: [EmployeeContact] = []
@@ -91,7 +91,7 @@ struct WandBoardCreateView: View {
     }
 
     /// 「处理中」列的新建代表已经决定要跑：创建后立刻派 Agent。
-    private var dispatches: Bool { draft.saveAndDispatch }
+    private var dispatches: Bool { draft.saveAndDispatch && draft.status != WandBoardStatus.backlog.rawValue }
 
     private var hasDescription: Bool {
         !draft.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -228,7 +228,7 @@ struct WandBoardCreateView: View {
                 }
                 WandBoardField("状态") {
                     Picker("", selection: $draft.status) {
-                        ForEach(WandBoardStatus.columns) { item in
+                        ForEach(WandBoardStatus.activeColumns) { item in
                             Text(item.label).tag(item.rawValue)
                         }
                     }
@@ -290,7 +290,12 @@ struct WandBoardCreateView: View {
             Button("取消") { dismiss() }
                 .buttonStyle(WandSecondaryButtonStyle())
                 .disabled(creating)
-            Toggle("保存并派发（新建执行）", isOn: $draft.saveAndDispatch)
+            if draft.status != WandBoardStatus.backlog.rawValue {
+                Toggle("保存并派发（新建执行）", isOn: $draft.saveAndDispatch)
+            } else {
+                Text("待立项只保存，不会启动执行。将状态改为等待认领后，才可明确派发。")
+                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+            }
             Button(creating ? "正在保存…" : (dispatches && hasDescription ? "保存并派发" : "保存任务")) {
                 submit()
             }

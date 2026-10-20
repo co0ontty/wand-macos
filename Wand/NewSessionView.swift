@@ -312,6 +312,7 @@ struct NewSessionView: View {
     @State private var composing = false
     @State private var confirmUnknownRetry = false
     @FocusState private var focusedInput: NewSessionInput?
+    @AppStorage("wand.sendWithCommandEnter") private var sendWithCommandEnter = false
 
     init(api: WandAPI, initialCwd: String? = nil, initialMessage: String = "",
          draft: SessionCreationDraft? = nil, workspaceStore: WorkspaceStore? = nil,
@@ -893,7 +894,7 @@ struct NewSessionView: View {
         .buttonStyle(WandSendButtonStyle(isBusy: draft.creating)).disabled(!canCreate)
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityLabel(draft.submissionPhase.label)
-        .help(draft.submissionBlockReason ?? (draft.submissionPhase.label + " · ⌘↵"))
+        .help(draft.submissionBlockReason ?? (draft.submissionPhase.label + (sendWithCommandEnter ? " · ⌘↵" : " · ↵")))
         .wandMotion(value: draft.submissionPhase)
     }
 
@@ -1149,7 +1150,7 @@ struct NewSessionView: View {
     private var firstMessageCard: some View {
         IMEAwareComposerTextView(
             text: $draft.firstMessage, placeholder: draft.sessionType == .shell ? "输入启动后要执行的命令（可选）…" : draft.sessionType == .pty ? "输入要交给 CLI 的内容（可选）…" : "随心输入，描述你想完成的事…",
-            isFocused: composerFocused, sendWithCommandEnter: true,
+            isFocused: composerFocused, sendWithCommandEnter: sendWithCommandEnter,
             onFocusChange: { composerFocused = $0 },
             onCompositionChange: { composing = $0 },
             onSubmit: prepareCreate, onHeightChange: { composerHeight = $0 },

@@ -320,8 +320,7 @@ struct SettingsView: View {
                 Text(sendWithCommandEnter
                     ? "Return 换行；按 ⌘ Return 发送。"
                     : "Return 发送；按 ⇧ Return 换行。")
-                Text("新建会话页固定用 ⌘ Return 启动，这里的 Return 换行不受影响。")
-                Text("终端保留命令行原本的按键行为。")
+                Text("新建会话和普通消息使用同一套发送键。终端保留命令行原本的按键行为。")
             }
         }
     }

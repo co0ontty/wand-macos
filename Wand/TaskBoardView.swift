@@ -36,6 +36,7 @@ struct TaskBoardView: View {
     // 记「已收起」的状态：归档目录默认收起，其余默认展开。
     @State private var collapsedList: Set<String> = [WandBoardStatus.archived.rawValue]
     @State private var selectedId = ""
+    @State private var commentToRevealTaskId: String?
     /// 右键「派发」只打开空的指派框，不把任务描述当成提示词发出去。
     @State private var composeRequest: (id: String, token: UUID)?
     @State private var showCreate = false
@@ -72,7 +73,7 @@ struct TaskBoardView: View {
             "filters": DesktopPageLink.json(["statuses": filters.statuses.sorted(), "priorities": filters.priorities.sorted(), "labels": filters.labels.sorted()]),
             "display": DesktopPageLink.json(["body": display.body, "mainStatuses": display.mainStatuses.sorted()]),
             "zoom": ganttZoom.rawValue, "hideCompleted": String(hideCompleted), "queue": String(executionQueue),
-            "boardCollapsed": DesktopPageLink.json(Dictionary(uniqueKeysWithValues: ["todo", "doing", "done", "archived"].map { ($0, collapsedList.contains($0)) }))
+            "boardCollapsed": DesktopPageLink.json(Dictionary(uniqueKeysWithValues: ["backlog", "todo", "doing", "done", "archived"].map { ($0, collapsedList.contains($0)) }))
         ])
     }
 
@@ -346,8 +347,10 @@ struct TaskBoardView: View {
                 task: task,
                 allTasks: tasks,
                 api: api,
-                loadComments: { try await api.boardTaskComments(id: $0) },
+                loadComments: { taskId, before, limit in try await api.boardTaskComments(id: taskId, before: before, limit: limit) },
                 onOpenTask: { selectedId = $0 },
+                commentToReveal: commentToRevealTaskId == task.id ? "__latest__" : nil,
+                onCommentsRevealed: { commentToRevealTaskId = nil },
                 workspaces: workspaces,
                 milestones: milestones,
                 catalog: catalog,
@@ -420,6 +423,7 @@ struct TaskBoardView: View {
                     onToggleArchive: { toggleArchive() },
                     onCreateInColumn: { openCreate($0) },
                     onOpenTask: { selectedId = $0 },
+                    onOpenComments: { selectedId = $0; commentToRevealTaskId = $0 },
                     onOpenSession: onOpenSession,
                     onCompleteTask: { task in Task { await completeTask(task) } },
                     onPatchStatus: { task, status in
@@ -459,6 +463,7 @@ struct TaskBoardView: View {
                     },
                     onToggleArchive: { toggleArchive() },
                     onOpenTask: { selectedId = $0 },
+                    onOpenComments: { selectedId = $0; commentToRevealTaskId = $0 },
                     onOpenSession: onOpenSession
                 )
             case .gantt:
@@ -1007,6 +1012,8 @@ struct WandBoardDisplayMenu: View {
                             var next = display
                             if on {
                                 next.mainStatuses.insert(status.rawValue)
+                            } else if status == .backlog {
+                                next.mainStatuses.remove(status.rawValue)
                             } else {
                                 // 至少保留一列，否则看板会变空。
                                 let rest = next.mainStatuses.subtracting([status.rawValue])
@@ -1019,7 +1026,7 @@ struct WandBoardDisplayMenu: View {
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
-                    .disabled(display.mainStatuses.count == 1 && display.mainStatuses.contains(status.rawValue))
+                    .disabled(status != .backlog && display.mainStatuses.count == 1 && display.mainStatuses.contains(status.rawValue))
                 }
             }
             Divider().overlay(Theme.border)

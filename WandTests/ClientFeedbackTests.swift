@@ -195,6 +195,7 @@ final class ClientFeedbackTests: XCTestCase {
         FeedbackURLProtocol.status = 503
         FeedbackURLProtocol.body = Data(#"{"error":"原始 server failure"}"#.utf8)
         FeedbackURLProtocol.paths = []
+        FeedbackURLProtocol.urls = []
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FeedbackURLProtocol.self]
         let session = URLSession(configuration: config)
@@ -232,30 +233,36 @@ final class ClientFeedbackTests: XCTestCase {
         FeedbackURLProtocol.status = 404
         FeedbackURLProtocol.body = Data()
         let empty = try await api.boardTaskComments(id: "old")
-        XCTAssertTrue(empty.isEmpty)
+        XCTAssertTrue(empty.comments.isEmpty)
+        XCTAssertEqual(empty.totalCount, 0)
         FeedbackURLProtocol.status = 200
-        FeedbackURLProtocol.body = Data(#"{"comments":[{"id":"c1","taskId":"a/b","authorName":"小王","body":"也遇到了相同的问题。","createdAt":"2026-10-16T01:02:03Z"},{"id":"c2","taskId":"other","authorName":"我","body":"other","createdAt":"now"}]}"#.utf8)
-        let comments = try await api.boardTaskComments(id: "a/b")
-        XCTAssertEqual(comments.map(\.id), ["c1"])
-        XCTAssertEqual(comments.first?.authorName, "小王")
-        XCTAssertTrue(FeedbackURLProtocol.paths.last?.contains("a/b") == true)
+        FeedbackURLProtocol.body = Data(#"{"comments":[{"id":"c1","taskId":"a/b","authorName":"小王","body":"也遇到了相同的问题。","createdAt":"2026-10-16T01:02:03Z"},{"id":"c2","taskId":"other","authorName":"我","body":"other","createdAt":"now"}],"totalCount":7,"nextCursor":"opaque +/="}"#.utf8)
+        let page = try await api.boardTaskComments(id: "a/b", before: "older +/=", limit: 17)
+        XCTAssertEqual(page.comments.map(\.id), ["c1"])
+        XCTAssertEqual(page.comments.first?.authorName, "小王")
+        XCTAssertEqual(page.totalCount, 7)
+        XCTAssertEqual(page.nextCursor, "opaque +/=")
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(FeedbackURLProtocol.urls.last), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.path, "/api/wand-tasks/a/b/comments")
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "limit" })?.value, "17")
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "before" })?.value, "older +/=")
     }
 
     @MainActor
     func testCommentsRefreshFailurePreservesDataAndAllowsRetry() async {
         let store = TaskCommentsStore()
         let comment = WandTaskComment(id: "c1", taskId: "task", authorName: "我", body: String(repeating: "长评论", count: 200), createdAt: "now")
-        await store.load(taskId: "task") { _ in [comment] }
+        await store.load(taskId: "task") { _, _, _ in WandTaskCommentsPage(comments: [comment], totalCount: 1, nextCursor: nil) }
         XCTAssertEqual(store.comments, [comment])
         XCTAssertFalse(store.loading)
-        await store.load(taskId: "task") { _ in throw URLError(.notConnectedToInternet) }
+        await store.load(taskId: "task") { _, _, _ in throw URLError(.notConnectedToInternet) }
         XCTAssertTrue(store.failed)
         XCTAssertFalse(store.loading)
         XCTAssertEqual(store.comments, [comment])
-        await store.load(taskId: "task") { _ in [] }
+        await store.load(taskId: "task") { _, _, _ in WandTaskCommentsPage(comments: [], totalCount: 0, nextCursor: nil) }
         XCTAssertFalse(store.failed)
-        XCTAssertTrue(store.comments.isEmpty)
-        await store.load(taskId: "other") { _ in throw URLError(.notConnectedToInternet) }
+        XCTAssertEqual(store.comments, [comment], "an empty first page keeps older pages already loaded")
+        await store.load(taskId: "other") { _, _, _ in throw URLError(.notConnectedToInternet) }
         XCTAssertTrue(store.failed)
         XCTAssertTrue(store.comments.isEmpty)
     }
@@ -263,11 +270,11 @@ final class ClientFeedbackTests: XCTestCase {
     @MainActor
     func testLateCommentsCannotReplaceNewTask() async throws {
         let store = TaskCommentsStore()
-        var old: CheckedContinuation<[WandTaskComment], Error>?
-        let first = Task { await store.load(taskId: "first") { _ in try await withCheckedThrowingContinuation { old = $0 } } }
+        var old: CheckedContinuation<WandTaskCommentsPage, Error>?
+        let first = Task { await store.load(taskId: "first") { _, _, _ in try await withCheckedThrowingContinuation { old = $0 } } }
         while old == nil { await Task.yield() }
-        await store.load(taskId: "second") { _ in [WandTaskComment(id: "new", taskId: "second", authorName: "我", body: "new", createdAt: "now")] }
-        old?.resume(returning: [WandTaskComment(id: "old", taskId: "first", authorName: "我", body: "old", createdAt: "now")])
+        await store.load(taskId: "second") { _, _, _ in WandTaskCommentsPage(comments: [WandTaskComment(id: "new", taskId: "second", authorName: "我", body: "new", createdAt: "now")], totalCount: 1, nextCursor: nil) }
+        old?.resume(returning: WandTaskCommentsPage(comments: [WandTaskComment(id: "old", taskId: "first", authorName: "我", body: "old", createdAt: "now")], totalCount: 1, nextCursor: nil))
         await first.value
         XCTAssertEqual(store.comments.map(\.id), ["new"])
     }
@@ -277,10 +284,12 @@ private final class FeedbackURLProtocol: URLProtocol {
     static var status = 200
     static var body = Data()
     static var paths: [String] = []
+    static var urls: [URL] = []
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.paths.append(request.url!.path)
+        Self.urls.append(request.url!)
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Self.body)
         client?.urlProtocolDidFinishLoading(self)
@@ -290,13 +299,76 @@ private final class FeedbackURLProtocol: URLProtocol {
 
 extension ClientFeedbackTests {
 
+    func testCommentStatusAPIEncodesIdsAndReturnsPartialProjection() async throws {
+        FeedbackURLProtocol.status = 200
+        FeedbackURLProtocol.body = Data(#"{"comments":[{"id":"c1","dispatch":null},{"id":"c2"}]}"#.utf8)
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [FeedbackURLProtocol.self]
+        let session = URLSession(configuration: config); defer { session.invalidateAndCancel() }
+        let api = WandAPI(baseURL: origin, token: nil, session: session)
+        let payload = try await api.boardTaskCommentStatuses(taskId: "task / one", commentIds: ["c1", "c2"])
+        XCTAssertEqual(payload.comments.map(\.id), ["c1", "c2"])
+        XCTAssertTrue(payload.comments[0].includesDispatch)
+        XCTAssertNil(payload.comments[0].dispatch)
+        XCTAssertFalse(payload.comments[1].includesDispatch)
+        let url = try XCTUnwrap(FeedbackURLProtocol.urls.last)
+        XCTAssertEqual(Set(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "ids" })?.value?.split(separator: ",").map(String.init) ?? []), Set(["c1", "c2"]))
+        XCTAssertTrue(url.absoluteString.contains("task%20%2F%20one"))
+    }
+
+    @MainActor func testStatusRefreshUpdatesOlderLoadedCommentWithoutChangingPaginationOrBody() async {
+        let store = TaskCommentsStore()
+        let fresh = WandTaskComment(id: "fresh", taskId: "task", authorName: "作者", body: "fresh body", createdAt: "2026-10-19", dispatch: nil)
+        await store.load(taskId: "task") { _, _, _ in WandTaskCommentsPage(comments: [fresh], totalCount: 2, nextCursor: "opaque") }
+        let older = WandTaskComment(id: "older", taskId: "task", authorName: "旧作者", body: "保留正文", createdAt: "2026-10-18")
+        await store.loadOlder(taskId: "task") { _, _, _ in WandTaskCommentsPage(comments: [older], totalCount: 2, nextCursor: nil) }
+        let dispatch = WandTaskCommentDispatch(employeeId: "e", employeeName: "员工", state: "accepted", sessionId: "s", resultAnchor: nil, status: "running", error: nil)
+        await store.refreshStatuses(taskId: "task") { _, ids in
+            XCTAssertEqual(ids, ["fresh", "older"])
+            return WandTaskCommentStatuses(comments: [WandTaskCommentStatus(id: "older", dispatch: dispatch, includesDispatch: true)])
+        }
+        XCTAssertEqual(store.comments.first(where: { $0.id == "older" })?.body, "保留正文")
+        XCTAssertEqual(store.comments.first(where: { $0.id == "older" })?.dispatch?.status, "running")
+        XCTAssertNil(store.comments.first(where: { $0.id == "fresh" })?.dispatch)
+        XCTAssertEqual(store.nextCursor, nil)
+        XCTAssertEqual(store.totalCount, 2)
+    }
+
+    func testTaskCommentResultBlockWindowUsesAbsoluteIndicesAndLegacyHandles() throws {
+        let json = #"{"turnOffset":12,"blockOffset":5,"blockTotal":8,"blocks":[{"blockIndex":5,"block":{"type":"text","text":"window"},"truncated":true}]}"#
+        let window = try JSONDecoder().decode(WandTaskCommentBlockWindow.self, from: Data(json.utf8))
+        XCTAssertEqual(window.turnOffset, 12)
+        XCTAssertEqual(window.blockOffset, 5)
+        XCTAssertEqual(window.blocks.first?.blockIndex, 5)
+        XCTAssertTrue(window.blocks.first?.truncated == true)
+
+        let olderShape = #"{"blocks":[{"type":"text","text":"older"}],"blockOffset":5,"blockTotal":8,"truncatedBlocks":[{"turnOffset":3,"blockIndex":5}]}"#
+        let legacy = try JSONDecoder().decode(WandTaskCommentBlockWindow.self, from: Data(olderShape.utf8))
+        XCTAssertFalse(legacy.hasExplicitTurnOffset)
+        XCTAssertEqual(legacy.blockOffset, 5)
+        XCTAssertEqual(legacy.blocks.first?.blockIndex, 5)
+        XCTAssertTrue(legacy.blocks.first?.truncated == true)
+    }
+
+    func testJSONValuePrettyPrintedJSONPreservesNestedToolDetails() {
+        let value = JSONValue.object(["nested": .array([.object(["answer": .string("complete")])])])
+        XCTAssertTrue(value.prettyPrintedJSON.contains("complete"))
+        XCTAssertTrue(value.prettyPrintedJSON.contains("nested"))
+        XCTAssertFalse(value.prettyPrintedJSON.contains("{…}"))
+    }
+
     func testTaskCommentDispatchDecodesTrustedIdentityAndStatus() throws {
-        let data = Data(#"{"id":"c","taskId":"task","authorName":"用户","body":"@赛博虎妞 本轮","createdAt":"now","sourceCommentId":"source","dispatch":{"employeeId":"stable-id","employeeName":"赛博虎妞","state":"accepted","sessionId":"exact-session","status":"stopped","error":null}}"#.utf8)
+        let data = Data(#"{"id":"c","taskId":"task","authorName":"用户","body":"@赛博虎妞 本轮","createdAt":"now","sourceCommentId":"source","dispatch":{"employeeId":"stable-id","employeeName":"赛博虎妞","state":"accepted","sessionId":"exact-session","status":"stopped","error":null,"resultAnchor":{"requestId":"req-1","fingerprint":"digest","startIndex":7,"endIndex":null,"outcome":null}}}"#.utf8)
         let comment = try JSONDecoder().decode(WandTaskComment.self, from: data)
         XCTAssertEqual(comment.sourceCommentId, "source")
         XCTAssertEqual(comment.dispatch?.employeeId, "stable-id")
         XCTAssertEqual(comment.dispatch?.sessionId, "exact-session")
         XCTAssertEqual(comment.dispatch?.label, "已停止")
+        XCTAssertEqual(comment.dispatch?.resultAnchor?.requestId, "req-1")
+        XCTAssertEqual(comment.dispatch?.resultAnchor?.startIndex, 7)
+        XCTAssertNil(comment.dispatch?.resultAnchor?.endIndex)
+        XCTAssertNil(comment.dispatch?.resultAnchor?.outcome)
+        let misplacedAnchor = try JSONDecoder().decode(WandTaskComment.self, from: Data(#"{"id":"legacy","taskId":"task","authorName":"用户","body":"old","createdAt":"now","resultAnchor":{"requestId":"wrong","fingerprint":"digest","startIndex":0}}"#.utf8))
+        XCTAssertNil(misplacedAnchor.dispatch?.resultAnchor, "anchor is nested under dispatch only")
         let plain = try JSONDecoder().decode(WandTaskComment.self, from: Data(#"{"id":"old","taskId":"task","authorName":"用户","body":"@文本不派发","createdAt":"now"}"#.utf8))
         XCTAssertNil(plain.dispatch)
     }
@@ -324,15 +396,45 @@ extension ClientFeedbackTests {
 }
 
 extension ClientFeedbackTests {
+    @MainActor func testCommentsRefreshKeepsOlderPagesAndUpdatesFreshCopies() async {
+        let store = TaskCommentsStore()
+        let fresh = WandTaskComment(id: "new", taskId: "same", authorName: "用户", body: "new", createdAt: "2026-10-19T00:00:00Z")
+        await store.load(taskId: "same") { _, _, _ in WandTaskCommentsPage(comments: [fresh], totalCount: 3, nextCursor: "cursor-1") }
+        var requestedCursor: String?
+        let old = WandTaskComment(id: "old", taskId: "same", authorName: "用户", body: "old", createdAt: "2026-10-18T00:00:00Z")
+        await store.loadOlder(taskId: "same") { _, before, _ in
+            requestedCursor = before
+            return WandTaskCommentsPage(comments: [old], totalCount: 3, nextCursor: "cursor-2")
+        }
+        XCTAssertEqual(requestedCursor, "cursor-1")
+        XCTAssertEqual(Set(store.comments.map(\.id)), ["new", "old"])
+        let updated = WandTaskComment(id: "new", taskId: "same", authorName: "用户", body: "new", createdAt: fresh.createdAt,
+            dispatch: WandTaskCommentDispatch(employeeId: "e", employeeName: "员工", state: "accepted", sessionId: "s", resultAnchor: nil, status: "running", error: nil))
+        await store.load(taskId: "same") { _, _, _ in WandTaskCommentsPage(comments: [updated], totalCount: 4, nextCursor: "cursor-reset") }
+        XCTAssertEqual(store.comments.count, 2)
+        XCTAssertEqual(store.comments.first(where: { $0.id == "new" })?.dispatch?.status, "running")
+        XCTAssertEqual(store.totalCount, 4)
+        XCTAssertTrue(store.hasOlderPage, "refresh does not lose the loaded pagination position")
+        XCTAssertEqual(store.nextCursor, "cursor-2", "the cursor for the next older page remains authoritative")
+        let oldest = WandTaskComment(id: "oldest", taskId: "same", authorName: "用户", body: "oldest", createdAt: "2026-10-17T00:00:00Z")
+        var nextCursor: String?
+        await store.loadOlder(taskId: "same") { _, before, _ in
+            nextCursor = before
+            return WandTaskCommentsPage(comments: [oldest], totalCount: 4, nextCursor: nil)
+        }
+        XCTAssertEqual(nextCursor, "cursor-2")
+        XCTAssertEqual(Set(store.comments.map(\.id)), ["new", "old", "oldest"])
+    }
+
     @MainActor func testSameTaskReversePollingResponsesCannotReplaceNewerState() async {
         let store = TaskCommentsStore()
-        var complete: CheckedContinuation<[WandTaskComment], Error>?
-        let slow = Task { await store.load(taskId: "same") { _ in try await withCheckedThrowingContinuation { complete = $0 } } }
+        var complete: CheckedContinuation<WandTaskCommentsPage, Error>?
+        let slow = Task { await store.load(taskId: "same") { _, _, _ in try await withCheckedThrowingContinuation { complete = $0 } } }
         while complete == nil { await Task.yield() }
         let latest = WandTaskComment(id: "new", taskId: "same", authorName: "用户", body: "newer", createdAt: "now")
-        await store.load(taskId: "same") { _ in [latest] }
-        complete?.resume(returning: [WandTaskComment(id: "old", taskId: "same", authorName: "用户", body: "stale", createdAt: "before")])
+        await store.load(taskId: "same") { _, _, _ in WandTaskCommentsPage(comments: [latest], totalCount: 1, nextCursor: nil) }
+        complete?.resume(returning: WandTaskCommentsPage(comments: [WandTaskComment(id: "old", taskId: "same", authorName: "用户", body: "stale", createdAt: "before")], totalCount: 1, nextCursor: nil))
         await slow.value
-        XCTAssertEqual(store.comments, [latest])
+        XCTAssertEqual(store.comments.map(\.id), [latest.id])
     }
 }

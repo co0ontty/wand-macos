@@ -36,6 +36,14 @@ final class TaskBoardTests: XCTestCase {
         XCTAssertEqual(task.sessions.first?.employeeAvatar, "cat:0")
     }
 
+    func testTaskCommentSessionsDecodeAndCanBeProjectedOutWithoutHidingLegacySessions() throws {
+        let json = #"[{"id":"dispatch","provider":"pi","taskCommentId":"comment-1"},{"id":"legacy","provider":"claude"}]"#
+        let sessions = try JSONDecoder().decode([WandBoardTaskSession].self, from: Data(json.utf8))
+        XCTAssertEqual(sessions.first?.taskCommentId, "comment-1")
+        XCTAssertNil(sessions.last?.taskCommentId)
+        XCTAssertEqual(sessions.filter { $0.taskCommentId == nil }.map(\.id), ["legacy"])
+    }
+
     func testPlanningParentPolicyCoversUnstartedAndAwaitingConfirmation() throws {
         let json = #"[{"id":"todo","status":"todo"},{"id":"doing","status":"doing"},{"id":"done","status":"done"},{"id":"archived","status":"archived"},{"id":"child","parentTaskId":"todo"},{"id":"other","workspaceId":"elsewhere"}]"#
         let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(json.utf8))
@@ -284,7 +292,7 @@ final class TaskBoardTests: XCTestCase {
         let task = try JSONDecoder().decode(WandBoardTask.self, from: data)
         for width in [640, 1200] {
             for dark in [false, true] {
-                let detail = WandBoardDetailView(task: task, loadComments: { _ in [] }, workspaces: [], milestones: [], catalog: nil, busy: false,
+                let detail = WandBoardDetailView(task: task, loadComments: { _, _, _ in WandTaskCommentsPage(comments: [], totalCount: 0, nextCursor: nil) }, workspaces: [], milestones: [], catalog: nil, busy: false,
                     onPatch: { _ in XCTFail("Read-only visual must not patch") }, onRemember: { _ in }, onDispatch: { _, _ in XCTFail("Read-only visual must not dispatch") }, onArchive: { XCTFail("Read-only visual must not archive") }, onOpenSession: { _ in }, onCreateMilestone: { _ in throw URLError(.unsupportedURL) })
                 try await organizationSnapshot(detail, size: NSSize(width: width, height: 1050), dark: dark,
                     path: output.appendingPathComponent("detail-\(width)-\(dark ? "dark" : "light").png"))
@@ -371,7 +379,9 @@ final class TaskBoardTests: XCTestCase {
     }
 
     func testBoardLabelsCoverColumns() {
-        XCTAssertEqual(WandBoardStatus.columns.map(\.rawValue), ["todo", "doing", "done"])
+        XCTAssertEqual(WandBoardStatus.columns.map(\.rawValue), ["backlog", "todo", "doing", "done"])
+        XCTAssertEqual(WandBoardStatus.backlog.label, "待立项")
+        XCTAssertFalse(WandBoardStatus.backlog.isClosed)
         XCTAssertEqual(WandBoardStatus.todo.label, "等待认领")
         XCTAssertEqual(WandBoardStatus.doing.label, "处理中")
         XCTAssertEqual(WandBoardStatus.done.label, "等你确认")

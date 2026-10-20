@@ -38,7 +38,9 @@ struct BrandLogo: View {
         case .claude:
             BrandLogoShape(provider: provider)
                 .fill(BrandLogoPalette.claude)
-        case .codex, .grok, .pi:
+        case .pi:
+            OfficialPiLogo()
+        case .codex, .grok:
             BrandLogoShape(provider: provider)
                 .fill(monoFill)
         }
@@ -76,6 +78,30 @@ private struct OfficialOpenCodeLogo: View {
             context.fill(window, with: .color(.white), style: FillStyle(eoFill: true))
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+/// Official pi.dev/logo-auto.svg colors; scale the visible bounds like the Web tab mark.
+private struct OfficialPiLogo: View {
+    var body: some View {
+        Canvas { context, size in
+            let sx = size.width / 469.43, sy = size.height / 469.43
+            func polygon(_ points: [(CGFloat, CGFloat)]) -> Path {
+                Path { path in
+                    for (index, point) in points.enumerated() {
+                        let p = CGPoint(x: (point.0 - 165.29) * sx, y: (point.1 - 165.29) * sy)
+                        if index == 0 { path.move(to: p) } else { path.addLine(to: p) }
+                    }
+                    path.closeSubpath()
+                }
+            }
+            context.fill(polygon([(165.29,165.29),(517.36,165.29),(517.36,400),(400,400),(400,282.65),(165.29,282.65)]),
+                with: .color(Color(red: 240/255, green: 144/255, blue: 130/255)))
+            context.fill(polygon([(165.29,282.65),(282.65,282.65),(282.65,400),(400,400),(400,517.36),(282.65,517.36),(282.65,634.72),(165.29,634.72)]),
+                with: .color(Color(red: 77/255, green: 154/255, blue: 191/255)))
+            context.fill(polygon([(517.36,400),(634.72,400),(634.72,634.72),(517.36,634.72)]),
+                with: .color(Color(red: 241/255, green: 190/255, blue: 88/255)))
+        }.aspectRatio(1, contentMode: .fit)
     }
 }
 

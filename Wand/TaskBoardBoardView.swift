@@ -17,6 +17,7 @@ struct WandBoardBoardView: View {
     let onToggleArchive: () -> Void
     let onCreateInColumn: (String) -> Void
     let onOpenTask: (String) -> Void
+    var onOpenComments: (String) -> Void = { _ in }
     let onOpenSession: (String) -> Void
     let onCompleteTask: (WandBoardTask) -> Void
     let onPatchStatus: (WandBoardTask, String) -> Void
@@ -37,30 +38,40 @@ struct WandBoardBoardView: View {
     }
 
     private var otherColumns: [WandBoardStatus] {
-        WandBoardStatus.columns.filter { !display.mainStatuses.contains($0.rawValue) }
+        WandBoardStatus.columns.filter { $0 != .backlog && !display.mainStatuses.contains($0.rawValue) }
     }
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 24) {
-                ForEach(mainColumns) { status in
-                    column(status)
-                        .frame(minWidth: 240, maxWidth: .infinity)
-                }
-                if !otherColumns.isEmpty {
-                    VStack(alignment: .leading, spacing: 16) {
-                        ForEach(otherColumns) { status in
-                            column(status)
-                        }
+        GeometryReader { geometry in
+            let contentWidth = min(1260, geometry.size.width)
+            let columnCount = CGFloat(max(1, mainColumns.count))
+            let columnWidth = min(360, max(280, (contentWidth - 56 - CGFloat(max(0, mainColumns.count - 1)) * 24) / columnCount))
+            let sideWidth: CGFloat = otherColumns.isEmpty ? 0 : min(320, columnWidth)
+            let naturalWidth = CGFloat(mainColumns.count) * columnWidth
+                + (mainColumns.isEmpty || otherColumns.isEmpty ? 0 : 24)
+                + sideWidth + 56
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 24) {
+                    ForEach(mainColumns) { status in
+                        column(status)
+                            .frame(width: columnWidth)
                     }
-                    .frame(width: 300)
+                    if !otherColumns.isEmpty {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(otherColumns) { status in
+                                column(status)
+                            }
+                        }
+                        .frame(width: sideWidth)
+                    }
                 }
+                .padding(.horizontal, 28)
+                .padding(.bottom, 12)
+                .frame(width: max(contentWidth, naturalWidth), alignment: .topLeading)
             }
-            .padding(.horizontal, 28)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(maxWidth: contentWidth, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: 列
@@ -172,6 +183,7 @@ struct WandBoardBoardView: View {
             busy: busyId == task.id,
             dropTarget: sessionDropTarget == task.id,
             onOpen: { onOpenTask(task.id) },
+            onOpenComments: { onOpenComments(task.id) },
             onOpenSession: onOpenSession,
             onComplete: { onCompleteTask(task) },
             onPatchStatus: { onPatchStatus(task, $0) },

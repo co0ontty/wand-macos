@@ -5,6 +5,73 @@ import XCTest
 
 /// 任务一级容器契约的对齐测试（与 iOS WorkspaceWorktreeTests 同源，防两端漂移）。
 final class WorkspaceTaskContractTests: XCTestCase {
+    @MainActor
+    func testSidebarCopiesTheClickedServerDirectoryWithoutChangingEmptyClipboard() {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("wand-directory-copy-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        XCTAssertNil(DesktopCopyWorkingDirectoryButton.availablePath(nil))
+        XCTAssertNil(DesktopCopyWorkingDirectoryButton.availablePath(" \n"))
+        XCTAssertTrue(DesktopCopyWorkingDirectoryButton.copy("/server/另一目录/worktree", to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "/server/另一目录/worktree")
+        XCTAssertFalse(DesktopCopyWorkingDirectoryButton.copy(nil, to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "/server/另一目录/worktree")
+        XCTAssertTrue(DesktopCopyWorkingDirectoryButton.copy("/server/目录 with spaces ", to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "/server/目录 with spaces ")
+    }
+
+    func testUnifiedHeaderUsesServerDirectoryMembershipAndFreshSelectedTitle() throws {
+        let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"[{"workspaceId":"w","workspaceName":"wand","workspaceCwd":"/repo","tasks":[],"standaloneSessions":[{"id":"s1","title":"旧标题","provider":"claude","startedAt":"2026-10-01T00:00:00Z"},{"id":"s2","title":"Pi 2","provider":"pi","startedAt":"2026-10-02T00:00:00Z"},{"id":"archived","archived":true},{"id":"bound","workspaceTaskId":"task"}]}]"#.utf8))
+        let selected = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"id":"s1","title":"新标题","provider":"claude","status":"idle","cwd":"/repo","startedAt":"2026-10-01T00:00:00Z"}"#.utf8))
+        let scope = DesktopSessionTabScope.standalone(groups: groups, selected: selected)
+        XCTAssertEqual(scope.map(\.id), ["s1", "s2"])
+        XCTAssertEqual(DesktopSessionTabScope.liveStandaloneIds(groups: groups), Set(["s1", "s2"]))
+        XCTAssertEqual(scope.first?.title, "新标题")
+        XCTAssertEqual(DesktopSessionTabScope.standalone(groups: [], selected: selected).map(\.id), ["s1"])
+    }
+
+    @MainActor
+    func testUnifiedHeaderNativeTabsAndNewActionStayInOneRow() async throws {
+        let sessions = try JSONDecoder().decode([WorkspaceSessionSummary].self, from: Data(#"[{"id":"s1","title":"梳理 iOS 新建任务流程","provider":"claude","status":"idle"},{"id":"s2","title":"Pi 2","provider":"pi","status":"idle"}]"#.utf8))
+        let api = makeAPI { _ in XCTFail("Header presentation must not issue requests"); return Data("[]".utf8) }
+        let store = trackedStore(api: api, serverID: "unified-header")
+        var selected: String?, newCount = 0
+        let host = NSHostingView(rootView: HStack(spacing: 8) {
+            WorkspaceSessionHeader(store: store, sessions: sessions, selectedId: "s1", onSelect: { selected = $0 }, onNew: { newCount += 1 })
+            WindowDragRegion().frame(width: 32, height: 52)
+            Image(systemName: "terminal").frame(width: 28, height: 28)
+            Image(systemName: "doc.text").frame(width: 28, height: 28)
+        }.padding(.horizontal, 12).frame(height: 52).background(Theme.workspaceBackground))
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 52)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
+        NSApp.activate(ignoringOtherApps: true)
+        try await Task.sleep(nanoseconds: 180_000_000)
+        let target = try XCTUnwrap(sidebarPresenceView(host, id: "workbar-tab-s2"))
+        let targetRect = target.convert(target.bounds, to: host)
+        print("WORKBAR HIT rect=\(targetRect) host=\(host.bounds) hit=\(String(describing: host.hitTest(NSPoint(x: targetRect.midX, y: targetRect.midY))))")
+        try clickSidebarMarker(host, window: window, id: "workbar-tab-s2")
+        try await Task.sleep(nanoseconds: 180_000_000)
+        XCTAssertEqual(selected, "s2")
+        try clickSidebarMarker(host, window: window, id: "workbar-new")
+        XCTAssertEqual(newCount, 1)
+        for width in [900.0, 560.0] {
+            window.setContentSize(NSSize(width: width, height: 52))
+            host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 120_000_000); host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(host.bounds.height, 52, accuracy: 1)
+            let button = try XCTUnwrap(sidebarPresenceView(host, id: "workbar-new"))
+            let rect = button.convert(button.bounds, to: host)
+            XCTAssertGreaterThanOrEqual(rect.minX, 0)
+            XCTAssertLessThanOrEqual(rect.maxX, width)
+            try captureSidebar(host, name: "unified-header-\(Int(width))")
+        }
+        host.appearance = NSAppearance(named: .darkAqua)
+        window.appearance = NSAppearance(named: .darkAqua)
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 180_000_000); host.layoutSubtreeIfNeeded()
+        try captureSidebar(host, name: "unified-header-dark")
+    }
+
     func testTaskListPresentationShortensPathsAndAvoidsSharedDirectoryLabel() {
         XCTAssertEqual(
             TaskListPresentation.shortenWorkspacePath("/Users/me/Self/vibe_coding/wand"),

@@ -1,6 +1,21 @@
 import AppKit
+import Metal
 import SwiftUI
 import WebKit
+
+/// Same floors as web `avatar-hardware.ts`. Metal presence stands in for the browser caveat flag.
+enum AvatarHardware {
+    static let liveMinCores = 4
+    static let liveMinMemoryGB = 4.0
+    static func liveScene(cores: Int, memoryGB: Double, metal: Bool) -> Bool {
+        metal && cores >= liveMinCores && memoryGB >= liveMinMemoryGB
+    }
+    static var liveScene: Bool {
+        liveScene(cores: ProcessInfo.processInfo.processorCount,
+            memoryGB: Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824,
+            metal: MTLCreateSystemDefaultDevice() != nil)
+    }
+}
 
 enum AvatarFileActivity: String { case idle, reading, writing }
 
@@ -128,12 +143,16 @@ struct WorkingAvatar: View {
     @Environment(\.accessibilityReduceMotion) private var reduced
     @State private var visible = false
     @State private var rendered = false
+    private var live: Bool { AvatarHardware.liveScene && PlushAvatarIdentity.asset(id: id, name: name, avatar: avatar) != nil }
     var body: some View {
         ZStack {
-            ContactAvatar(id: id, avatar: avatar, name: name, size: size).opacity(rendered ? 0 : 1)
-            if PlushAvatarIdentity.asset(id: id, name: name, avatar: avatar) != nil {
+            ContactAvatar(id: id, avatar: avatar, name: name, size: size).opacity(live && rendered ? 0 : 1)
+            if live {
                 SharedPlushScene(id: id, name: name, avatar: avatar, activity: activity, thinking: thinking,
                     paused: !visible || scene != .active, reduced: reduced, size: size, rendered: $rendered)
+            }
+            if (live && visible && !rendered) || (!live && (thinking || activity != .idle)) {
+                ProgressView().controlSize(.small).allowsHitTesting(false)
             }
         }.frame(width: size, height: size).accessibilityHidden(true).allowsHitTesting(false)
             .onAppear { visible = true }.onDisappear { visible = false }

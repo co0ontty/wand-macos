@@ -513,6 +513,7 @@ struct SidebarColumn: View {
                 : "打开会话"
         )
         .contextMenu {
+            DesktopCopyWorkingDirectoryButton(cwd: session.cwd)
             Button {
                 isSelecting = true
                 selectedSessionIds.insert(session.id)

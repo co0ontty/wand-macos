@@ -36,6 +36,25 @@ enum JSONValue: Decodable {
         }
     }
 
+    /// Complete JSON representation for read-only tool details.
+    var prettyPrintedJSON: String {
+        let options: JSONSerialization.WritingOptions = [.prettyPrinted, .sortedKeys, .fragmentsAllowed]
+        guard let data = try? JSONSerialization.data(withJSONObject: foundationValue, options: options),
+              let text = String(data: data, encoding: .utf8) else { return summaryText }
+        return text
+    }
+
+    private var foundationValue: Any {
+        switch self {
+        case .string(let value): return value
+        case .number(let value): return value
+        case .bool(let value): return value
+        case .object(let value): return value.mapValues(\.foundationValue)
+        case .array(let value): return value.map(\.foundationValue)
+        case .null: return NSNull()
+        }
+    }
+
     /// 单行摘要文本，用于 tool_use 卡片里展示参数。
     var summaryText: String {
         switch self {
@@ -355,6 +374,8 @@ enum ContentBlock: Decodable {
 struct ConversationTurn: Decodable {
     let role: String
     let content: [ContentBlock]
+    let blockOffset: Int?
+    let blockTotal: Int?
     let messageId: String?
     let requestId: String?
     let createdAt: String?
@@ -369,11 +390,12 @@ struct ConversationTurn: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case role, content, messageId, requestId, createdAt, completedAt, author, sessionLink, sessionPreview
-        case conversationLink, taskPreview, conversationTarget, notice
+        case conversationLink, taskPreview, conversationTarget, notice, blockOffset, blockTotal
     }
 
     init(role: String, content: [ContentBlock]) {
         self.role = role; self.content = content
+        blockOffset = nil; blockTotal = nil
         messageId = nil; requestId = nil; createdAt = nil; completedAt = nil; author = nil; sessionLink = nil; sessionPreview = nil
         conversationLink = nil; taskPreview = nil; conversationTarget = nil; notice = nil
     }
@@ -381,6 +403,8 @@ struct ConversationTurn: Decodable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         role = (try? c.decode(String.self, forKey: .role)) ?? "assistant"
+        blockOffset = try? c.decode(Int.self, forKey: .blockOffset)
+        blockTotal = try? c.decode(Int.self, forKey: .blockTotal)
         messageId = try? c.decode(String.self, forKey: .messageId)
         requestId = try? c.decode(String.self, forKey: .requestId)
         createdAt = try? c.decode(String.self, forKey: .createdAt)

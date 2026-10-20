@@ -162,13 +162,114 @@ final class WandAPI {
         return try await request(Response.self, method: "POST", path: "/api/wand-tasks/\(percentEncodePathComponent(id))/comments", body: payload).comment
     }
 
-    func boardTaskComments(id: String) async throws -> [WandTaskComment] {
-        struct Response: Decodable { let comments: [WandTaskComment] }
+    func boardTaskCommentResult(taskId: String, commentId: String, offset: Int = 0, limit: Int = 40) async throws -> WandTaskCommentResultResponse {
+        let safeOffset = max(0, offset)
+        let safeLimit = min(max(1, limit), 100)
+        return try await request(
+            WandTaskCommentResultResponse.self,
+            method: "GET",
+            path: "/api/wand-tasks/\(percentEncodePathComponent(taskId))/comments/\(percentEncodePathComponent(commentId))/result?limit=\(safeLimit)&offset=\(safeOffset)"
+        )
+    }
+
+    func boardTaskCommentResultBlock(taskId: String, commentId: String, turnOffset: Int, blockIndex: Int) async throws -> String {
+        let base = "/api/wand-tasks/\(percentEncodePathComponent(taskId))/comments/\(percentEncodePathComponent(commentId))/result/block/\(max(0, turnOffset))/\(max(0, blockIndex))"
+        struct Page: Decodable { let blockJsonBase64: String; let offset: Int; let total: Int }
+        var output = Data()
+        var offset = 0
+        var total = 0
+        var pages = 0
+        repeat {
+            try Task.checkCancellation()
+            guard pages < 4096, offset <= 16 * 1024 * 1024 else { throw APIError.network("评论结果块超出读取预算。") }
+            let page = try await request(Page.self, method: "GET", path: "\(base)?limit=16&offset=\(offset)")
+            try Task.checkCancellation()
+            guard let chunk = Data(base64Encoded: page.blockJsonBase64), page.offset == offset,
+                  page.total >= 0, page.total <= 16 * 1024 * 1024,
+                  !chunk.isEmpty || offset == page.total else { throw APIError.network("评论结果分页无效或未前进。") }
+            output.append(chunk); pages += 1
+            offset += chunk.count; total = page.total
+            guard offset <= total, output.count <= 16 * 1024 * 1024 else { throw APIError.network("评论结果块超出读取预算。") }
+        } while offset < total
+        guard offset == total else { throw APIError.network("评论结果分页总长度不匹配。") }
+        return String(decoding: output, as: UTF8.self)
+    }
+
+    func boardTaskCommentStatuses(taskId: String, commentIds: [String]) async throws -> WandTaskCommentStatuses {
+        let ids = Array(Set(commentIds)).prefix(100)
+        guard !ids.isEmpty else { return WandTaskCommentStatuses(comments: []) }
+        let query = percentEncode(ids.joined(separator: ","))
+        return try await request(WandTaskCommentStatuses.self, method: "GET",
+            path: "/api/wand-tasks/\(percentEncodePathComponent(taskId))/comments/status?ids=\(query)")
+    }
+
+    func boardTaskCommentBlockWindow(taskId: String, commentId: String, turnOffset: Int, blockOffset: Int = 0, limit: Int = 32) async throws -> WandTaskCommentBlockWindow {
+        guard turnOffset >= 0, blockOffset >= 0 else { throw APIError.network("评论结果分页坐标无效。") }
+        let safeLimit = min(max(1, limit), 64)
+        let path = "/api/wand-tasks/\(percentEncodePathComponent(taskId))/comments/\(percentEncodePathComponent(commentId))/result/blocks/\(turnOffset)?offset=\(blockOffset)&limit=\(safeLimit)"
+        let data = try await requestData(method: "GET", path: path)
         do {
-            let response = try await request(Response.self, method: "GET", path: "/api/wand-tasks/\(percentEncodePathComponent(id))/comments")
-            return response.comments.filter { $0.taskId == id }
+            var window = try JSONDecoder().decode(WandTaskCommentBlockWindow.self, from: data)
+            if !window.hasExplicitTurnOffset { window.turnOffset = turnOffset }
+            return window
+        } catch {
+            throw APIError.network("评论结果分页解析失败：\(error.localizedDescription)")
+        }
+    }
+
+    func boardTaskCommentToolContent(taskId: String, commentId: String, toolId: String) async throws -> WandTaskCommentToolContent {
+        struct Page: Decodable {
+            let inputJsonBase64: String; let inputOffset: Int; let inputTotal: Int
+            let contentJsonBase64: String; let offset: Int; let total: Int
+            let isError: Bool; let pending: Bool
+            private enum CodingKeys: String, CodingKey { case inputJsonBase64, inputOffset, inputTotal, contentJsonBase64, offset, total, isError = "is_error", pending }
+        }
+        let base = "/api/wand-tasks/\(percentEncodePathComponent(taskId))/comments/\(percentEncodePathComponent(commentId))/result/tool-content/\(percentEncodePathComponent(toolId))"
+        var input = Data(), content = Data()
+        var inputOffset = 0, offset = 0, inputTotal: Int?, total: Int?
+        var pages = 0
+        var isError = false, pending = false
+        repeat {
+            try Task.checkCancellation()
+            guard pages < 4096 else { throw APIError.network("工具详情分页次数超出预算。") }
+            let path = "\(base)?limit=16&offset=\(offset)&inputOffset=\(inputOffset)"
+            let page = try await request(Page.self, method: "GET", path: path)
+            try Task.checkCancellation()
+            pages += 1
+            guard page.offset == offset, page.inputOffset == inputOffset,
+                  page.total >= 0, page.inputTotal >= 0,
+                  page.total <= 16 * 1024 * 1024, page.inputTotal <= 16 * 1024 * 1024,
+                  total == nil || total == page.total, inputTotal == nil || inputTotal == page.inputTotal,
+                  let contentChunk = Data(base64Encoded: page.contentJsonBase64),
+                  let inputChunk = Data(base64Encoded: page.inputJsonBase64)
+            else { throw APIError.network("工具详情分页响应无效。") }
+            total = page.total; inputTotal = page.inputTotal
+            if offset < page.total { guard !contentChunk.isEmpty else { throw APIError.network("工具结果分页未前进。") }; content.append(contentChunk); offset += contentChunk.count }
+            if inputOffset < page.inputTotal { guard !inputChunk.isEmpty else { throw APIError.network("工具输入分页未前进。") }; input.append(inputChunk); inputOffset += inputChunk.count }
+            guard offset <= page.total, inputOffset <= page.inputTotal,
+                  content.count <= 16 * 1024 * 1024, input.count <= 16 * 1024 * 1024
+            else { throw APIError.network("工具详情超出读取预算。") }
+            isError = page.isError; pending = page.pending
+        } while offset < (total ?? 0) || inputOffset < (inputTotal ?? 0)
+        do {
+            return WandTaskCommentToolContent(input: try JSONDecoder().decode([String: JSONValue].self, from: input),
+                content: try JSONDecoder().decode(JSONValue.self, from: content), isError: isError, pending: pending)
+        } catch { throw APIError.network("工具详情 JSON 无效：\(error.localizedDescription)") }
+    }
+
+    func boardTaskComments(id: String, before: String? = nil, limit: Int = 50) async throws -> WandTaskCommentsPage {
+        struct Response: Decodable {
+            let comments: [WandTaskComment]
+            let totalCount: Int?
+            let nextCursor: String?
+        }
+        var path = "/api/wand-tasks/\(percentEncodePathComponent(id))/comments?limit=\(min(max(1, limit), 100))"
+        if let before, !before.isEmpty { path += "&before=\(percentEncode(before))" }
+        do {
+            let response = try await request(Response.self, method: "GET", path: path)
+            return WandTaskCommentsPage(comments: response.comments.filter { $0.taskId == id }, totalCount: response.totalCount ?? response.comments.count, nextCursor: response.nextCursor)
         } catch APIError.server(status: 404, message: _) {
-            return [] // Older servers have no comments route.
+            return WandTaskCommentsPage(comments: [], totalCount: 0, nextCursor: nil) // Older servers have no comments route.
         }
     }
 

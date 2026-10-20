@@ -11,6 +11,7 @@ struct WandBoardListView: View {
     let onToggle: (String) -> Void
     let onToggleArchive: () -> Void
     let onOpenTask: (String) -> Void
+    var onOpenComments: (String) -> Void = { _ in }
     let onOpenSession: (String) -> Void
 
     var body: some View {
@@ -20,8 +21,10 @@ struct WandBoardListView: View {
                     group(status)
                 }
             }
+            .frame(maxWidth: 1260, alignment: .leading)
             .padding(.horizontal, 28)
             .padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -109,6 +112,11 @@ struct WandBoardListView: View {
                     }
                 }
                 Spacer(minLength: 12)
+                Button("评论 \(task.commentCount)") { onOpenComments(task.id) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Theme.textSecondary)
+                        .accessibilityLabel("查看评论（\(task.commentCount)）")
                 HStack(spacing: 4) {
                     WandBoardPriorityChip(priority: task.priority)
                     if let milestone = task.milestone {
@@ -169,8 +177,8 @@ struct WandBoardDashboardView: View {
             task.sessions.map { (task, $0) }
         }.prefix(6)
         let summary = stats.remaining == 0
-            ? "\(projectName) 当前没有未完成任务。"
-            : "\(projectName) 还有 \(stats.remaining) 项未完成，其中 \(stats.doing) 项正在处理、\(stats.todo) 项等待认领。"
+            ? "\(projectName) 当前没有已立项的未完成任务。\(stats.backlog > 0 ? "另有 \(stats.backlog) 项待立项。" : "")"
+            : "\(projectName) 还有 \(stats.remaining) 项已立项任务未完成，其中 \(stats.doing) 项正在处理、\(stats.todo) 项等待认领。\(stats.backlog > 0 ? "另有 \(stats.backlog) 项待立项。" : "")"
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -200,6 +208,7 @@ struct WandBoardDashboardView: View {
                 }
 
                 HStack(alignment: .top, spacing: 12) {
+                    metric("待立项", stats.backlog, WandBoardStatus.backlog.color, stats.total)
                     metric("处理中", stats.doing, WandBoardStatus.doing.color, stats.total)
                     metric("等你确认", stats.done, WandBoardStatus.done.color, stats.total)
                     metric("等待认领", stats.todo, WandBoardStatus.todo.color, stats.total)
@@ -486,7 +495,7 @@ struct WandBoardGanttView: View {
 
     var body: some View {
         let range = wandBoardGanttRange(zoom: zoom)
-        let statuses = WandBoardStatus.allCases
+        let statuses = WandBoardStatus.columns + [.archived]
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
                 Toggle("隐藏「\(WandBoardStatus.done.label)」", isOn: Binding(get: { hideCompleted }, set: onHideCompleted))

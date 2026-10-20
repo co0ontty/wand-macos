@@ -49,7 +49,7 @@ struct DesktopCopyPageLinkButton: View {
         }
         .buttonStyle(WandSecondaryButtonStyle())
         .disabled(url == nil)
-        .accessibilityLabel(label)
+        .accessibilityLabel(copied ? "链接已复制" : failed ? "复制失败，请重试" : label)
         .help("复制不含凭据的 Web 精确定位链接；打开时仍需登录对应服务器")
         .onChange(of: url) { _ in copied = false; failed = false }
     }

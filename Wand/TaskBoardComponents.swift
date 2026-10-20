@@ -14,6 +14,8 @@ struct WandBoardStatusGlyph: View {
     var body: some View {
         ZStack {
             switch status {
+            case .backlog:
+                Circle().strokeBorder(status.color, style: StrokeStyle(lineWidth: 1.4, dash: [2, 2])).frame(width: 10, height: 10)
             case .todo:
                 Circle()
                     .strokeBorder(status.color, lineWidth: 1.6)
@@ -609,6 +611,7 @@ struct WandBoardCard: View {
     var dragging = false
     var dropTarget = false
     let onOpen: () -> Void
+    var onOpenComments: () -> Void = {}
     let onOpenSession: (String) -> Void
     let onComplete: () -> Void
     let onPatchStatus: (String) -> Void
@@ -646,6 +649,11 @@ struct WandBoardCard: View {
             if parent != nil || childCount > 0 {
                 WandBoardRelationshipSummary(parent: parent, childCount: childCount)
             }
+            Button("评论 \(task.commentCount)") { onOpenComments() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+                    .accessibilityLabel("查看评论（\(task.commentCount)）")
             if display.body, !task.description.isEmpty, task.sessions.isEmpty, task.agent == nil {
                 Text(task.description)
                     .font(.system(size: 12))

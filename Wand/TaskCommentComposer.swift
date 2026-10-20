@@ -60,8 +60,8 @@ struct TaskCommentComposer: View {
 
     private func choose(_ employee: (id: String, name: String)) {
         let next = TaskCommentMention.insert(body: bodyText, caret: caret, name: employee.name)
-        bodyText = next.body
-        caret = next.caret
+        bodyText = TaskCommentMention.removeLeadingSelectedMention(next.body, name: employee.name)
+        caret = min(next.caret, bodyText.count)
         employeeId = employee.id
         mentionDismissed = ""
         changed()
