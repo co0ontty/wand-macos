@@ -109,6 +109,7 @@ struct NativeConversation: Decodable, Identifiable {
     var sessionId: String? = nil
     var communicationSessionId: String? = nil
     var historySessionIds: [String]? = nil
+    var history: ConversationHistory? = nil
 
     var isArchived: Bool { dissolvedAt?.isEmpty == false || (tasks ?? []).contains { $0.task.status == "archived" } }
     func isActivity(sessions: [WorkspaceSessionSummary], selectedConversationID: String?, selectedSessionID: String?) -> Bool {

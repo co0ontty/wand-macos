@@ -122,7 +122,7 @@ struct CommunicationsContent: View {
     let baseURL: URL
     let onOpenSession: (String) -> Void
     @State private var groupEditorOpen = false
-    private let refresh = Timer.publish(every: 6, on: .main, in: .common).autoconnect()
+    private let refresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -165,6 +165,7 @@ struct CommunicationsContent: View {
         }
         .background(Theme.workspaceBackground)
         .task { await store.refreshVisible() }
+        .onDisappear { store.stopRealtime() }
         .onReceive(refresh) { _ in Task { await store.refreshVisible() } }
         .onReceive(NotificationCenter.default.publisher(for: .wandIdentitySaved)) { _ in Task { await store.refreshIndex() } }
         .onChange(of: store.query) { _ in groupEditorOpen = false }
@@ -303,6 +304,7 @@ struct ConversationPane: View {
     let baseURL: URL
     let onOpenSession: (String) -> Void
     @State private var messagesLimit = 80
+    @State private var historyAnchor: String?
     @State private var membersExpanded = false
     @StateObject private var composerFocus = ComposerFocusController()
     @State private var inviteOpen = false
@@ -344,6 +346,10 @@ struct ConversationPane: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
+                        if conversation.history?.hasEarlier == true {
+                            Button(store.detailLoading ? "加载中…" : "加载更早消息") { historyAnchor = displayed.first?.id; store.refreshDetail(older: true); messagesLimit += 40 }
+                                .buttonStyle(WandSecondaryButtonStyle()).disabled(store.detailLoading)
+                        }
                         if conversation.turns.count > messagesLimit {
                             Button("显示更早的消息（\(conversation.turns.count - messagesLimit) 条）") { messagesLimit += 80 }
                                 .buttonStyle(WandSecondaryButtonStyle())
@@ -383,6 +389,9 @@ struct ConversationPane: View {
                     .padding(.horizontal, 24).padding(.vertical, 4)
                 }
                 .onAppear { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
+                .onChange(of: conversation.turns.first?.messageId) { _ in
+                    if let anchor = historyAnchor { historyAnchor = nil; proxy.scrollTo(anchor, anchor: .top) }
+                }
             }
             Divider()
             ConversationComposerSurface(owner: composer, store: store, conversation: conversation, focus: composerFocus)

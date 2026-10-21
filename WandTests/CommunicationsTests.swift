@@ -4,6 +4,62 @@ import XCTest
 
 @MainActor
 final class CommunicationsTests: XCTestCase {
+
+    func testSharedChatWireIsolatesSessionsAndRetainsOtherLeases() throws {
+        let api = WandAPI(baseURL: URL(string: "http://127.0.0.1:9")!, token: nil)
+        let a = WandSocket.sharedChat(api: api), b = WandSocket.sharedChat(api: api)
+        XCTAssertTrue(a.sharedConnection === b.sharedConnection)
+        var receivedA: [Int] = [], receivedB: [Int] = []
+        a.onEvent = { receivedA.append($0.seq ?? 0) }; b.onEvent = { receivedB.append($0.seq ?? 0) }
+        a.subscribe(sessionId: "a", ptyAck: false); b.subscribe(sessionId: "b", ptyAck: false)
+        a.connect(); b.connect()
+        defer { a.close(); b.close() }
+        func frame(_ id: String, _ type: String, _ seq: Int) throws {
+            a.sharedConnection.handle(try JSONSerialization.data(withJSONObject:
+                ["type": type, "sessionId": id, "seq": seq, "data": ["id": id, "messages": []]]))
+        }
+        XCTAssertEqual(a.activeChatLeases, 2)
+        try frame("a", "init", 1); try frame("b", "init", 1)
+        try frame("a", "output", 2); try frame("b", "output", 2)
+        XCTAssertEqual(receivedA, [1, 2]); XCTAssertEqual(receivedB, [1, 2])
+        a.close()
+        XCTAssertEqual(b.activeChatLeases, 1)
+        try frame("a", "output", 3); try frame("b", "output", 3)
+        XCTAssertEqual(receivedA, [1, 2]); XCTAssertEqual(receivedB, [1, 2, 3])
+        b.close(); XCTAssertEqual(a.activeChatLeases, 0)
+        // Re-entering the same store starts a fresh sequence boundary on the same pool.
+        a.connect(); try frame("a", "init", 1); try frame("a", "output", 2)
+        XCTAssertEqual(receivedA, [1, 2, 1, 2])
+        let otherAPI = WandAPI(baseURL: api.baseURL, token: "different-test-identity")
+        let other = WandSocket.sharedChat(api: otherAPI)
+        XCTAssertFalse(other.sharedConnection === a.sharedConnection)
+    }
+
+
+    func testSyncBufferMergesOldEditsDeletionAndOlderPages() async throws {
+        let buffer = ConversationSyncBuffer()
+        let first = try await buffer.read("c") { suffix in
+            XCTAssertEqual(suffix, "/sync")
+            return Data(#"{"id":"c","reset":true,"detail":{"id":"c","kind":"dm"},"messageOrder":["b"],"messages":[{"messageId":"b","content":[]}],"history":{"revision":"one","from":"anchor","hasEarlier":true,"total":2}}"#.utf8)
+        }
+        XCTAssertFalse(first.isEmpty)
+        let older = try await buffer.read("c", older: true) { suffix in
+            XCTAssertTrue(suffix.contains("since=one")); XCTAssertTrue(suffix.contains("older=1"))
+            return Data(#"{"id":"c","messageOrder":["a","b"],"messages":[{"messageId":"a","content":[]}],"history":{"revision":"two","from":"start","hasEarlier":false,"total":2}}"#.utf8)
+        }
+        let page = try XCTUnwrap(try JSONSerialization.jsonObject(with: older) as? [String: Any])
+        XCTAssertEqual((page["messages"] as? [[String: Any]])?.count, 2)
+        let changed = try await buffer.read("c") { _ in
+            Data(#"{"id":"c","messageOrder":["a"],"messages":[{"messageId":"a","content":[{"type":"text","text":"edited"}]}],"history":{"revision":"three","from":"start","hasEarlier":false,"total":1}}"#.utf8)
+        }
+        let result = try XCTUnwrap(try JSONSerialization.jsonObject(with: changed) as? [String: Any])
+        XCTAssertEqual((result["messages"] as? [[String: Any]])?.count, 1)
+        let same = try await buffer.read("c") { _ in
+            Data(#"{"id":"c","unchanged":true,"history":{"revision":"three","from":"start","hasEarlier":false,"total":1}}"#.utf8)
+        }
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: same) as? NSDictionary, result as NSDictionary)
+    }
+
     private var suites: [String] = []
     private func defaults() -> UserDefaults {
         let suite = "WandCommunicationsTests.\(UUID().uuidString)"; suites.append(suite)
@@ -390,8 +446,8 @@ final class CommunicationsTests: XCTestCase {
                 return Data(#"{"employees":[{"id":"e_first","name":"测试员工","duty":"职责","prompt":"不会投影或缓存的角色提示","agents":[{"provider":"pi","engine":"sdk"}]}]}"#.utf8)
             case "/api/conversations":
                 return Data(#"{"conversations":[]}"#.utf8)
-            case "/api/conversations/dm_e_first":
-                return Data(#"{"id":"dm_e_first","kind":"dm","messages":[]}"#.utf8)
+            case "/api/conversations/dm_e_first/sync":
+                return Data(#"{"id":"dm_e_first","reset":true,"detail":{"id":"dm_e_first","kind":"dm"},"messages":[],"messageOrder":[],"history":{"revision":"r1","from":null,"hasEarlier":false,"total":0}}"#.utf8)
             case "/api/conversations/dm_e_first/messages":
                 let body = try Self.requestBody(request)
                 XCTAssertEqual(body["input"] as? String, "fixture-only")

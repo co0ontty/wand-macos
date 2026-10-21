@@ -2,10 +2,84 @@ import Combine
 import CryptoKit
 import Foundation
 
+/// Endpoint-owned in-memory materialized view. Only fingerprints/cursors travel to the server;
+/// history bodies never enter preferences, navigation persistence or another endpoint.
+actor ConversationSyncBuffer {
+    private var entries: [String: Data] = [:]
+    private var order: [String] = []
+    private var pending: [String: (UUID, Task<Data, Error>)] = [:]
+
+    func read(_ id: String, older: Bool = false, fetch: @escaping (String) async throws -> Data) async throws -> Data {
+        if let (token, task) = pending[id] {
+            let data = try await task.value
+            commit(id, token: token, data: data)
+            return older ? try await read(id, older: true, fetch: fetch) : data
+        }
+        let previous = entries[id]
+        let token = UUID()
+        let task = Task<Data, Error> {
+            var parts: [String] = []
+            if let previous, let object = try JSONSerialization.jsonObject(with: previous) as? [String: Any],
+               let history = object["history"] as? [String: Any] {
+                for name in ["revision", "from"] {
+                    if let value = history[name] as? String {
+                        let key = name == "revision" ? "since" : "from"
+                        var allowed = CharacterSet.urlQueryAllowed; allowed.remove(charactersIn: "+&=?#")
+                        parts.append(key + "=" + (value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""))
+                    }
+                }
+            }
+            if older { parts.append("older=1") }
+            let response = try await fetch("/sync" + (parts.isEmpty ? "" : "?" + parts.joined(separator: "&")))
+            guard let update = try JSONSerialization.jsonObject(with: response) as? [String: Any], update["id"] as? String == id else {
+                throw WandAPI.APIError.network("对话同步身份不一致")
+            }
+            guard let history = update["history"] as? [String: Any] else { return response } // older service
+            let old = try previous.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if update["unchanged"] as? Bool == true {
+                guard var old else { throw WandAPI.APIError.network("对话同步缺少基线") }
+                old["history"] = history
+                return try JSONSerialization.data(withJSONObject: old)
+            }
+            var merged = (update["detail"] as? [String: Any]) ?? old ?? [:]
+            guard merged["id"] as? String == id else { throw WandAPI.APIError.network("对话同步缺少详情") }
+            var rows: [String: [String: Any]] = [:]
+            if update["reset"] as? Bool != true {
+                for row in old?["messages"] as? [[String: Any]] ?? [] { if let key = row["messageId"] as? String { rows[key] = row } }
+            }
+            for row in update["messages"] as? [[String: Any]] ?? [] { if let key = row["messageId"] as? String { rows[key] = row } }
+            merged["messages"] = try (update["messageOrder"] as? [String] ?? []).map { key -> [String: Any] in
+                guard let row = rows[key] else { throw WandAPI.APIError.network("对话同步缺少消息") }; return row
+            }
+            merged["history"] = history
+            return try JSONSerialization.data(withJSONObject: merged)
+        }
+        pending[id] = (token, task)
+        do { let data = try await task.value; commit(id, token: token, data: data); return data }
+        catch { if pending[id]?.0 == token { pending.removeValue(forKey: id) }; throw error }
+    }
+    private func commit(_ id: String, token: UUID, data: Data) {
+        guard pending[id]?.0 == token else { return }
+        pending.removeValue(forKey: id); entries[id] = data
+        order.removeAll { $0 == id }; order.append(id)
+        while order.count > 24 { entries.removeValue(forKey: order.removeFirst()) }
+    }
+    func forget(_ id: String) { entries.removeValue(forKey: id); order.removeAll { $0 == id }; pending.removeValue(forKey: id)?.1.cancel() }
+}
+
+struct ConversationHistory: Decodable {
+    let revision: String
+    let from: String?
+    let hasEarlier: Bool
+    let total: Int
+}
+
+
 protocol CommunicationsServing: AnyObject {
     func employeeContacts() async throws -> [EmployeeContact]
     func conversations() async throws -> [NativeConversation]
     func conversation(id: String) async throws -> NativeConversation
+    func conversationPage(id: String, older: Bool) async throws -> NativeConversation
     func conversationReceipt(requestID: String) async throws -> ConversationReceipt
     func postConversation(path: String, body: [String: Any]) async throws -> ConversationReceipt
     func communicationsDefaultCwd() async throws -> String
@@ -15,6 +89,7 @@ protocol CommunicationsServing: AnyObject {
 }
 
 extension CommunicationsServing {
+    func conversationPage(id: String, older: Bool) async throws -> NativeConversation { try await conversation(id: id) }
     func communicationsModels() async throws -> ModelsResponse? { nil }
     func communicationsUserProfile() async throws -> NativeUserProfile { NativeUserProfile() }
 }
@@ -47,7 +122,15 @@ extension WandAPI: CommunicationsServing {
         return try await request(Response.self, method: "GET", path: "/api/conversations").conversations
     }
     func conversation(id: String) async throws -> NativeConversation {
-        try await request(NativeConversation.self, method: "GET", path: "/api/conversations/\(percentEncodePathComponent(id))")
+        try await conversationPage(id: id, older: false)
+    }
+    func conversationPage(id: String, older: Bool) async throws -> NativeConversation {
+        let path = "/api/conversations/" + percentEncodePathComponent(id)
+        let data = try await conversationSync.read(id, older: older) { suffix in
+            do { return try await self.requestData(method: "GET", path: path + suffix) }
+            catch APIError.server(let status, _) where status == 404 { return try await self.requestData(method: "GET", path: path) }
+        }
+        return try JSONDecoder().decode(NativeConversation.self, from: data)
     }
     func conversationReceipt(requestID: String) async throws -> ConversationReceipt {
         try await request(ConversationReceipt.self, method: "GET", path: "/api/conversations/requests/\(percentEncodePathComponent(requestID))")

@@ -39,6 +39,7 @@ struct LegacyHistoryRefresh {
 /// cookieStorage），所以 WandAuth.loginWithToken 拿到的 session cookie 在这里
 /// 的每个请求上自动携带；遇到 401 时用存储的 appToken 重新登录一次再重试。
 final class WandAPI {
+    let conversationSync = ConversationSyncBuffer()
     let baseURL: URL
     let token: String?
     let feedbackConnection: ClientFeedback.Connection?

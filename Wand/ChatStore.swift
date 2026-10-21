@@ -83,13 +83,14 @@ final class ChatStore: ObservableObject {
         self.api = api
         self.drafts = drafts
         self.queueRetrievalTransport = queueRetrievalTransport ?? api
-        self.socket = WandSocket(baseURL: api.baseURL, feedbackConnection: api.feedbackConnection)
+        self.socket = WandSocket.sharedChat(api: api)
     }
 
     // MARK: - 生命周期
 
+    private var realtimeRevision = 0
     func start() {
-        guard !started else { return }
+        guard !started else { socket.connect(); socket.subscribe(sessionId: sessionId); return }
         started = true
 
         // WandSocket 的回调已保证主线程，用 assumeIsolated 接回 MainActor 隔离，
@@ -101,21 +102,25 @@ final class ChatStore: ObservableObject {
             MainActor.assumeIsolated { self?.connected = up }
         }
 
+        socket.subscribe(sessionId: sessionId)
+        socket.connect()
+        let revision = realtimeRevision
         Task {
             do {
-                let snap = try await api.getSession(id: sessionId)
-                apply(snapshot: snap)
+                try await Task.sleep(nanoseconds: 400_000_000)
+                if snapshot == nil {
+                    let snap = try await api.getSession(id: sessionId)
+                    if realtimeRevision == revision { apply(snapshot: snap) }
+                }
                 loading = false
             } catch {
                 loading = false
-                loadError = error.localizedDescription
+                if snapshot == nil { loadError = error.localizedDescription }
             }
             await loadModels()
             if let id = snapshot?.employeeId, let employees = try? await api.employeeContacts() {
                 currentEmployee = employees.first { $0.id == id }
             }
-            socket.connect()
-            socket.subscribe(sessionId: sessionId)
         }
     }
 
@@ -190,6 +195,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func handle(_ event: WsIncoming) {
+        if ["init", "output", "status", "ended"].contains(event.type) { realtimeRevision += 1 }
         guard event.sessionId == sessionId || event.sessionId == nil else { return }
         switch event.type {
         case "init":

@@ -44,6 +44,19 @@ final class CommunicationsStore: ObservableObject {
     private var indexGeneration: UInt64 = 0
     private var metadata: [String: NativeConversation] = [:]
     private var loadedDefaults = false
+    private var realtime: WandSocket?
+    private var refreshNotice: Task<Void, Never>?
+    func stopRealtime() { realtime?.close(); realtime = nil; refreshNotice?.cancel(); refreshNotice = nil }
+    private func scheduleRefresh() {
+        guard refreshNotice == nil else { return }
+        refreshNotice = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard let self else { return }
+            defer { refreshNotice = nil }
+            guard !Task.isCancelled else { return }
+            await refreshIndex(); if !detailLoading { refreshDetail() }
+        }
+    }
 
     init(api: CommunicationsServing, serverURL: URL, defaults: UserDefaults = .standard) {
         self.api = api
@@ -125,7 +138,7 @@ final class CommunicationsStore: ObservableObject {
         // Explicit targets have independent drafts; never move an old draft to a different run.
         target = next
     }
-    func refreshDetail() {
+    func refreshDetail(older: Bool = false) {
         guard let id = selectedID else { return }
         detailTask?.cancel(); detailGeneration &+= 1
         let captured = detailGeneration
@@ -133,7 +146,7 @@ final class CommunicationsStore: ObservableObject {
         detailTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let value = try await self.api.conversation(id: id)
+                let value = try await self.api.conversationPage(id: id, older: older)
                 guard !Task.isCancelled, captured == self.detailGeneration, self.selectedID == id else { return }
                 guard value.id == id else { throw WandAPI.APIError.network("返回的对话与请求不一致，未展示其内容。") }
                 self.detail = value; self.metadata[id] = value; self.detailError = nil; self.detailLoading = false
@@ -144,6 +157,12 @@ final class CommunicationsStore: ObservableObject {
         }
     }
     func refreshVisible() async {
+        if realtime == nil, let api = api as? WandAPI {
+            let socket = WandSocket.sharedChat(api: api)
+            socket.onConversationChanged = { [weak self] in MainActor.assumeIsolated { self?.scheduleRefresh() } }
+            socket.onConnectionChange = { [weak self] up in if up { MainActor.assumeIsolated { self?.scheduleRefresh() } } }
+            realtime = socket; socket.connect()
+        }
         await refreshIndex()
         if !detailLoading { refreshDetail() }
     }
