@@ -113,6 +113,24 @@ final class ChatImagePreviewTests: XCTestCase {
         XCTAssertEqual(window.contentView, host)
     }
 
+    func testGlobalPreviewSizeRemembersUserManualResize() {
+        let suite = "ChatImagePreviewTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let defaultSize = ChatImagePreviewPresenter.targetPreviewSize(parent: nil, defaults: defaults)
+        XCTAssertGreaterThanOrEqual(defaultSize.width, 960)
+        XCTAssertGreaterThanOrEqual(defaultSize.height, 680)
+
+        // 模拟用户手动调整窗口大小并保存到 defaults
+        defaults.set(1350.0, forKey: ChatImagePreviewPresenter.previewSizeWidthKey)
+        defaults.set(920.0, forKey: ChatImagePreviewPresenter.previewSizeHeightKey)
+
+        let remembered = ChatImagePreviewPresenter.targetPreviewSize(parent: nil, defaults: defaults)
+        XCTAssertEqual(remembered.width, 1350)
+        XCTAssertEqual(remembered.height, 920)
+    }
+
     private func sampleImage() throws -> (image: NSImage, uri: String) {
         let rep = try XCTUnwrap(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 6,

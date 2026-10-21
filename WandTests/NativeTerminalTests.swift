@@ -375,6 +375,65 @@ final class NativeTerminalTests: XCTestCase {
         XCTAssertEqual(QuickTerminalDock(stored: "bad-value"), .right)
     }
 
+    func testQuickTerminalReopenRestoresInputAndKeepsTheSameShellAcrossDocks() async throws {
+        let host = "quick-terminal-\(UUID().uuidString).example.test"
+        var requests: [String] = []
+        CommunicationsContractURLProtocol.register(host: host) { request in
+            requests.append(request.httpMethod ?? "GET")
+            return Data(#"{"id":"pty-1","sessionKind":"pty","cwd":"/worktree","status":"running"}"#.utf8)
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let api = WandAPI(baseURL: URL(string: "https://\(host)")!, token: nil, session: session)
+        let name = "QuickTerminalTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        let socket = RecordingTerminalSocket()
+        let model = QuickTerminalModel(api: api, defaults: defaults) { id, api in
+            PtyTerminalStore(sessionId: id, api: api, socket: socket, defaults: defaults)
+        }
+        defer {
+            model.terminal?.shutdown()
+            session.invalidateAndCancel()
+            CommunicationsContractURLProtocol.unregister(host: host)
+            defaults.removePersistentDomain(forName: name)
+        }
+        model.open(cwd: "/worktree")
+        try await waitUntil { !model.busy }
+        let store = try XCTUnwrap(model.terminal)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 480),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = store.terminal
+        defer { window.close() }
+        socket.onEvent?(try event("init", data: ["status": "running", "output": "KEEP_OUTPUT"]))
+        model.setDock(.bottom)
+        model.close()
+        XCTAssertFalse(store.terminal.inputEnabled)
+        model.open(cwd: "/different-workspace")
+        XCTAssertTrue(store.terminal.inputEnabled, "Explicit reopen must enable input before requesting AppKit focus")
+        XCTAssertTrue(window.firstResponder === store.terminal)
+        XCTAssertTrue(model.terminal === store)
+        XCTAssertTrue(visibleText(store.terminal).contains("KEEP_OUTPUT"))
+        XCTAssertEqual(model.dock, .bottom)
+        model.setDock(.right)
+        XCTAssertTrue(model.terminal === store)
+        XCTAssertEqual(QuickTerminalModel(api: api, defaults: defaults).dock, .right)
+        XCTAssertEqual(socket.connects, 1)
+        XCTAssertEqual(requests, ["POST"], "Docking/reopen must not create or reconnect a shell")
+        let restoredSocket = RecordingTerminalSocket()
+        let restored = QuickTerminalModel(api: api, defaults: defaults) { id, api in
+            PtyTerminalStore(sessionId: id, api: api, socket: restoredSocket, defaults: defaults)
+        }
+        defer { restored.terminal?.shutdown() }
+        XCTAssertEqual(restored.dock, .right)
+        restored.open(cwd: "/different-workspace")
+        try await waitUntil { !restored.busy }
+        XCTAssertNotNil(restored.terminal)
+        XCTAssertEqual(restoredSocket.subscriptions, ["pty-1:true"])
+        XCTAssertEqual(requests, ["POST", "GET"], "A fresh client model reads the saved shell instead of creating another")
+    }
+
     func testHiddenQuickTerminalDoesNotResizeOrStopTheProcess() async throws {
         let socket = RecordingTerminalSocket()
         let store = store(socket)

@@ -12,6 +12,8 @@ struct WandTaskCommentDispatch: Decodable, Equatable {
     var deliveryUncertain: Bool { state == "pending" || state == "unknown" || status == "pending" || status == "unknown" }
     var label: String {
         switch status ?? state {
+        case "paused": return "已暂停"
+        case "queued": return "排队中"
         case "running": return "执行中"
         case "blocked": return "等待审批"
         case "idle": return "本轮已结束"

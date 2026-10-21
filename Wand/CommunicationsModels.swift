@@ -1,5 +1,8 @@
 import Foundation
 
+/// 未设置并发上限时的默认值；服务端与各客户端保持一致。
+let employeeDefaultMaxConcurrentTasks = 2
+
 /// Public employee metadata only. Knowledge endpoints are never fetched; role prompts are not projected or cached.
 struct EmployeeContact: Decodable, Identifiable {
     let id: String
@@ -11,7 +14,10 @@ struct EmployeeContact: Decodable, Identifiable {
     let systemKey: String?
     let archivedAt: String?
     var systemSessionLimit: Int? = nil
+    /// 同时执行的任务上限；旧响应缺省时按默认值 2 展示。超出的派发留在任务里排队。
+    var maxConcurrentTasks: Int? = nil
 
+    var effectiveMaxConcurrentTasks: Int { maxConcurrentTasks ?? employeeDefaultMaxConcurrentTasks }
     var isArchived: Bool { archivedAt?.isEmpty == false }
     var conversationID: String { "dm_" + id }
     var candidates: [EmployeeExecutionCandidate] { agents ?? [] }

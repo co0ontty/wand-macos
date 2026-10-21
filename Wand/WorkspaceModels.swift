@@ -364,6 +364,7 @@ func sessionIdentityCaption(
 }
 
 struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
+    var executionStatus: String? = nil
     let id: String
     let provider: String?
     let sessionKind: String?
@@ -407,6 +408,9 @@ struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
         ptyBusy = snapshot.ptyBusy
         providerCliActive = snapshot.providerCliActive
         inFlight = snapshot.structuredState?.inFlight
+        executionStatus = snapshot.structuredState?.inFlight != true && snapshot.archived != true
+            && snapshot.status != "failed" && snapshot.structuredState?.lastError == nil
+            && !(snapshot.queuedMessages ?? []).isEmpty ? "queued" : nil
         archived = snapshot.archived
         archivedAt = snapshot.archivedAt
         completionRevision = snapshot.completionRevision
@@ -427,7 +431,8 @@ struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
     }
 
     var activityStatus: String {
-        effectiveSessionStatus(
+        if archived != true && inFlight != true && ptyBusy != true && status != "failed" && executionStatus == "queued" { return "queued" }
+        return effectiveSessionStatus(
             sessionKind: sessionKind,
             status: status,
             provider: provider,
@@ -486,6 +491,10 @@ struct WorkspaceTask: Codable, Equatable, Identifiable {
 
 /// GET /api/tasks 聚合行：任务 + 运行期派生字段；目录信息在 TaskDirectoryGroup 上。
 struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
+    var executionStatus: String? = nil
+    var queuedExecutionCount: Int? = nil
+    var hasQueuedExecution: Bool { executionStatus == "queued" }
+    var hasActiveExecution: Bool { executionStatus == "queued" || executionStatus == "running" }
     var parentWorkspaceTaskId: String? = nil
     let id: String
     let workspaceId: String
@@ -520,7 +529,9 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         sessions: [WorkspaceSessionSummary],
         totalSessions: Int? = nil,
         archived: Bool? = nil,
-        parentWorkspaceTaskId: String? = nil
+        parentWorkspaceTaskId: String? = nil,
+        executionStatus: String? = nil,
+        queuedExecutionCount: Int? = nil
     ) {
         self.parentWorkspaceTaskId = parentWorkspaceTaskId
         self.id = id
@@ -536,6 +547,8 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         self.worktreeError = worktreeError
         self.sessions = sessions
         self.totalSessions = totalSessions ?? sessions.count
+        self.executionStatus = executionStatus
+        self.queuedExecutionCount = queuedExecutionCount
         self.archived = archived
     }
 
@@ -689,7 +702,7 @@ enum TaskListPresentation {
 
     static func isActive(_ session: WorkspaceSessionSummary, selectedSessionId: String?) -> Bool {
         guard session.archived != true else { return false }
-        return session.ptyBusy == true || session.inFlight == true || session.isJustCompleted
+        return session.executionStatus == "queued" || session.ptyBusy == true || session.inFlight == true || session.isJustCompleted
             || (session.sessionKind == "pty" && ["", "shell"].contains(session.provider ?? "") && session.providerCliActive == true)
             || ["thinking", "failed", "waiting-input", "waiting_input", "permission-blocked", "permission", "reconnecting"].contains(session.status ?? "")
     }
@@ -708,8 +721,8 @@ enum TaskListPresentation {
             let candidates = group.tasks
             let matching = candidates.filter { task in
                 task.archived != true && task.status != "done" &&
-                (!activeOnly || task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }) &&
-                (task.sessions.count > 0 || (task.id == selectedTaskId) || !query.isEmpty) &&
+                (!activeOnly || task.hasActiveExecution || task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }) &&
+                (task.hasActiveExecution || task.sessions.count > 0 || (task.id == selectedTaskId) || !query.isEmpty) &&
                 searchMatches(query, values: [group.displayName, group.workspaceCwd, task.name, task.cwd] + task.sessions.map { groupSearchText($0) })
             }
             var keep = Set(matching.map(\.id))

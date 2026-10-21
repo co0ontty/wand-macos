@@ -105,6 +105,7 @@ struct WandBoardListView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
+                    Text(task.acceptance?.acceptedAt != nil ? "验收通过 · 已完成" : "未验收").font(.caption).foregroundColor(Theme.textSecondary)
                     let parent = wandBoardParent(of: task, in: allTasks)
                     let children = wandBoardChildren(of: task, in: allTasks)
                     if parent != nil || !children.isEmpty {
@@ -191,7 +192,7 @@ struct WandBoardDashboardView: View {
                         Text("\(stats.remaining)")
                             .font(.system(size: 40, weight: .semibold, design: .rounded))
                             .foregroundColor(Theme.wandAccent)
-                        Text("未完成")
+                        Text("待处理")
                             .font(.system(size: 13))
                             .foregroundColor(Theme.textSecondary)
                     }
@@ -210,7 +211,7 @@ struct WandBoardDashboardView: View {
                 HStack(alignment: .top, spacing: 12) {
                     metric("待立项", stats.backlog, WandBoardStatus.backlog.color, stats.total)
                     metric("处理中", stats.doing, WandBoardStatus.doing.color, stats.total)
-                    metric("等你确认", stats.done, WandBoardStatus.done.color, stats.total)
+                    metric("已验收", stats.accepted, WandBoardStatus.done.color, stats.total)
                     metric("等待认领", stats.todo, WandBoardStatus.todo.color, stats.total)
                     metric("已逾期", stats.overdue, Theme.wandAccent, stats.total)
                     metric("高优先级", stats.high, Theme.warning, stats.total)
@@ -343,7 +344,7 @@ struct WandBoardDashboardView: View {
                 Spacer(minLength: 0)
                 legend("范围", stats.total, WandBoardStatus.todo.color)
                 legend("已开始", stats.doing + stats.done, WandBoardStatus.doing.color)
-                legend("已确认", stats.done, WandBoardStatus.done.color)
+                legend("已验收", stats.accepted, WandBoardStatus.done.color)
             }
             ZStack {
                 Canvas { context, size in

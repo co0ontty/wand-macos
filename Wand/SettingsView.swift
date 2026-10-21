@@ -713,6 +713,8 @@ struct SettingsEmployeeIdentities: View {
     @State private var savedAvatar = ""
     @State private var systemSessionLimitInput = ""
     @State private var savedSystemSessionLimitInput = ""
+    @State private var maxConcurrentTasksInput = ""
+    @State private var savedMaxConcurrentTasksInput = ""
     @State private var loading = true
     @State private var busy = false
     @State private var error: String?
@@ -723,10 +725,17 @@ struct SettingsEmployeeIdentities: View {
     @State private var imDirty = false
     @State private var imBusy = false
     private var selected: EmployeeContact? { employees.first { $0.id == selectedID } }
-    private var dirty: Bool { name != savedName || avatar != savedAvatar || systemSessionLimitInput != savedSystemSessionLimitInput }
+    private var dirty: Bool {
+        name != savedName || avatar != savedAvatar || systemSessionLimitInput != savedSystemSessionLimitInput
+            || maxConcurrentTasksInput != savedMaxConcurrentTasksInput
+    }
     private var invalidSystemSessionLimit: Bool {
         !systemSessionLimitInput.isEmpty && (systemSessionLimitInput.contains { !$0.isASCII || !$0.isNumber }
             || Int(systemSessionLimitInput) == nil || !(0...10000).contains(Int(systemSessionLimitInput) ?? -1))
+    }
+    private var invalidMaxConcurrentTasks: Bool {
+        !maxConcurrentTasksInput.isEmpty && (maxConcurrentTasksInput.contains { !$0.isASCII || !$0.isNumber }
+            || Int(maxConcurrentTasksInput) == nil || !(1...100).contains(Int(maxConcurrentTasksInput) ?? -1))
     }
     private var locked: Bool { selected?.systemKey != nil && PlushAvatarIdentity.fixedAsset(id: selectedID ?? "") == nil }
     var body: some View {
@@ -771,6 +780,13 @@ struct SettingsEmployeeIdentities: View {
                         Text("0–10000，留空不限，0 不保留。仅保留标题生成等系统辅助功能的最新 N 条已结束记录，保存后永久清理超出部分。任务派发、agent 间调用（含决策）、手动聊天与运行中会话不计入，也不会清理。")
                             .font(.caption).foregroundColor(Theme.textSecondary)
                         if invalidSystemSessionLimit { Text("请输入 0 到 10000 的整数，或留空表示不限。").font(.caption).foregroundColor(Theme.danger) }
+                        Text("并发任务上限").font(.headline)
+                        TextField("默认 2", text: $maxConcurrentTasksInput)
+                            .textFieldStyle(.roundedBorder).disabled(loading || busy)
+                            .accessibilityIdentifier("employee-max-concurrent-tasks")
+                        Text("默认 2，可设 1–100；留空保存时恢复默认 2。超出上限的新派发显示为「排队中」，任务仍留在活动任务里；前序任务结束后按先后顺序自动开始。同一任务的多条派发不额外占用名额。")
+                            .font(.caption).foregroundColor(Theme.textSecondary)
+                        if invalidMaxConcurrentTasks { Text("请输入 1 到 100 的整数；留空表示默认 2。").font(.caption).foregroundColor(Theme.danger) }
                         Divider().padding(.vertical, 4)
                         EmployeeImConfigEditor(api: api, employeeID: selected.id, onNeedsAdmin: { needsAdmin = true },
                             onDirtyChange: { imDirty = $0 }, onBusyChange: { imBusy = $0 })
@@ -784,7 +800,7 @@ struct SettingsEmployeeIdentities: View {
                         if busy { ProgressView().controlSize(.small) }
                         if let result { Text(result).lineLimit(1) }
                     }.frame(width: 160, height: 20)
-                }.buttonStyle(WandPrimaryButtonStyle()).disabled(loading || busy || needsAdmin || invalidSystemSessionLimit || name.count > (selectedID == "user" ? 24 : 80))
+                }.buttonStyle(WandPrimaryButtonStyle()).disabled(loading || busy || needsAdmin || invalidSystemSessionLimit || invalidMaxConcurrentTasks || name.count > (selectedID == "user" ? 24 : 80))
                 .accessibilityIdentifier("settings-profile-save")
             }
         }
@@ -792,6 +808,7 @@ struct SettingsEmployeeIdentities: View {
         .onChange(of: name) { _ in if !busy { result = nil } }
         .onChange(of: avatar) { _ in if !busy { result = nil } }
         .onChange(of: systemSessionLimitInput) { _ in if !busy { result = nil } }
+        .onChange(of: maxConcurrentTasksInput) { _ in if !busy { result = nil } }
         .confirmationDialog("放弃尚未保存的修改？", isPresented: $discard, titleVisibility: .visible) {
             Button("放弃修改", role: .destructive) { selectedID = nil; imDirty = false }
             Button("继续编辑", role: .cancel) {}
@@ -805,6 +822,8 @@ struct SettingsEmployeeIdentities: View {
             self.avatar = id == "user" ? profile.avatar : employee?.avatar ?? ""
             systemSessionLimitInput = employee?.systemSessionLimit.map(String.init) ?? ""
             savedSystemSessionLimitInput = systemSessionLimitInput
+            maxConcurrentTasksInput = String(employee?.effectiveMaxConcurrentTasks ?? employeeDefaultMaxConcurrentTasks)
+            savedMaxConcurrentTasksInput = maxConcurrentTasksInput
             savedName = self.name; savedAvatar = self.avatar; result = nil
         } label: {
             HStack(spacing: 12) {
@@ -829,24 +848,30 @@ struct SettingsEmployeeIdentities: View {
                 name = selectedID == "user" ? profile.name : employee?.name ?? ""
                 avatar = selectedID == "user" ? profile.avatar : employee?.avatar ?? ""
                 systemSessionLimitInput = employee?.systemSessionLimit.map(String.init) ?? ""
-                savedName = name; savedAvatar = avatar; savedSystemSessionLimitInput = systemSessionLimitInput
+                maxConcurrentTasksInput = String(employee?.effectiveMaxConcurrentTasks ?? employeeDefaultMaxConcurrentTasks)
+                savedName = name; savedAvatar = avatar
+                savedSystemSessionLimitInput = systemSessionLimitInput
+                savedMaxConcurrentTasksInput = maxConcurrentTasksInput
             }
         } catch { self.error = "资料读取失败，请重试。" }
     }
     private func save() async {
-        guard !busy, !loading, !invalidSystemSessionLimit else { return }
+        guard !busy, !loading, !invalidSystemSessionLimit, !invalidMaxConcurrentTasks else { return }
         let id = selectedID ?? "user", submittedName = name, submittedAvatar = avatar
         let submittedLimit = Int(systemSessionLimitInput)
+        let submittedConcurrency = Int(maxConcurrentTasksInput) ?? employeeDefaultMaxConcurrentTasks
         busy = true; error = nil; result = nil
         defer { busy = false }
         do {
             if id == "user" { profile = try await api.saveUserProfile(NativeUserProfile(name: submittedName, avatar: submittedAvatar)); name = profile.name; avatar = profile.avatar }
             else {
-                let employee = try await api.saveEmployeeIdentity(id: id, name: submittedName, avatar: submittedAvatar, systemSessionLimit: submittedLimit, locked: locked)
+                let employee = try await api.saveEmployeeIdentity(id: id, name: submittedName, avatar: submittedAvatar, systemSessionLimit: submittedLimit, maxConcurrentTasks: submittedConcurrency, locked: locked)
                 employees = employees.map { $0.id == id ? employee : $0 }; name = employee.name; avatar = employee.avatar ?? ""
                 systemSessionLimitInput = employee.systemSessionLimit.map(String.init) ?? ""
+                maxConcurrentTasksInput = String(employee.effectiveMaxConcurrentTasks)
             }
             savedSystemSessionLimitInput = systemSessionLimitInput
+            savedMaxConcurrentTasksInput = maxConcurrentTasksInput
             savedName = name; savedAvatar = avatar; result = "已保存"
             NotificationCenter.default.post(name: .wandIdentitySaved, object: nil)
         } catch {

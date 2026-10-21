@@ -273,7 +273,10 @@ private struct ConversationContactProfile: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("员工设置").font(.system(size: 13, weight: .semibold))
-                            Text(contact.systemSessionLimit.map { $0 == 0 ? "系统调用历史：不保留已结束记录" : "系统调用历史：保留最新 \($0) 条已结束记录" } ?? "系统调用历史：不限")
+                            Text([
+                                contact.systemSessionLimit.map { $0 == 0 ? "系统调用历史：不保留已结束记录" : "系统调用历史：保留最新 \($0) 条已结束记录" } ?? "系统调用历史：不限",
+                                "并发任务：同时 \(contact.effectiveMaxConcurrentTasks) 个，超出排队",
+                            ].joined(separator: " · "))
                                 .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
                         }
                     }

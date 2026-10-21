@@ -30,6 +30,17 @@ final class CommunicationsTests: XCTestCase {
         XCTAssertNil(legacy.systemSessionLimit)
     }
 
+    func testEmployeeMaxConcurrentTasksDecodesConfiguredAndDefaultsToTwo() throws {
+        for value: Any in [NSNull(), 1, 3, 100] {
+            let data = try JSONSerialization.data(withJSONObject: ["id": "e_queue", "name": "并发员工", "duty": "", "maxConcurrentTasks": value])
+            let employee = try JSONDecoder().decode(EmployeeContact.self, from: data)
+            XCTAssertEqual(employee.maxConcurrentTasks, value as? Int)
+            XCTAssertEqual(employee.effectiveMaxConcurrentTasks, (value as? Int) ?? employeeDefaultMaxConcurrentTasks)
+        }
+        let legacy = try JSONDecoder().decode(EmployeeContact.self, from: Data(#"{"id":"legacy","name":"旧员工","duty":""}"#.utf8))
+        XCTAssertEqual(legacy.effectiveMaxConcurrentTasks, employeeDefaultMaxConcurrentTasks)
+    }
+
     func testConversationActivityAndArchiveFiltersAreIndependent() async throws {
         let api = CommunicationsStub()
         api.items = try JSONDecoder().decode([NativeConversation].self, from: JSONSerialization.data(withJSONObject: [
@@ -344,21 +355,25 @@ final class CommunicationsTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "PUT")
             let body = try Self.requestBody(request)
             lock.withLock { bodies.append(body) }
-            return try JSONSerialization.data(withJSONObject: ["id": "employee", "name": "员工", "duty": "", "systemSessionLimit": body["systemSessionLimit"]!])
+            return try JSONSerialization.data(withJSONObject: ["id": "employee", "name": "员工", "duty": "",
+                "systemSessionLimit": body["systemSessionLimit"]!, "maxConcurrentTasks": body["maxConcurrentTasks"]!])
         }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CommunicationsContractURLProtocol.self]
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel(); CommunicationsContractURLProtocol.unregister(host: host) }
         let api = WandAPI(baseURL: URL(string: "https://" + host)!, token: nil, session: session)
-        _ = try await api.saveEmployeeIdentity(id: "stone", name: "石一", avatar: "", systemSessionLimit: 0, locked: true)
-        _ = try await api.saveEmployeeIdentity(id: "stone", name: "石一", avatar: "", systemSessionLimit: nil, locked: true)
-        _ = try await api.saveEmployeeIdentity(id: "ordinary", name: "员工", avatar: "", systemSessionLimit: 25, locked: false)
+        _ = try await api.saveEmployeeIdentity(id: "stone", name: "石一", avatar: "", systemSessionLimit: 0, maxConcurrentTasks: 3, locked: true)
+        _ = try await api.saveEmployeeIdentity(id: "stone", name: "石一", avatar: "", systemSessionLimit: nil, maxConcurrentTasks: employeeDefaultMaxConcurrentTasks, locked: true)
+        _ = try await api.saveEmployeeIdentity(id: "ordinary", name: "员工", avatar: "", systemSessionLimit: 25, maxConcurrentTasks: 2, locked: false)
         let result = lock.withLock { bodies }
-        XCTAssertEqual(Set(result[0].keys), ["systemSessionLimit"])
+        XCTAssertEqual(Set(result[0].keys), ["systemSessionLimit", "maxConcurrentTasks"])
         XCTAssertEqual(result[0]["systemSessionLimit"] as? Int, 0)
+        XCTAssertEqual(result[0]["maxConcurrentTasks"] as? Int, 3)
         XCTAssertTrue(result[1]["systemSessionLimit"] is NSNull)
+        XCTAssertEqual(result[1]["maxConcurrentTasks"] as? Int, employeeDefaultMaxConcurrentTasks)
         XCTAssertEqual(result[2]["systemSessionLimit"] as? Int, 25)
+        XCTAssertEqual(result[2]["maxConcurrentTasks"] as? Int, 2)
         XCTAssertEqual(result[2]["name"] as? String, "员工")
     }
 

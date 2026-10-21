@@ -134,6 +134,12 @@ struct WandBoardDetailView: View {
                 .foregroundColor(Theme.textTertiary)
                 .textSelection(.enabled)
             titleField
+            VStack(alignment: .leading, spacing: 6) {
+                Text("负责人").font(.caption).foregroundColor(Theme.textSecondary)
+                WandBoardAgentChips(assignee: task.assignedExecutor, subject: task.executionSubject, sessions: task.sessions, assigned: task.agent)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("任务负责人")
             descriptionSection
             TaskCommentsSection(
                 comments: commentsStore.comments,
@@ -173,6 +179,8 @@ struct WandBoardDetailView: View {
                 .id(task.id)
             }
             taskRelationships
+            WandBoardSessionSummaryView(sessions: task.sessions)
+                .id("session-summary-\(task.id)")
             WandTaskAcceptanceEditor(
                 task: task,
                 children: wandBoardChildren(of: task, in: allTasks),
@@ -182,7 +190,8 @@ struct WandBoardDetailView: View {
             .id(task.id)
             WandBoardAgentSessionList(
                 assignee: task.assignedExecutor,
-                sessions: task.sessions.filter { $0.taskCommentId == nil },
+                // 评论派发产生的会话也是本任务的真实产物，不能在详情中隐藏。
+                sessions: task.sessions,
                 assigned: task.agent,
                 onOpenSession: onOpenSession,
                 catalog: catalog
@@ -287,7 +296,7 @@ struct WandBoardDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 WandBoardSectionTitle(title: "关联任务", detail: "归类保留原任务及其会话，不删除历史")
                 if let parent { relatedTaskRow(parent, caption: "父任务") }
-                if task.parentTaskId == nil && task.status != "archived" { Button("添加子任务（仅规划）", action: onCreateChild) }
+                if task.parentTaskId == nil && task.status != "archived" { Button("添加业务子任务（独立验收）", action: onCreateChild) }
                 if !children.isEmpty {
                     Text("\(children.count) 个正式子任务")
                         .font(.system(size: 12, weight: .medium))
@@ -426,8 +435,8 @@ struct WandBoardDetailView: View {
             if composeOpen {
                 VStack(alignment: .leading, spacing: 10) {
                     WandBoardSectionTitle(
-                        title: "CLI 兼容派发",
-                        detail: "先输入提示词，再选参数直接派发"
+                        title: "新建并行会话（CLI）",
+                        detail: "独立范围才并行；同目录或同文件重叠先串行协调，或隔离后合并。不改变权限、费用与并发配置。"
                     )
                     TextEditor(text: $composePrompt)
                         .font(.system(size: 13))
@@ -480,7 +489,7 @@ struct WandBoardDetailView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
-                        Text("CLI 兼容派发").font(.system(size: 12))
+                        Text("新建并行会话（CLI）").font(.system(size: 12))
                     }
                     .foregroundColor(Theme.textSecondary)
                     .padding(.horizontal, 10)

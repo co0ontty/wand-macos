@@ -894,6 +894,7 @@ struct SessionTile: View {
         if session.hasPendingPermission { return "等待授权" }
         if session.isResponding { return "思考中" }
         switch status {
+        case "queued": return "排队中"
         case "running": return "运行中"
         case "thinking": return "思考中"
         case "waiting", "waiting-input", "waiting_input": return "等待输入"

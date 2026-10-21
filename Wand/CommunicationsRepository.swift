@@ -26,8 +26,11 @@ extension WandAPI: CommunicationsServing {
         return try await request(Response.self, method: "POST", path: "/api/settings/config",
             body: ["userProfile": ["name": profile.name, "avatar": profile.avatar]]).config.userProfile ?? NativeUserProfile()
     }
-    func saveEmployeeIdentity(id: String, name: String, avatar: String, systemSessionLimit: Int?, locked: Bool) async throws -> EmployeeContact {
-        var body: [String: Any] = ["systemSessionLimit": systemSessionLimit.map { $0 as Any } ?? NSNull()]
+    func saveEmployeeIdentity(id: String, name: String, avatar: String, systemSessionLimit: Int?, maxConcurrentTasks: Int, locked: Bool) async throws -> EmployeeContact {
+        var body: [String: Any] = [
+            "systemSessionLimit": systemSessionLimit.map { $0 as Any } ?? NSNull(),
+            "maxConcurrentTasks": maxConcurrentTasks,
+        ]
         if !locked {
             body["name"] = name
             if PlushAvatarIdentity.fixedAsset(id: id) == nil { body["avatar"] = avatar }

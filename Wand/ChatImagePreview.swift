@@ -234,8 +234,11 @@ struct ChatImageOpenButton<Content: View>: View {
 }
 
 /// 预览挂在窗口上，避免消息行被回收时把已打开的图片关掉。
-final class ChatImagePreviewPresenter {
+final class ChatImagePreviewPresenter: NSObject, NSWindowDelegate {
     static let shared = ChatImagePreviewPresenter()
+
+    static let previewSizeWidthKey = "ChatImagePreview.savedWidth"
+    static let previewSizeHeightKey = "ChatImagePreview.savedHeight"
 
     private var panel: NSPanel?
     private var host: NSHostingController<ChatImageViewer>?
@@ -257,6 +260,42 @@ final class ChatImagePreviewPresenter {
             ?? NSApp.windows.first { usable($0) != nil }
     }
 
+    /// 读取用户记忆的全局尺寸；如果未曾手动调整过，则按父窗口或主屏幕计算大预览尺寸
+    static func targetPreviewSize(parent: NSWindow?, defaults: UserDefaults = .standard) -> NSSize {
+        let savedW = defaults.double(forKey: previewSizeWidthKey)
+        let savedH = defaults.double(forKey: previewSizeHeightKey)
+        if savedW >= 720 && savedH >= 480 {
+            // 如果有可用父窗口或主屏幕，约束不超过可用范围
+            let maxW: CGFloat
+            let maxH: CGFloat
+            if let parent = parent {
+                maxW = max(720, parent.frame.width - 20)
+                maxH = max(480, parent.frame.height - 20)
+            } else if let screen = NSScreen.main {
+                maxW = screen.visibleFrame.width
+                maxH = screen.visibleFrame.height
+            } else {
+                maxW = 2560
+                maxH = 1600
+            }
+            return NSSize(width: min(CGFloat(savedW), maxW), height: min(CGFloat(savedH), maxH))
+        }
+
+        if let parent = parent {
+            let pFrame = parent.frame
+            let width = max(960, min(pFrame.width * 0.90, pFrame.width - 40))
+            let height = max(680, min(pFrame.height * 0.90, pFrame.height - 40))
+            return NSSize(width: width, height: height)
+        } else if let screen = NSScreen.main {
+            let vFrame = screen.visibleFrame
+            let width = max(960, vFrame.width * 0.85)
+            let height = max(680, vFrame.height * 0.85)
+            return NSSize(width: width, height: height)
+        } else {
+            return NSSize(width: 1100, height: 800)
+        }
+    }
+
     func open(image: NSImage, label: String) {
         let safeLabel = label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "图片" : label
         let viewer = ChatImageViewer(image: image, label: safeLabel, onClose: { [weak self] in
@@ -271,18 +310,22 @@ final class ChatImagePreviewPresenter {
         }
         close()
         let host = NSHostingController(rootView: viewer)
+
+        let targetSize = Self.targetPreviewSize(parent: parent)
+
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 880, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: targetSize.width, height: targetSize.height),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         panel.contentViewController = host
         panel.title = safeLabel
-        panel.minSize = NSSize(width: 640, height: 420)
+        panel.minSize = NSSize(width: 720, height: 480)
         panel.isReleasedWhenClosed = false
         panel.appearance = NSAppearance(named: .darkAqua)
         panel.animationBehavior = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .none : .documentWindow
+        panel.delegate = self
         self.panel = panel
         self.host = host
         if let parent {
@@ -298,6 +341,14 @@ final class ChatImagePreviewPresenter {
             panel.center()
             panel.makeKeyAndOrderFront(nil)
         }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let panel = notification.object as? NSPanel, panel === self.panel else { return }
+        let size = panel.frame.size
+        guard size.width >= 720, size.height >= 480 else { return }
+        UserDefaults.standard.set(Double(size.width), forKey: Self.previewSizeWidthKey)
+        UserDefaults.standard.set(Double(size.height), forKey: Self.previewSizeHeightKey)
     }
 
     func close() {
@@ -334,7 +385,7 @@ struct ChatImageViewer: View {
                 .background(Color.black)
                 .accessibilityLabel(label)
         }
-        .frame(minWidth: 640, minHeight: 420)
+        .frame(minWidth: 720, minHeight: 480)
         .background(Color.black)
         .accessibilityIdentifier("chat-image-viewer")
         .accessibilityElement(children: .contain)

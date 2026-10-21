@@ -417,9 +417,6 @@ struct WorkspaceListView: View {
 
     private func hierarchyTaskRow(_ task: WorkspaceTaskSummary, group: TaskDirectoryGroup, ancestors: [String]) -> AnyView {
         AnyView(VStack(alignment: .leading, spacing: 1) {
-            if task.sessions.isEmpty && group.tasks.contains(where: { $0.parentWorkspaceTaskId == task.id }) {
-                Text("子任务有执行记录 · 主目标待验收").font(.caption).foregroundColor(Theme.textSecondary)
-            }
             if ancestors.count > 1 { Text("历史深层执行记录 · 保留原归属").font(.caption).foregroundColor(Theme.textSecondary) }
             taskSummaryRow(task, group: group)
             ForEach(group.tasks.filter { $0.parentWorkspaceTaskId == task.id && !ancestors.contains($0.id) && $0.id != task.id }) { child in
@@ -475,6 +472,8 @@ struct WorkspaceListView: View {
 
     private func treeSessionActivity(_ session: WorkspaceSessionSummary) -> (color: Color, label: String)? {
         switch session.activityStatus {
+        case "queued":
+            return (Theme.textSecondary, "排队中")
         case "running":
             return (Theme.success, "运行中")
         case "thinking":
@@ -797,7 +796,7 @@ struct WorkspaceListView: View {
                             Text(summary.name)
                                 .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
                                 .foregroundColor(Theme.textPrimary)
-                                .lineLimit(2)
+                                .lineLimit(1)
                                 .multilineTextAlignment(.leading)
                                 .help(summary.name)
                             if !isSelecting && summary.isIsolated {
@@ -815,6 +814,11 @@ struct WorkspaceListView: View {
                     .sidebarPresence("sidebar-task-\(summary.id)")
                     .accessibilityAddTraits(selected ? .isSelected : [])
 
+                    if summary.hasQueuedExecution {
+                        Label("排队中", systemImage: "clock")
+                            .font(.caption).foregroundColor(Theme.textSecondary)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                    }
                     if canCollapseSessions {
                         collapsibleControl(
                             enabled: !isFiltering && !activeOnly,

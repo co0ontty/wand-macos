@@ -229,29 +229,53 @@ struct WandBoardAgentChip: View {
 
 struct WandBoardAgentChips: View {
     var assignee: WandBoardAssignedExecutor? = nil
+    var subject: WandTaskExecutionSubject? = nil
     let sessions: [WandBoardTaskSession]
     let assigned: WandBoardTaskAgent?
 
     var body: some View {
+        let assignee = self.assignee ?? subject.flatMap { subject in
+            subject.type == "cli" ? nil : WandBoardAssignedExecutor(id: subject.id,
+                name: subject.type == "employee" ? "已指派员工（资料不可用）" : "已指派团队", avatar: nil)
+        }
         let people = Dictionary(grouping: sessions.filter { $0.employeeId != nil || $0.employeeName != nil }, by: { $0.employeeId ?? $0.employeeName ?? $0.id })
         let direct = sessions.filter { $0.employeeId == nil && $0.employeeName == nil }
         VStack(alignment: .leading, spacing: 4) {
             if let assignee, !sessions.contains(where: { $0.employeeId == assignee.id }) {
-                HStack { ContactAvatar(id: assignee.id, avatar: assignee.avatar ?? "", name: assignee.name, size: 24); Text(assignee.name + " · 已指派 · 未启动") }.font(.caption)
+                HStack(spacing: 6) {
+                    ContactAvatar(id: assignee.id, avatar: assignee.avatar ?? "", name: assignee.name, size: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(assignee.name + " · 已指派 · 未启动")
+                        if let assigned {
+                            Text(wandBoardProviderLabel(assigned.provider, engine: assigned.engine)).foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                }.font(.caption)
             }
-            ForEach(people.keys.sorted(), id: \.self) { key in
-                if let first = people[key]?.first {
+            ForEach(people.keys.sorted { left, right in
+                if left == assignee?.id { return right != assignee?.id }
+                if right == assignee?.id { return false }
+                return left < right
+            }, id: \.self) { key in
+                if let first = people[key]?.first, let identity = wandBoardEmployeeIdentity(first, sessions: sessions, assignee: self.assignee) {
                     HStack(spacing: 6) {
-                        ContactAvatar(id: first.employeeId ?? key, avatar: first.employeeAvatar ?? "", name: first.employeeName ?? "员工", size: 24)
-                        Text(first.employeeName ?? "员工")
-                        Text(people[key]?.contains(where: { $0.isRunning }) == true ? "执行中" : "历史执行").foregroundColor(Theme.textSecondary)
+                        ContactAvatar(id: identity.id, avatar: identity.avatar ?? "", name: identity.name, size: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(identity.name)
+                                Text(people[key]?.contains(where: { $0.isRunning }) == true ? "执行中" : "历史执行").foregroundColor(Theme.textSecondary)
+                            }
+                            Text(wandBoardListAgents(sessions: people[key] ?? [], assigned: nil)
+                                .map { wandBoardProviderLabel($0.provider, engine: $0.engine) }.joined(separator: " · "))
+                                .foregroundColor(Theme.textSecondary)
+                        }
                     }.font(.caption)
                 }
             }
             ForEach(wandBoardListAgents(sessions: direct, assigned: people.isEmpty && assignee == nil ? assigned : nil), id: \.toolKey) { agent in
                 WandBoardAgentChip(agent: agent, running: direct.contains { $0.provider == agent.provider && $0.toolEngine == (agent.engine ?? "cli") && $0.isRunning })
             }
-            if sessions.isEmpty && assigned == nil { Text("待指派").font(.caption).foregroundColor(Theme.textSecondary) }
+            if sessions.isEmpty && assigned == nil && assignee == nil { Text("待指派").font(.caption).foregroundColor(Theme.textSecondary) }
         }
     }
 }
@@ -369,23 +393,27 @@ private struct WandBoardProcessingGlyph: View {
     }
 }
 
-/// 处理中卡片的底部状态行：正在处理 / 暂停处理 / 等待派发。
+/// 处理中卡片的底部真实执行状态；不从空闲推断暂停或验收。
 struct WandBoardProcessingRow: View {
     let task: WandBoardTask
     let onOpenSession: (String) -> Void
 
     var body: some View {
         if task.status == WandBoardStatus.doing.rawValue {
-            let running = task.sessions.contains(where: \.isRunning)
-            let label = running
-                ? "正在处理…"
-                : (task.sessions.isEmpty ? "等待派发" : "暂停处理")
+            let running = task.executionStatus == "running" || task.sessions.contains(where: \.isRunning)
+            let label = wandBoardTaskProcessingLabel(task)
             HStack(spacing: 6) {
                 if running { WandBoardProcessingGlyph() }
                 Text(label)
                     .font(.system(size: 12))
                     .foregroundColor(running ? Theme.textPrimary : Theme.textTertiary)
                     .lineLimit(1)
+                if task.pendingExecutionCount > 0 {
+                    Text("· \(task.pendingExecutionCount) 条待执行")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 0)
                 WandBoardConversationButton(sessions: task.sessions, onOpen: onOpenSession)
             }
@@ -445,6 +473,53 @@ struct WandBoardSessionList: View {
     }
 }
 
+/// 任务详情中的真实会话汇总；结束、失败和未知状态不被误报为验收通过。
+struct WandBoardSessionSummaryView: View {
+    let sessions: [WandBoardTaskSession]
+
+    var body: some View {
+        let summary = WandBoardSessionActivitySummary(sessions: sessions)
+        if summary.total > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("执行会话")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 0)
+                    Text("共 \(summary.total) 个")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                }
+                HStack(spacing: 6) {
+                    summaryChip("运行", summary.running, Theme.wandAccent)
+                    summaryChip("等待输入", summary.waitingInput, Theme.warning)
+                    summaryChip("等待授权", summary.waitingAuthorization, Theme.warning)
+                    summaryChip("排队", summary.queued, Theme.textSecondary)
+                }
+                HStack(spacing: 6) {
+                    summaryChip("空闲", summary.idle, Theme.textSecondary)
+                    summaryChip("结束/失败", summary.endedOrFailed, Theme.textTertiary)
+                    summaryChip("归档", summary.archived, Theme.textSecondary)
+                    summaryChip("未知", summary.unknown, Theme.warning)
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.surface))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("执行会话，共 \(summary.total) 个；运行 \(summary.running)，等待输入 \(summary.waitingInput)，排队 \(summary.queued)，空闲 \(summary.idle)，结束或失败 \(summary.endedOrFailed)，未知 \(summary.unknown)")
+        }
+    }
+
+    private func summaryChip(_ label: String, _ count: Int, _ color: Color) -> some View {
+        Text("\(label) \(count)")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(count > 0 ? color : Theme.textMuted)
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(Capsule().fill(count > 0 ? color.opacity(0.12) : Theme.surfaceElevated))
+    }
+}
+
 /// 详情页的「已指派的 Agent」列表：按 CLI 工具分组，组头带模型 / 思考深度 / 工作模式。
 struct WandBoardAgentSessionList: View {
     var assignee: WandBoardAssignedExecutor? = nil
@@ -494,22 +569,36 @@ struct WandBoardAgentSessionList: View {
                                 Button {
                                     onOpenSession(session.id)
                                 } label: {
-                                    HStack(spacing: 8) {
-                                        Circle()
-                                            .fill(session.isRunning ? Theme.wandAccent : Theme.textMuted)
-                                            .frame(width: 6, height: 6)
-                                        Text(session.title.isEmpty ? wandBoardProviderLabel(session.provider, engine: session.engine) : session.title)
-                                            .font(.system(size: 13))
-                                            .foregroundColor(Theme.textPrimary)
-                                            .lineLimit(1)
-                                        Spacer(minLength: 8)
-                                        Text(wandBoardSessionSummary(session, catalog))
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 8) {
+                                            Circle()
+                                                .fill(session.isRunning ? Theme.wandAccent : Theme.textMuted)
+                                                .frame(width: 6, height: 6)
+                                            Text(session.displayPurpose.isEmpty ? wandBoardProviderLabel(session.provider, engine: session.engine) : session.displayPurpose)
+                                                .font(.system(size: 13))
+                                                .foregroundColor(Theme.textPrimary)
+                                                .lineLimit(1)
+                                            Spacer(minLength: 8)
+                                            Text(session.activityLabel)
+                                                .font(.system(size: 11, weight: .medium))
+                                                .foregroundColor(session.isRunning ? Theme.wandAccent : Theme.textMuted)
+                                                .lineLimit(1)
+                                            Image(systemName: "arrow.up.right")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(Theme.textMuted)
+                                        }
+                                        Text([session.employeeName,
+                                              session.cwd.isEmpty ? nil : session.cwd,
+                                              wandModelDisplayName(provider: session.provider, model: session.model, catalog: catalog)]
+                                            .compactMap { value in value?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                            .filter { !$0.isEmpty }
+                                            .joined(separator: " · "))
                                             .font(.system(size: 11))
                                             .foregroundColor(Theme.textMuted)
                                             .lineLimit(1)
-                                        Image(systemName: "arrow.up.right")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(Theme.textMuted)
+                                        Text(session.taskCommentId == nil ? "原记录 · 继续此会话" : "评论执行 · 继续此会话")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundColor(Theme.wandAccent)
                                     }
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 9)
@@ -640,11 +729,13 @@ struct WandBoardCard: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if status == .done {
-                    Button("完成") { onComplete() }
+                    Button("查看验收") { onOpen() }
                         .buttonStyle(WandBoardChipButtonStyle(emphasized: true))
-                        .help("确认完成")
+                        .help("打开交付与验收，归档不代表通过")
                 }
             }
+            Text(task.acceptance?.acceptedAt != nil ? "验收通过 · 已完成" : task.acceptance?.blocker.isEmpty == false ? "待处理 · 有验收缺口" : "未验收")
+                .font(.caption).foregroundColor(task.acceptance?.acceptedAt != nil ? Theme.success : Theme.textSecondary)
             if let employee = task.sessions.compactMap(\.employeeName).first { Text(employee).font(.subheadline).fontWeight(.semibold) }
             if parent != nil || childCount > 0 {
                 WandBoardRelationshipSummary(parent: parent, childCount: childCount)
@@ -742,7 +833,7 @@ struct WandBoardCard: View {
             if let dueDate = task.dueDate, !dueDate.isEmpty {
                 WandBoardDueChip(dueDate: dueDate, status: task.status)
             }
-            WandBoardAgentChips(assignee: task.assignedExecutor, sessions: task.sessions, assigned: task.agent)
+            WandBoardAgentChips(assignee: task.assignedExecutor, subject: task.executionSubject, sessions: task.sessions, assigned: task.agent)
             if status != .doing {
                 Spacer(minLength: 0)
                 WandBoardConversationButton(sessions: task.sessions, onOpen: onOpenSession)
@@ -808,7 +899,7 @@ struct WandGoalChildren: View {
                 ForEach(children) { child in
                     VStack(alignment: .leading, spacing: 4) {
                         Button("\(child.identifier) · \(child.title)") { onOpen(child.id) }
-                        Text("\(WandBoardStatus(rawValue: child.status)?.label ?? child.status) · \(child.sessions.isEmpty ? "尚未派发" : "交付待验收 · \(child.sessions.count) 个执行会话")")
+                        Text("\(child.displayStatusLabel) · \(child.hasQueuedExecution ? "等待执行" : child.sessions.isEmpty ? "尚未派发" : "交付待验收 · \(child.sessions.count) 个执行会话")")
                             .font(.caption).foregroundColor(Theme.textSecondary)
                         if let due = child.dueDate, !due.isEmpty { Text("截止 \(due)").font(.caption) }
                         if let employee = child.sessions.compactMap(\.employeeName).first { Text(employee).font(.caption) }
@@ -824,6 +915,10 @@ struct WandGoalChildren: View {
 }
 
 
+@MainActor private enum TaskAcceptanceDrafts {
+    static var values: [String: (evidence: String, blocker: String)] = [:]
+}
+
 struct WandTaskAcceptanceEditor: View {
     let task: WandBoardTask
     let children: [WandBoardTask]
@@ -833,25 +928,37 @@ struct WandTaskAcceptanceEditor: View {
     @State private var blocker: String
     init(task: WandBoardTask, children: [WandBoardTask], busy: Bool, onPatch: @escaping ([String: Any]) async -> Void) {
         self.task = task; self.children = children; self.busy = busy; self.onPatch = onPatch
-        _evidence = State(initialValue: task.acceptance?.evidence ?? "")
-        _blocker = State(initialValue: task.acceptance?.blocker ?? "")
+        _evidence = State(initialValue: TaskAcceptanceDrafts.values[task.id]?.evidence ?? task.acceptance?.evidence ?? "")
+        _blocker = State(initialValue: TaskAcceptanceDrafts.values[task.id]?.blocker ?? task.acceptance?.blocker ?? "")
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("交付与验收").font(.headline)
-            Text("会话结束、失败或归档均不代表验收通过。交付标准见任务描述。").font(.caption).foregroundColor(Theme.textSecondary)
-            TextField("交付证据与产物路径、源会话", text: $evidence).textFieldStyle(.roundedBorder)
-            TextField("验收阻塞；无阻塞时留空", text: $blocker).textFieldStyle(.roundedBorder)
+            Text("由任务负责人统一核对各会话产物。会话运行中、等待输入、空闲、结束、失败或归档，均不代表验收通过。交付标准见任务描述。").font(.caption).foregroundColor(Theme.textSecondary)
+            TextField("交付证据、产物路径或源会话", text: $evidence).textFieldStyle(.roundedBorder)
+            TextField("等待输入、授权、部署或验收原因（无则留空）", text: $blocker).textFieldStyle(.roundedBorder)
+            if !blocker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("当前阻塞：\(blocker)")
+                    .font(.caption)
+                    .foregroundColor(Theme.warning)
+                    .textSelection(.enabled)
+            }
             let gaps = children.filter { $0.acceptance?.acceptedAt == nil }
             if !gaps.isEmpty { Text("仍有 \(gaps.count) 个子任务尚未验收通过").foregroundColor(Theme.warning) }
             if children.count > 0 && gaps.isEmpty && task.acceptance?.acceptedAt == nil { Text("子任务均已验收，主目标仍待整体验收") }
             if task.acceptance?.acceptedAt != nil { Text("已由用户确认验收通过").foregroundColor(Theme.success) }
             HStack {
-                Button("保存交付与缺口") { save(accepted: false) }.disabled(busy)
+                Button(task.acceptance?.acceptedAt == nil ? "保存交付与缺口" : "保存并重新验收") { save(accepted: false) }.disabled(busy)
                 Button("确认验收通过") { save(accepted: true) }
                     .disabled(busy || evidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !blocker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !gaps.isEmpty || task.acceptance?.acceptedAt != nil)
             }
         }
+        .onChange(of: evidence) { _ in cacheDraft() }
+        .onChange(of: blocker) { _ in cacheDraft() }
+    }
+    private func cacheDraft() {
+        if TaskAcceptanceDrafts.values.count >= 100, let oldest = TaskAcceptanceDrafts.values.keys.first { TaskAcceptanceDrafts.values.removeValue(forKey: oldest) }
+        TaskAcceptanceDrafts.values[task.id] = (evidence, blocker)
     }
     private func save(accepted: Bool) {
         let value: [String: Any] = ["evidence": evidence, "blocker": blocker, "acceptedAt": accepted ? ISO8601DateFormatter().string(from: Date()) : NSNull()]

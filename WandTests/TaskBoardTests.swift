@@ -5,6 +5,43 @@ import XCTest
 @testable import Wand
 
 final class TaskBoardTests: XCTestCase {
+    func testParallelDeliveryAndExplicitAcceptanceAreIndependent() throws {
+        let task = try JSONDecoder().decode(WandBoardTask.self, from: Data(#"""
+        {"id":"parallel","status":"doing","sessions":[
+          {"id":"a","status":"exited","purpose":"实现","cwd":"/repo"},
+          {"id":"b","status":"idle","inFlight":true,"queuedMessageCount":1,"permissionBlocked":true,"cwd":"/repo"}
+        ],"acceptance":{"evidence":"a: report; b: 待确认","blocker":"等待部署：尚未安装","acceptedAt":null}}
+        """#.utf8))
+        XCTAssertEqual(task.sessions.map(\.activityLabel), ["结束/失败", "等待授权"])
+        XCTAssertEqual(wandBoardStats(tasks: [task]).accepted, 0)
+        XCTAssertTrue(wandBoardTaskProcessingLabel(task).contains("等待部署"))
+    }
+
+    @MainActor
+    func testQueuedExecutionIsVisibleAndStillAnActiveTask() throws {
+        let card = try JSONDecoder().decode(WandBoardTask.self, from: Data("""
+        {"id":"queued","status":"doing","executionStatus":"queued","queuedExecutionCount":2,"sessions":[]}
+        """.utf8))
+        XCTAssertEqual(card.status, "doing")
+        XCTAssertEqual(card.displayStatusLabel, "排队中")
+        XCTAssertEqual(card.pendingExecutionCount, 2)
+        let summary = try JSONDecoder().decode(WorkspaceTaskSummary.self, from: Data("""
+        {"id":"queued","workspaceId":"w","name":"排队任务","status":"active","createdAt":"2026-01-01","cwd":"/tmp","sessions":[],"executionStatus":"queued","queuedExecutionCount":2}
+        """.utf8))
+        XCTAssertTrue(summary.hasActiveExecution)
+        XCTAssertTrue(summary.hasQueuedExecution)
+        let pending = try JSONDecoder().decode(WorkspaceSessionSummary.self, from: Data("""
+        {"id":"pending","sessionKind":"structured","status":"idle","executionStatus":"queued"}
+        """.utf8))
+        XCTAssertEqual(pending.activityStatus, "queued")
+        XCTAssertTrue(TaskListPresentation.isActive(pending, selectedSessionId: nil))
+        let group = TaskDirectoryGroup(workspaceId: "w", workspaceName: "目录", workspaceCwd: "/tmp",
+            synthetic: false, tasks: [summary], standaloneSessions: [])
+        let filtered = TaskListPresentation.sidebarDirectoryGroups([group], workspaces: [], query: "", activeOnly: true,
+            selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(filtered.first?.tasks.first?.id, "queued")
+    }
+
     func testDesktopPageLinksKeepStableTargetsAndStripCredentials() throws {
         let base = try XCTUnwrap(URL(string: "https://user:secret@wand.test:8443/?token=private#secret"))
         let url = try XCTUnwrap(DesktopPageLink.url(base: base, parameters: [
@@ -25,6 +62,18 @@ final class TaskBoardTests: XCTestCase {
             XCTAssertNil(params[key], "Local preferences must not be copied into shareable Web links")
         }
         XCTAssertNil(DesktopPageLink.url(base: URL(string: "file:///tmp")!, parameters: [:]))
+    }
+
+    func testTaskAssigneeIdentitySurvivesSparseSnapshotsWithoutRelabelingCLI() throws {
+        let sessions = try JSONDecoder().decode([WandBoardTaskSession].self, from: Data(#"[{"id":"sparse","employeeId":"e1","provider":"pi"},{"id":"full","employeeId":"e1","employeeName":"旧姓名","employeeAvatar":"cat:1","provider":"pi"},{"id":"cli","provider":"pi"},{"id":"other","employeeId":"e2","provider":"pi"}]"#.utf8))
+        let owner = WandBoardAssignedExecutor(id: "e1", name: "赛博虎妞", avatar: "cat:2")
+        XCTAssertEqual(wandBoardEmployeeIdentity(sessions[0], sessions: sessions, assignee: owner), owner)
+        XCTAssertEqual(wandBoardEmployeeIdentity(sessions[0], sessions: sessions, assignee: nil)?.name, "旧姓名")
+        XCTAssertEqual(wandBoardEmployeeIdentity(sessions[0], sessions: sessions, assignee: nil)?.avatar, "cat:1")
+        XCTAssertNil(wandBoardEmployeeIdentity(sessions[2], sessions: sessions, assignee: owner))
+        XCTAssertEqual(wandBoardEmployeeIdentity(sessions[3], sessions: sessions, assignee: owner)?.id, "e2")
+        XCTAssertEqual(wandBoardEmployeeIdentity(sessions[3], sessions: sessions, assignee: owner)?.name, "员工（资料不可用）")
+        XCTAssertEqual(sessions[0].employeeName, nil, "Read projection must not rewrite historical snapshots")
     }
 
     func testTaskScopedEmployeeOverrideAndIdentityDecode() throws {
@@ -277,6 +326,25 @@ final class TaskBoardTests: XCTestCase {
             }.padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             try await organizationSnapshot(summary, size: NSSize(width: 320, height: 100), dark: dark,
                 path: output.appendingPathComponent("relationship-summary-\(suffix).png"))
+        }
+    }
+
+    @MainActor
+    func testTaskAssigneeVisuals() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["WAND_TASK73_VISUAL_OUTPUT"] else {
+            throw XCTSkip("Set WAND_TASK73_VISUAL_OUTPUT for native offscreen assignee snapshots")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let task = try JSONDecoder().decode(WandBoardTask.self, from: Data(#"{"id":"task73","identifier":"TASK-73","title":"任务负责人展示","description":"员工身份与头像优先，Pi 与模型作为执行工具信息。","status":"doing","executionSubject":{"type":"employee","id":"e1"},"assignedExecutor":{"id":"e1","name":"赛博虎妞","avatar":"cat:1"},"agent":{"provider":"pi","model":"fixture"},"sessions":[{"id":"sparse","employeeId":"e1","provider":"pi","status":"running","model":"fixture"},{"id":"cli","provider":"pi","status":"exited"}]}"#.utf8))
+        for dark in [false, true] {
+            let detail = WandBoardDetailView(task: task, loadComments: { _, _, _ in WandTaskCommentsPage(comments: [], totalCount: 0, nextCursor: nil) }, workspaces: [], milestones: [], catalog: nil, busy: false,
+                onPatch: { _ in XCTFail("Read-only visual must not patch") }, onRemember: { _ in }, onDispatch: { _, _ in XCTFail("Read-only visual must not dispatch") }, onArchive: { XCTFail("Read-only visual must not archive") }, onOpenSession: { _ in }, onCreateMilestone: { _ in throw URLError(.unsupportedURL) })
+            try await organizationSnapshot(detail, size: NSSize(width: 1200, height: 900), dark: dark,
+                path: output.appendingPathComponent("detail-\(dark ? "dark" : "light").png"))
+            let chips = WandBoardAgentChips(assignee: task.assignedExecutor, subject: task.executionSubject, sessions: task.sessions, assigned: task.agent).padding(12)
+            try await organizationSnapshot(chips, size: NSSize(width: 340, height: 150), dark: dark,
+                path: output.appendingPathComponent("chips-\(dark ? "dark" : "light").png"))
         }
     }
 
@@ -659,7 +727,7 @@ final class TaskBoardTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(series[index].completed, series[index - 1].completed)
         }
         XCTAssertEqual(series.last?.scope, 2)
-        XCTAssertEqual(series.last?.completed, 1)
+        XCTAssertEqual(series.last?.completed, 0, "done 工作流阶段不是验收")
     }
 
     func testMilestoneVisibilityFollowsWorkspaceScope() {

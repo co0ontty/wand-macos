@@ -327,12 +327,37 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
     let cwd: String
     let model: String
     let thinkingEffort: String
+    /// 员工执行事项或评论派发给 Agent 的本轮范围；旧服务端可能不返回。
+    let purpose: String?
+    let permissionBlocked: Bool?
+    let archived: Bool?
+    let executionStatus: String?
+    let inFlight: Bool?
+    let queuedMessageCount: Int?
     /// 会话实际跑的工作模式；旧会话可能为空，显示时回落到任务上的配置。
     let mode: String
     let taskCommentId: String?
 
     var isStructured: Bool { sessionKind != "pty" && sessionKind != "shell" }
-    var isRunning: Bool { status == "running" }
+    var isRunning: Bool {
+        activityLabel == "运行中"
+    }
+    var displayPurpose: String {
+        let value = purpose?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? title : value
+    }
+    /// 详情汇总使用稳定的有限集合；未知值不能乐观地显示成已结束。
+    var activityLabel: String {
+        if archived == true { return "已归档" }
+        if permissionBlocked == true { return "等待授权" }
+        if ["waiting-input", "waiting_input", "needs_input"].contains(status) { return "等待输入" }
+        if executionStatus == "running" || inFlight == true || (inFlight == nil && ["running", "thinking"].contains(status)) { return "运行中" }
+        if status == "failed" { return "结束/失败" }
+        if ["exited", "stopped"].contains(status) { return "结束/失败" }
+        if executionStatus == "queued" || status == "queued" { return "排队中" }
+        if status == "idle" { return "空闲" }
+        return "状态未确认"
+    }
     var toolEngine: String { engine == "core" || engine == "sdk" ? "sdk" : "cli" }
 
     init(from decoder: Decoder) throws {
@@ -349,13 +374,57 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
         cwd = (try? container.decode(String.self, forKey: .cwd)) ?? ""
         model = (try? container.decode(String.self, forKey: .model)) ?? ""
         thinkingEffort = (try? container.decode(String.self, forKey: .thinkingEffort)) ?? "off"
+        purpose = try? container.decodeIfPresent(String.self, forKey: .purpose)
+        permissionBlocked = try? container.decodeIfPresent(Bool.self, forKey: .permissionBlocked)
+        archived = try? container.decodeIfPresent(Bool.self, forKey: .archived)
+        executionStatus = try? container.decodeIfPresent(String.self, forKey: .executionStatus)
+        inFlight = try? container.decodeIfPresent(Bool.self, forKey: .inFlight)
+        queuedMessageCount = try? container.decodeIfPresent(Int.self, forKey: .queuedMessageCount)
         mode = (try? container.decode(String.self, forKey: .mode)) ?? ""
         taskCommentId = try? container.decodeIfPresent(String.self, forKey: .taskCommentId)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case employeeName, employeeId, employeeAvatar, id, provider, engine, sessionKind, title, status, cwd, model, thinkingEffort, mode, taskCommentId
+        case employeeName, employeeId, employeeAvatar, id, provider, engine, sessionKind, title, status, cwd, model, thinkingEffort
+        case purpose, permissionBlocked, archived, executionStatus, inFlight, queuedMessageCount, mode, taskCommentId
     }
+}
+
+struct WandBoardSessionActivitySummary: Equatable {
+    let running: Int
+    let waitingInput: Int
+    let waitingAuthorization: Int
+    let queued: Int
+    let idle: Int
+    let endedOrFailed: Int
+    let unknown: Int
+    let archived: Int
+
+    init(sessions: [WandBoardTaskSession]) {
+        var values = Array(repeating: 0, count: 8)
+        for session in sessions {
+            switch session.activityLabel {
+            case "运行中": values[0] += 1
+            case "等待输入": values[1] += 1
+            case "等待授权": values[2] += 1
+            case "排队中": values[3] += 1
+            case "空闲": values[4] += 1
+            case "结束/失败": values[5] += 1
+            case "已归档": values[7] += 1
+            default: values[6] += 1
+            }
+        }
+        running = values[0]
+        waitingInput = values[1]
+        waitingAuthorization = values[2]
+        queued = values[3]
+        idle = values[4]
+        endedOrFailed = values[5]
+        unknown = values[6]
+        archived = values[7]
+    }
+
+    var total: Int { running + waitingInput + waitingAuthorization + queued + idle + endedOrFailed + unknown + archived }
 }
 
 struct WandBoardDispatchResult: Decodable {
@@ -367,6 +436,8 @@ struct WandBoardDispatchResult: Decodable {
     let title: String
     let status: String
     let model: String
+    /// 员工并发上限已满：派发已记录为排队，暂无会话可打开。
+    let queued: Bool
 
     private struct Session: Decodable {
         let id: String?
@@ -377,12 +448,13 @@ struct WandBoardDispatchResult: Decodable {
         let sessionKind: String?
     }
 
-    private enum CodingKeys: String, CodingKey { case ok, taskId, session }
+    private enum CodingKeys: String, CodingKey { case ok, taskId, session, queued }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = (try? container.decode(Bool.self, forKey: .ok)) ?? true
         taskId = (try? container.decode(String.self, forKey: .taskId)) ?? ""
+        queued = (try? container.decode(Bool.self, forKey: .queued)) ?? false
         let session = try? container.decode(Session.self, forKey: .session)
         sessionId = session?.id ?? ""
         provider = session?.provider ?? ""
@@ -399,7 +471,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         case assignedExecutor
         case executionSubject, acceptance, id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
         case labels, dueDate, milestoneId, milestone, sortOrder, agent, createdAt, updatedAt
-        case sessionIds, sessions, workspace, commentCount
+        case sessionIds, sessions, workspace, commentCount, queuedCommentCount, executionStatus, queuedExecutionCount
     }
 
     let executionSubject: WandTaskExecutionSubject?
@@ -430,6 +502,17 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
     let sessions: [WandBoardTaskSession]
     let workspace: WandBoardWorkspace?
     let commentCount: Int
+    /// 该任务还有多少条派发在员工并发上限后排队；任务仍留在活动列。
+    let queuedCommentCount: Int
+    let executionStatus: String?
+    let queuedExecutionCount: Int?
+    var pendingExecutionCount: Int { queuedExecutionCount ?? queuedCommentCount }
+    var hasQueuedExecution: Bool {
+        executionStatus == "queued" || (executionStatus == nil && queuedCommentCount > 0 && !sessions.contains { $0.status == "running" })
+    }
+    var displayStatusLabel: String {
+        status == "doing" && hasQueuedExecution ? "排队中" : (WandBoardStatus(rawValue: status)?.label ?? status)
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -461,6 +544,9 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
             .filter { !$0.id.isEmpty }
         workspace = try? container.decodeIfPresent(WandBoardWorkspace.self, forKey: .workspace)
         commentCount = max(0, (try? container.decode(Int.self, forKey: .commentCount)) ?? 0)
+        queuedCommentCount = max(0, (try? container.decode(Int.self, forKey: .queuedCommentCount)) ?? 0)
+        executionStatus = try? container.decodeIfPresent(String.self, forKey: .executionStatus)
+        queuedExecutionCount = try? container.decodeIfPresent(Int.self, forKey: .queuedExecutionCount)
     }
 }
 
@@ -723,6 +809,22 @@ func wandBoardSessionStatusLabel(_ status: String) -> String {
     }
 }
 
+func wandBoardTaskProcessingLabel(_ task: WandBoardTask) -> String {
+    if task.acceptance?.acceptedAt != nil { return "验收通过 · 已完成" }
+    if let blocker = task.acceptance?.blocker, !blocker.isEmpty { return "待处理：\(blocker)" }
+    let summary = WandBoardSessionActivitySummary(sessions: task.sessions)
+    if task.executionStatus == "running" || summary.running > 0 { return "正在处理…" }
+    if task.executionStatus == "queued" || task.pendingExecutionCount > 0 || summary.queued > 0 {
+        return "排队中"
+    }
+    if summary.waitingInput > 0 { return "等待输入" }
+    if summary.waitingAuthorization > 0 { return "等待授权" }
+    if summary.total == 0 { return "等待派发" }
+    if summary.unknown > 0 { return "状态未确认" }
+    if summary.endedOrFailed == summary.total { return "已结束 · 待验收" }
+    return "可继续"
+}
+
 func wandBoardModelOptions(from catalog: ModelsResponse?, provider: String) -> [(id: String, label: String)] {
     let models = catalog?.models(for: provider) ?? []
     let mapped = models.map { (id: $0.id, label: $0.label.isEmpty ? $0.id : $0.label) }
@@ -900,6 +1002,7 @@ struct WandBoardStats {
     let todo: Int
     let doing: Int
     let done: Int
+    let accepted: Int
     let overdue: Int
     let high: Int
     var remaining: Int { todo + doing }
@@ -926,7 +1029,7 @@ func wandBoardStats(tasks: [WandBoardTask]) -> WandBoardStats {
             high += 1
         }
     }
-    return WandBoardStats(total: tasks.count, backlog: backlog, todo: todo, doing: doing, done: done, overdue: overdue, high: high)
+    return WandBoardStats(total: tasks.count, backlog: backlog, todo: todo, doing: doing, done: done, accepted: tasks.filter { $0.acceptance?.acceptedAt != nil }.count, overdue: overdue, high: high)
 }
 
 struct WandBoardProgressPoint: Identifiable {
@@ -953,8 +1056,8 @@ func wandBoardProgressSeries(tasks: [WandBoardTask], now: Date = Date()) -> [Wan
             return max(createdAt, updatedAt) <= timestamp
         }.count
         let completed = tasks.filter { task in
-            guard let status = WandBoardStatus(rawValue: task.status), status.isClosed else { return false }
-            return (wandBoardDate(from: task.updatedAt)?.timeIntervalSince1970 ?? .greatestFiniteMagnitude) <= timestamp
+            guard let acceptedAt = task.acceptance?.acceptedAt else { return false }
+            return (wandBoardDate(from: acceptedAt)?.timeIntervalSince1970 ?? .greatestFiniteMagnitude) <= timestamp
         }.count
         return WandBoardProgressPoint(id: index, scope: scope, started: started, completed: completed)
     }
@@ -1181,3 +1284,18 @@ extension EmployeeExecutionCandidate {
 }
 
 struct WandBoardAssignedExecutor: Codable, Equatable { let id: String; let name: String; let avatar: String? }
+
+/// Resolve only a proven employee binding; the task's current owner never relabels a CLI/history session.
+func wandBoardEmployeeIdentity(_ session: WandBoardTaskSession, sessions: [WandBoardTaskSession], assignee: WandBoardAssignedExecutor?) -> WandBoardAssignedExecutor? {
+    guard let id = session.employeeId, !id.isEmpty else {
+        guard let name = session.employeeName, !name.isEmpty else { return nil }
+        return WandBoardAssignedExecutor(id: "legacy-employee:\(name)", name: name, avatar: session.employeeAvatar)
+    }
+    let bound = assignee?.id == id ? assignee : nil
+    let snapshots = sessions.filter { $0.employeeId == id }
+    let name = [bound?.name, snapshots.last(where: { !($0.employeeName ?? "").isEmpty })?.employeeName]
+        .compactMap { $0 }.first(where: { !$0.isEmpty }) ?? "员工（资料不可用）"
+    let avatar = [bound?.avatar, snapshots.last(where: { !($0.employeeAvatar ?? "").isEmpty })?.employeeAvatar]
+        .compactMap { $0 }.first(where: { !$0.isEmpty })
+    return WandBoardAssignedExecutor(id: id, name: name, avatar: avatar)
+}

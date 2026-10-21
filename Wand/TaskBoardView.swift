@@ -148,7 +148,7 @@ struct TaskBoardView: View {
         .alert(item: $archiveConfirm) { task in
             Alert(
                 title: Text("归档「\(task.title)」？"),
-                message: Text("任务会移入归档，并将关联的工作任务标为完成。会话记录会保留。"),
+                message: Text("任务会移入归档，关联工作任务将收起，会话记录保留。归档不代表任务验收通过，也不会正式发布。"),
                 primaryButton: .destructive(Text("归档任务")) {
                     Task { await archiveCard(task) }
                 },
@@ -525,9 +525,12 @@ struct TaskBoardView: View {
         filters = state.filters
         workspaceFilter = state.workspaceId.isEmpty ? (linkedWorkspaceId ?? "") : state.workspaceId
         display = wandBoardReadDisplay()
+        // The visible board and its independent choices share the auth gate,
+        // not each other's network latency.
+        async let supporting: Void = loadSupporting()
         await reload(showProgress: true)
         didLoad = true
-        await loadSupporting()
+        await supporting
     }
 
     private func loadWorkspaceChoices() async {
@@ -540,13 +543,16 @@ struct TaskBoardView: View {
     }
 
     private func loadSupporting() async {
-        await loadWorkspaceChoices()
-        employees = (try? await api.employeeContacts()) ?? employees
-        catalog = try? await api.models()
-        milestones = (try? await api.listBoardMilestones()) ?? milestones
-        if let agent = try? await api.boardTaskAgentDefaults() {
-            lastAgent = agent
-        }
+        async let workspaceChoices: Void = loadWorkspaceChoices()
+        async let employeeChoices = try? api.employeeContacts()
+        async let modelChoices = try? api.models()
+        async let milestoneChoices = try? api.listBoardMilestones()
+        async let agentDefaults = try? api.boardTaskAgentDefaults()
+        employees = await employeeChoices ?? employees
+        catalog = await modelChoices
+        milestones = await milestoneChoices ?? milestones
+        if let agent = await agentDefaults { lastAgent = agent }
+        await workspaceChoices
     }
 
     private func reload(showProgress: Bool, silent: Bool = false) async {
@@ -647,7 +653,7 @@ struct TaskBoardView: View {
                         employeeId: draft.employeeId.isEmpty ? nil : draft.employeeId,
                         employeeOverride: draft.employeeOverride
                     )
-                    showNotice("\(wandBoardProviderLabel(result.provider)) 已开始处理「\(task.title)」")
+                    showNotice(result.queued ? "「\(task.title)」已排队，等待员工空闲后自动开始" : "\(wandBoardProviderLabel(result.provider)) 已开始处理「\(task.title)」")
                 } catch {
                     errorMessage = error.localizedDescription
                 }
@@ -698,7 +704,7 @@ struct TaskBoardView: View {
                 requestId: requestId
             )
             dispatchRequestIds.removeValue(forKey: task.id)
-            showNotice("\(wandBoardProviderLabel(result.provider)) 已开始处理「\(task.title)」")
+            showNotice(result.queued ? "「\(task.title)」已排队，等待员工空闲后自动开始" : "\(wandBoardProviderLabel(result.provider)) 已开始处理「\(task.title)」")
             await reload(showProgress: false)
         }
     }
@@ -756,7 +762,7 @@ struct TaskBoardView: View {
                         prompt: wandBoardDropDispatchPrompt(title: moving.title, description: moving.description),
                         workspaceId: moving.workspaceId
                     )
-                    showNotice("\(wandBoardProviderLabel(result.provider)) 已开始处理「\(moving.title)」")
+                    showNotice(result.queued ? "「\(moving.title)」已排队，等待员工空闲后自动开始" : "\(wandBoardProviderLabel(result.provider)) 已开始处理「\(moving.title)」")
                 } catch {
                     // 状态已经改好，派发失败只提示、不回滚：用户可进详情改参数后重试。
                     dispatchError = error.localizedDescription

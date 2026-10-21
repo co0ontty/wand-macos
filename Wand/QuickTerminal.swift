@@ -17,15 +17,18 @@ final class QuickTerminalModel: ObservableObject {
     @Published private(set) var cwd = ""
     private let api: WandAPI
     private let defaults: UserDefaults
+    private let makeTerminal: @MainActor (String, WandAPI) -> PtyTerminalStore
     private let key: String
     private var sessionId: String
     private var creationUnconfirmed = false
     private var observation: AnyCancellable?
     private var launch: Task<Void, Never>?
 
-    init(api: WandAPI, defaults: UserDefaults = .standard) {
+    init(api: WandAPI, defaults: UserDefaults = .standard,
+         makeTerminal: @escaping @MainActor (String, WandAPI) -> PtyTerminalStore = { PtyTerminalStore(sessionId: $0, api: $1) }) {
         self.api = api
         self.defaults = defaults
+        self.makeTerminal = makeTerminal
         key = "wand.quick-terminal.v1." + api.baseURL.absoluteString
         dock = QuickTerminalDock(stored: defaults.string(forKey: key + ".dock"))
         sessionId = defaults.string(forKey: key + ".session") ?? ""
@@ -42,6 +45,9 @@ final class QuickTerminalModel: ObservableObject {
         isOpen = true
         if let terminal {
             terminal.setLayoutActive(true)
+            // close() disables the retained NSView immediately. Re-enable it before
+            // focusing; waiting for SwiftUI's next update makes this focus request a no-op.
+            terminal.terminal.inputEnabled = true
             terminal.terminal.focusTerminal()
             return
         }
@@ -59,7 +65,7 @@ final class QuickTerminalModel: ObservableObject {
             defaults.set(true, forKey: key + ".creating")
         }
         let originalResponder = NSApp.keyWindow?.firstResponder
-        launch = Task { [weak self] in
+        launch = Task { [weak self, weak originalResponder] in
             guard let self else { return }
             defer { self.busy = false; self.launch = nil }
             do {
@@ -79,7 +85,7 @@ final class QuickTerminalModel: ObservableObject {
                 self.creationUnconfirmed = false
                 self.defaults.set(false, forKey: self.key + ".creating")
                 self.cwd = snapshot.cwd ?? ""
-                let store = PtyTerminalStore(sessionId: snapshot.id, api: self.api)
+                let store = self.makeTerminal(snapshot.id, self.api)
                 self.terminal = store
                 store.setLayoutActive(self.isOpen)
                 self.observation = store.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
