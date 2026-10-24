@@ -88,6 +88,25 @@ struct ConversationTaskRecord: Decodable {
 
 struct ConversationRunDetail: Decodable { let run: ConversationRun }
 
+struct DingTalkGroupBinding: Decodable, Identifiable {
+    let id: String
+    let employeeId: String
+    let state: String
+}
+struct DingTalkGroupOrigin: Decodable {
+    let provider: String
+    let groupId: String
+    let syncState: String
+    let syncError: String?
+    let historyComplete: Bool?
+    let bindings: [DingTalkGroupBinding]?
+    var statusText: String {
+        if syncState == "live" { return "钉钉群 · \(bindings?.count ?? 0) 名已接入员工" }
+        if syncState == "at_only" { return "钉钉群 · 仅同步 @消息" }
+        return "钉钉群 · 消息同步尚未就绪"
+    }
+}
+
 struct NativeConversation: Decodable, Identifiable {
     let id: String
     let kind: String
@@ -110,6 +129,7 @@ struct NativeConversation: Decodable, Identifiable {
     var communicationSessionId: String? = nil
     var historySessionIds: [String]? = nil
     var history: ConversationHistory? = nil
+    var external: DingTalkGroupOrigin? = nil
 
     var isArchived: Bool { dissolvedAt?.isEmpty == false || (tasks ?? []).contains { $0.task.status == "archived" } }
     func isActivity(sessions: [WorkspaceSessionSummary], selectedConversationID: String?, selectedSessionID: String?) -> Bool {
@@ -132,7 +152,7 @@ struct NativeConversation: Decodable, Identifiable {
     var runs: [ConversationRun] { (tasks ?? []).flatMap(\.runs) }
     var sendBlockReason: String? {
         if deleting == true { return "对话正在删除，原草稿保留。" }
-        if dissolvedAt?.isEmpty == false { return "群已解散；仍可阅读历史。" }
+        if dissolvedAt?.isEmpty == false { return external != nil ? "此钉钉群镜像已暂停；不影响真实群聊。" : "群已解散；仍可阅读历史。" }
         if kind != "dm" && kind != "group" { return "当前客户端不支持此对话类型。" }
         return unavailableReason?.isEmpty == false ? unavailableReason : nil
     }

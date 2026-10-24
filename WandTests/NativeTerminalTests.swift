@@ -432,6 +432,49 @@ final class NativeTerminalTests: XCTestCase {
         XCTAssertNotNil(restored.terminal)
         XCTAssertEqual(restoredSocket.subscriptions, ["pty-1:true"])
         XCTAssertEqual(requests, ["POST", "GET"], "A fresh client model reads the saved shell instead of creating another")
+        if let directory = ProcessInfo.processInfo.environment["WAND_TERMINAL_SCREENSHOT_DIR"] {
+            try await captureQuickTerminal(model: model, directory: directory)
+        }
+        socket.onConnectionChange?(false)
+        model.close()
+        model.open(cwd: nil)
+        XCTAssertFalse(store.terminal.inputEnabled, "Reopening a disconnected shell cannot enable input")
+        socket.onEvent?(try event("init", data: ["status": "exited"]))
+        model.close()
+        model.open(cwd: nil)
+        XCTAssertFalse(store.terminal.inputEnabled, "An ended shell stays read-only when reopened")
+    }
+
+    private func captureQuickTerminal(model: QuickTerminalModel, directory: String) async throws {
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for (name, dock, size, appearance) in [
+            ("quick-right-light", QuickTerminalDock.right, NSSize(width: 1000, height: 640), NSAppearance.Name.aqua),
+            ("quick-bottom-dark", QuickTerminalDock.bottom, NSSize(width: 1000, height: 640), NSAppearance.Name.darkAqua),
+            ("quick-narrow", QuickTerminalDock.right, NSSize(width: 560, height: 640), NSAppearance.Name.aqua)
+        ] {
+            model.setDock(dock)
+            let host = NSHostingView(rootView: QuickTerminalWorkspace(model: model) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("工作区").font(.headline)
+                    Text("主编辑区草稿保持原位")
+                    Spacer()
+                }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .background(Theme.workspaceBackground)
+            })
+            host.frame = NSRect(origin: .zero, size: size)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: appearance)
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            defer { window.close() }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 200_000_000)
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+        }
     }
 
     func testHiddenQuickTerminalDoesNotResizeOrStopTheProcess() async throws {
@@ -486,8 +529,7 @@ final class NativeTerminalTests: XCTestCase {
         let decoded = try XCTUnwrap(WandAuth.decodeConnectCode(connection.connectionCode))
         let api = WandAPI(baseURL: connection.serverURL, token: decoded.token)
         // No commands run in existing user sessions; remove only the shell created by this test.
-        let session = try await api.request(SessionSnapshot.self, method: "POST", path: "/api/commands",
-                                            body: ["shell": true, "cwd": NSTemporaryDirectory()])
+        let session = try await api.createBlankTerminal(cwd: NSTemporaryDirectory(), initialInput: nil)
         let store = PtyTerminalStore(sessionId: session.id, api: api)
         do {
             store.start()
@@ -560,7 +602,8 @@ final class NativeTerminalTests: XCTestCase {
             if let terminal = view as? NativeTerminalView { return terminal }
             return view.subviews.lazy.compactMap { findTerminal($0) }.first
         }
-        try await waitUntil { findTerminal(host).map { self.visibleText($0).contains("原生接口验收_OK") } ?? false }
+        // The initial marker has scrolled out after the 130-line history probe.
+        try await waitUntil { findTerminal(host).map { self.visibleText($0).contains("PTY_WHILE_BROWSING") } ?? false }
         let view = try XCTUnwrap(findTerminal(host))
         // A clean alternate screen keeps shell usernames, local paths and unrelated history out of screenshots.
         driver.sendInput("printf '\\033[?1049h\\033[2J\\033[H\\033[32mWand Native Terminal\\033[0m\\n\\r原生终端 · WebSocket 直连接口\\n\\r中文输入 / ANSI / TUI / 尺寸同步 / 断线恢复\\n\\r\\n\\rNo WebView. No JavaScript bridge.'; sleep 5; printf '\\033[?1049l'")
@@ -585,12 +628,12 @@ final class NativeTerminalTests: XCTestCase {
         }
     }
 
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async throws {
+    private func waitUntil(file: StaticString = #filePath, line: UInt = #line, _ condition: @escaping @MainActor () -> Bool) async throws {
         for _ in 0..<200 {
             if condition() { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
-        XCTFail("Native terminal acceptance condition timed out (credentials intentionally omitted)")
+        XCTFail("Native terminal acceptance condition timed out (credentials intentionally omitted)", file: file, line: line)
         throw NSError(domain: "NativeTerminalAcceptance", code: 1)
     }
 }

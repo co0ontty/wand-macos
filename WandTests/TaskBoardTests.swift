@@ -5,6 +5,18 @@ import XCTest
 @testable import Wand
 
 final class TaskBoardTests: XCTestCase {
+    func testWorkSubmissionAndUserAcceptanceRemainIndependent() throws {
+        let json = #"[{"id":"submitted","status":"done","acceptance":{"evidence":"report","blocker":"设备验收待核对","acceptedAt":null}},{"id":"accepted","status":"done","acceptance":{"evidence":"report","blocker":"","acceptedAt":"2026-01-01"}},{"id":"archived","status":"archived"},{"id":"working","status":"doing","sessions":[{"id":"idle","status":"idle"}]}]"#
+        let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(json.utf8))
+        XCTAssertEqual(wandBoardTaskWorkLabel(tasks[0]), "已完成")
+        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[0]), "等待你验收")
+        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[1]), "已通过")
+        XCTAssertEqual(wandBoardTaskWorkLabel(tasks[2]), "未确认")
+        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[2]), "未验收")
+        XCTAssertEqual(wandBoardTaskWorkLabel(tasks[3]), "处理中")
+        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[3]), "未验收")
+    }
+
     func testParallelDeliveryAndExplicitAcceptanceAreIndependent() throws {
         let task = try JSONDecoder().decode(WandBoardTask.self, from: Data(#"""
         {"id":"parallel","status":"doing","sessions":[
@@ -349,6 +361,22 @@ final class TaskBoardTests: XCTestCase {
     }
 
     @MainActor
+    func testChildWorkAndReviewVisuals() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["WAND_CHILD_STATUS_VISUAL_OUTPUT"] else {
+            throw XCTSkip("Set WAND_CHILD_STATUS_VISUAL_OUTPUT for child status snapshots")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(#"[{"id":"goal","identifier":"GOAL","title":"主任务","description":"逐项交付与验收","status":"doing"},{"id":"waiting","parentTaskId":"goal","identifier":"CHILD-1","title":"工作已完成，等待用户验收","status":"done","acceptance":{"evidence":"报告","blocker":"设备验收待核对","acceptedAt":null}},{"id":"accepted","parentTaskId":"goal","identifier":"CHILD-2","title":"用户已验收的独立交付","status":"done","acceptance":{"evidence":"报告","blocker":"","acceptedAt":"2026-01-01"}},{"id":"archived","parentTaskId":"goal","identifier":"CHILD-3","title":"归档保留历史，不冒充完成","status":"archived"}]"#.utf8))
+        for width in [640, 1200] {
+            let detail = WandBoardDetailView(task: tasks[0], allTasks: tasks, onOpenTask: { _ in }, workspaces: [], milestones: [], catalog: nil, busy: false,
+                onPatch: { _ in XCTFail("Visual review must not patch") }, onRemember: { _ in }, onDispatch: { _, _ in XCTFail("Visual review must not dispatch") }, onArchive: { XCTFail("Visual review must not archive") }, onOpenSession: { _ in }, onCreateMilestone: { _ in throw URLError(.unsupportedURL) })
+            try await organizationSnapshot(detail, size: NSSize(width: width, height: 1000), dark: width == 640,
+                path: output.appendingPathComponent("child-status-\(width).png"))
+        }
+    }
+
+    @MainActor
     func testTaskDetailLongContentVisuals() async throws {
         guard let directory = ProcessInfo.processInfo.environment["WAND_TASK_DETAIL_VISUAL_OUTPUT"] else {
             throw XCTSkip("Set WAND_TASK_DETAIL_VISUAL_OUTPUT for native offscreen detail snapshots")
@@ -452,7 +480,7 @@ final class TaskBoardTests: XCTestCase {
         XCTAssertFalse(WandBoardStatus.backlog.isClosed)
         XCTAssertEqual(WandBoardStatus.todo.label, "等待认领")
         XCTAssertEqual(WandBoardStatus.doing.label, "处理中")
-        XCTAssertEqual(WandBoardStatus.done.label, "等你确认")
+        XCTAssertEqual(WandBoardStatus.done.label, "等待验收")
         XCTAssertEqual(WandBoardStatus.archived.label, "归档任务")
         XCTAssertFalse(WandBoardStatus.todo.isClosed)
         XCTAssertTrue(WandBoardStatus.done.isClosed)

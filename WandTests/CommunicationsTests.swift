@@ -4,6 +4,15 @@ import XCTest
 
 @MainActor
 final class CommunicationsTests: XCTestCase {
+    func testDingTalkGroupIsOneExternalMirrorNotAnInternalTeam() throws {
+        let data = Data(#"{"id":"dingtalk_fixture","kind":"group","title":"外部群","external":{"provider":"dingtalk","groupId":"fixture-group","syncState":"at_only","historyComplete":false,"bindings":[{"id":"binding","employeeId":"e_fixture","state":"verifying"}]}}"#.utf8)
+        let mirror = try JSONDecoder().decode(NativeConversation.self, from: data)
+        XCTAssertNil(mirror.team)
+        XCTAssertTrue(mirror.isGroup)
+        XCTAssertEqual(mirror.external?.statusText, "钉钉群 · 仅同步 @消息")
+        XCTAssertEqual(mirror.external?.bindings?.first?.employeeId, "e_fixture")
+    }
+
 
     func testSharedChatWireIsolatesSessionsAndRetainsOtherLeases() throws {
         let api = WandAPI(baseURL: URL(string: "http://127.0.0.1:9")!, token: nil)

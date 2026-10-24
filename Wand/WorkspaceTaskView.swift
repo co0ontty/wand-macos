@@ -218,6 +218,8 @@ struct WorkspaceSessionHeader: View {
     let onSelect: (String) -> Void
     let onNew: () -> Void
     var onDeleted: (String) -> Void = { _ in }
+    @State private var hoveredTabId: String?
+    @FocusState private var focusedCloseId: String?
     @State private var pendingDelete: WorkspaceSessionSummary?
     @State private var deleting = false
     @State private var deleteError: String?
@@ -295,11 +297,13 @@ struct WorkspaceSessionHeader: View {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .regular)).frame(width: 24, height: 32)
             }.buttonStyle(WandIconButtonStyle()).disabled(deleting)
                 .help("关闭并删除会话 \(title)").accessibilityLabel("关闭并删除会话 \(title)")
+                .focused($focusedCloseId, equals: session.id)
+                .opacity(selected || hoveredTabId == session.id || focusedCloseId == session.id ? 1 : 0)
+                .allowsHitTesting(selected || hoveredTabId == session.id || focusedCloseId == session.id)
         }
+        .onHover { hovered in hoveredTabId = hovered ? session.id : (hoveredTabId == session.id ? nil : hoveredTabId) }
         .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-            .fill(selected ? Theme.wandAccent.opacity(0.06) : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-            .stroke(selected ? Theme.wandAccent : Theme.border, lineWidth: 0.5).allowsHitTesting(false))
+            .fill(selected ? Theme.wandAccent.opacity(0.1) : Color.clear))
         .contextMenu {
             Button(role: .destructive) { pendingDelete = session } label: { Label("关闭并删除会话", systemImage: "trash") }
                 .disabled(deleting)

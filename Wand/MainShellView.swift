@@ -751,15 +751,8 @@ struct MainShellView: View {
         Button {
             withAnimation(structuralAnimation) { filePanelOpen.toggle() }
         } label: {
-            Image(systemName: filePanelOpen ? "sidebar.right" : "sidebar.squares.right")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(Theme.textSecondary)
-                .frame(width: 26, height: 26)
-                .contentShape(Circle())
+            Label(filePanelOpen ? "关闭文件面板" : "文件", systemImage: "folder")
         }
-        .buttonStyle(WandIconButtonStyle(isActive: filePanelOpen))
-        .help(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
-        .accessibilityLabel(filePanelOpen ? "隐藏文件面板" : "显示文件面板")
     }
 
     /// 底部连接状态和服务器地址保持可点击，可直接恢复连接或切换服务器。
@@ -1030,7 +1023,10 @@ struct MainShellView: View {
                 .help("打开终端（运行在 Wand / PTY 主机）")
                 .accessibilityLabel("打开终端")
             if !showCreation, !showTaskBoard, !showCommunications, selectedSessionId != nil || selectedWorkspaceTask != nil {
-                filePanelToggleButton
+                Menu { filePanelToggleButton } label: {
+                    Image(systemName: "ellipsis").frame(width: 28, height: 28)
+                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("更多操作").accessibilityLabel("更多操作")
             }
         }
         .padding(.leading, sidebarListVisible ? 20 : 40).padding(.trailing, 20).frame(height: 52)

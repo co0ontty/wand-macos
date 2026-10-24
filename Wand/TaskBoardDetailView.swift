@@ -141,6 +141,27 @@ struct WandBoardDetailView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("任务负责人")
             descriptionSection
+            taskRelationships
+            DisclosureGroup("本任务执行汇总 · \(task.sessions.count) 个会话") {
+                WandBoardSessionSummaryView(sessions: task.sessions)
+                    .id("session-summary-\(task.id)")
+                WandBoardAgentSessionList(
+                    assignee: task.assignedExecutor,
+                    sessions: task.sessions,
+                    assigned: task.agent,
+                    onOpenSession: onOpenSession,
+                    catalog: catalog
+                )
+            }
+            DisclosureGroup(wandBoardChildren(of: task, in: allTasks).isEmpty ? "交付与验收" : "主任务整体验收") {
+                WandTaskAcceptanceEditor(
+                    task: task,
+                    children: wandBoardChildren(of: task, in: allTasks),
+                    busy: busy,
+                    onPatch: onPatch
+                )
+                .id(task.id)
+            }
             TaskCommentsSection(
                 comments: commentsStore.comments,
                 totalCount: commentsStore.totalCount,
@@ -178,24 +199,6 @@ struct WandBoardDetailView: View {
                 }
                 .id(task.id)
             }
-            taskRelationships
-            WandBoardSessionSummaryView(sessions: task.sessions)
-                .id("session-summary-\(task.id)")
-            WandTaskAcceptanceEditor(
-                task: task,
-                children: wandBoardChildren(of: task, in: allTasks),
-                busy: busy,
-                onPatch: onPatch
-            )
-            .id(task.id)
-            WandBoardAgentSessionList(
-                assignee: task.assignedExecutor,
-                // 评论派发产生的会话也是本任务的真实产物，不能在详情中隐藏。
-                sessions: task.sessions,
-                assigned: task.agent,
-                onOpenSession: onOpenSession,
-                catalog: catalog
-            )
             composeSection
         }
         .frame(maxWidth: 760, alignment: .leading)
@@ -294,21 +297,18 @@ struct WandBoardDetailView: View {
         let children = wandBoardChildren(of: task, in: allTasks)
         if parent != nil || !children.isEmpty || task.parentTaskId == nil {
             VStack(alignment: .leading, spacing: 8) {
-                WandBoardSectionTitle(title: "关联任务", detail: "归类保留原任务及其会话，不删除历史")
+                WandBoardSectionTitle(title: parent != nil ? "父任务" : "子任务", detail: "工作完成后等待你验收；归档保留原任务")
                 if let parent { relatedTaskRow(parent, caption: "父任务") }
-                if task.parentTaskId == nil && task.status != "archived" { Button("添加业务子任务（独立验收）", action: onCreateChild) }
+                if task.parentTaskId == nil && task.status != "archived" { Button("添加子任务", action: onCreateChild) }
                 if !children.isEmpty {
-                    Text("\(children.count) 个正式子任务")
+                    Text("\(children.count) 项 · \(children.filter { $0.status == "done" && $0.acceptance?.acceptedAt == nil }.count) 项等待验收 · \(children.filter { $0.acceptance?.acceptedAt != nil }.count) 项验收通过")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Theme.textSecondary)
                     ForEach(children) { child in relatedTaskRow(child, caption: "子任务") }
                 }
                 let executionComments = commentsStore.comments.filter { $0.dispatch != nil }
-                WandBoardSectionTitle(title: "员工执行事项", detail: executionComments.isEmpty ? nil : "\(executionComments.count) 项 · 不计入正式子任务")
-                if executionComments.isEmpty {
-                    Text(commentsStore.loading ? "正在同步员工执行事项…" : "通过评论中的 @ 选择员工并提交后，执行事项会显示在这里。")
-                        .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
-                } else {
+                if !executionComments.isEmpty {
+                    WandBoardSectionTitle(title: "本任务的员工执行", detail: "\(executionComments.count) 项 · 执行记录不计入子任务")
                     ForEach(executionComments) { comment in
                         TaskCommentExecutionItemRow(
                             comment: comment,
@@ -328,12 +328,15 @@ struct WandBoardDetailView: View {
 
     private func relatedTaskRow(_ related: WandBoardTask, caption: String) -> some View {
         Button { onOpenTask?(related.id) } label: {
-            HStack(spacing: 8) {
-                WandBoardStatusGlyph(status: WandBoardStatus(rawValue: related.status) ?? .todo)
-                Text(caption).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
-                Text(related.identifier).font(.system(size: 10, design: .monospaced)).foregroundColor(Theme.textTertiary)
-                Text(related.title).font(.system(size: 12)).foregroundColor(Theme.textPrimary).lineLimit(2)
-                Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(related.identifier).font(.caption).foregroundColor(Theme.textSecondary)
+                    Text(related.title).font(.body).foregroundColor(Theme.textPrimary).lineLimit(2)
+                }
+                Text("工作：\(wandBoardTaskWorkLabel(related)) · 验收：\(wandBoardTaskReviewLabel(related))")
+                    .font(.caption).foregroundColor(Theme.textSecondary)
+                if let owner = related.assignedExecutor?.name { Text(owner).font(.caption).foregroundColor(Theme.textSecondary) }
+                if related.status == "archived" { Text("已归档").font(.caption).foregroundColor(Theme.textSecondary) }
             }
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -342,7 +345,7 @@ struct WandBoardDetailView: View {
         .buttonStyle(WandBoardRowButtonStyle())
         .disabled(onOpenTask == nil)
         .help("\(caption)：\(related.title)")
-        .accessibilityLabel("\(caption) \(related.identifier) \(related.title)")
+        .accessibilityLabel("\(caption) \(related.identifier) \(related.title)，工作：\(wandBoardTaskWorkLabel(related))，验收：\(wandBoardTaskReviewLabel(related))")
     }
 
     private var titleField: some View {

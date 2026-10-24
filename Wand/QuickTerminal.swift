@@ -47,7 +47,7 @@ final class QuickTerminalModel: ObservableObject {
             terminal.setLayoutActive(true)
             // close() disables the retained NSView immediately. Re-enable it before
             // focusing; waiting for SwiftUI's next update makes this focus request a no-op.
-            terminal.terminal.inputEnabled = true
+            terminal.terminal.inputEnabled = terminal.ready && !terminal.sessionEnded
             terminal.terminal.focusTerminal()
             return
         }
@@ -153,8 +153,10 @@ struct QuickTerminalWorkspace<Content: View>: View {
                     .allowsHitTesting(model.isOpen)
                     .accessibilityHidden(!model.isOpen)
                     .disabled(!model.isOpen)
-                Rectangle().fill(Theme.border)
+                Color.clear
                     .frame(width: bottom ? geometry.size.width : 5, height: bottom ? 5 : geometry.size.height)
+                    .overlay(Rectangle().fill(Theme.border)
+                        .frame(width: bottom ? nil : 1, height: bottom ? 1 : nil))
                     .contentShape(Rectangle())
                     .offset(x: bottom ? 0 : -max(0, size - 5), y: bottom ? -max(0, size - 5) : 0)
                     .opacity(model.isOpen ? 1 : 0)
@@ -174,38 +176,51 @@ struct QuickTerminalWorkspace<Content: View>: View {
         }
     }
 
+    private var directory: String {
+        model.terminal?.cwd.isEmpty == false ? model.terminal!.cwd : model.cwd
+    }
+
     private var panel: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text("终端").fontWeight(.semibold)
-                Text(model.connectionLabel).foregroundColor(Theme.textSecondary)
-                Text(model.terminal?.cwd.isEmpty == false ? model.terminal!.cwd : model.cwd.isEmpty ? "服务端主目录" : model.cwd)
-                    .lineLimit(1).truncationMode(.middle)
-                    .help(model.terminal?.cwd.isEmpty == false ? model.terminal!.cwd : model.cwd)
+                Text("终端").fontWeight(.semibold).fixedSize()
+                if model.connectionLabel == "已连接" {
+                    Circle().fill(Theme.success).frame(width: 6, height: 6)
+                        .accessibilityLabel("已连接").help("已连接")
+                } else {
+                    Text(model.connectionLabel).foregroundColor(Theme.textSecondary).lineLimit(1)
+                }
+                Text(directory.isEmpty ? "服务端主目录" : (directory as NSString).lastPathComponent)
+                    .foregroundColor(Theme.textSecondary).lineLimit(1).truncationMode(.middle)
+                    .help(directory.isEmpty ? "服务端主目录" : directory)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Menu {
-                    Button("右侧" + (model.dock == .right ? "（已选）" : "")) { model.setDock(.right) }
-                    Button("底部" + (model.dock == .bottom ? "（已选）" : "")) { model.setDock(.bottom) }
-                } label: { Text("停靠位置：" + (model.dock == .right ? "右侧" : "底部")) }
-                .fixedSize()
+                    Button("停靠到右侧" + (model.dock == .right ? "（已选）" : "")) { model.setDock(.right) }
+                    Button("停靠到底部" + (model.dock == .bottom ? "（已选）" : "")) { model.setDock(.bottom) }
+                    Divider()
+                    Button("重新连接") { model.reconnect() }.disabled(model.busy)
+                } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel("终端选项")
+                .help("终端选项 · " + (model.dock == .right ? "右侧" : "底部") + "停靠")
                 Button { model.close() } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
                     .buttonStyle(WandIconButtonStyle()).accessibilityLabel("关闭终端面板")
                     .help("仅隐藏面板，运行命令不受影响；结束 shell 请在终端输入 exit")
-            }.font(.system(size: 12)).padding(8)
-            Text("Wand / PTY 主机 · 关闭仅隐藏 · 结束 shell 输入 exit")
-                .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8)
+            }.font(.system(size: 12)).padding(.horizontal, 8).frame(minHeight: 40)
+                .background(Theme.surfaceElevated)
             if let message = model.error ?? model.terminal?.loadError {
-                Text(message).font(.system(size: 12)).foregroundColor(Theme.warning).padding(8)
-            }
-            if model.terminal?.ready != true, !model.busy {
-                Button("重新连接原终端") { model.reconnect() }.padding(4)
+                HStack {
+                    Text(message).font(.system(size: 12)).foregroundColor(Theme.warning)
+                    Spacer(minLength: 4)
+                    Button("重新连接") { model.reconnect() }.disabled(model.busy)
+                }.padding(8).background(Theme.surfaceElevated)
             }
             if let store = model.terminal {
                 NativeTerminalSurface(terminal: store.terminal, focusOnMount: false)
                     .environment(\.desktopPageActive, model.isOpen)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else { Spacer(minLength: 0) }
-        }.background(Theme.surfaceElevated)
+        }.background(Color(nsColor: NativeTerminalView.canvasColor))
+            .accessibilityHint("运行在 Wand 主机；关闭仅隐藏，命令继续运行。结束 shell 请在终端输入 exit。")
     }
 }

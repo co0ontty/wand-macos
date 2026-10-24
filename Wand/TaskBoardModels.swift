@@ -563,7 +563,7 @@ func wandBoardChildren(of task: WandBoardTask, in tasks: [WandBoardTask]) -> [Wa
 // MARK: - 状态与优先级
 
 /**
- * 看板状态。前三列是看板主列，`archived` 是「等你确认」下面的独立归档目录，
+ * 看板状态。前三列是看板主列，`archived` 是「等待验收」下面的独立归档目录，
  * 与 Web `ISSUE_COLUMNS` + `ISSUE_ARCHIVE_COLUMN` 一致。
  */
 enum WandBoardStatus: String, CaseIterable, Identifiable {
@@ -582,7 +582,7 @@ enum WandBoardStatus: String, CaseIterable, Identifiable {
         case .backlog: return "待立项"
         case .todo: return "等待认领"
         case .doing: return "处理中"
-        case .done: return "等你确认"
+        case .done: return "等待验收"
         case .archived: return "归档任务"
         }
     }
@@ -592,7 +592,7 @@ enum WandBoardStatus: String, CaseIterable, Identifiable {
         case .backlog: return "还没有待立项的任务"
         case .todo: return "还没有等待认领的任务"
         case .doing: return "暂无处理中的任务"
-        case .done: return "还没有待确认的任务"
+        case .done: return "还没有等待验收的任务"
         case .archived: return "还没有归档的任务"
         }
     }
@@ -807,6 +807,22 @@ func wandBoardSessionStatusLabel(_ status: String) -> String {
     case "failed": return "失败"
     default: return status.isEmpty ? "会话" : status
     }
+}
+
+func wandBoardTaskWorkLabel(_ task: WandBoardTask) -> String {
+    if task.acceptance?.acceptedAt != nil || task.status == "done" { return "已完成" }
+    switch task.status {
+    case "doing": return "处理中"
+    case "backlog": return "待立项"
+    case "todo": return "未开始"
+    default: return "未确认"
+    }
+}
+
+func wandBoardTaskReviewLabel(_ task: WandBoardTask) -> String {
+    if task.acceptance?.acceptedAt != nil { return "已通过" }
+    if task.status == "done" { return "等待你验收" }
+    return task.acceptance?.blocker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "有待处理项" : "未验收"
 }
 
 func wandBoardTaskProcessingLabel(_ task: WandBoardTask) -> String {

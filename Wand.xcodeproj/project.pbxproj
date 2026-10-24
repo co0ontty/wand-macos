@@ -54,6 +54,7 @@
 		A200000000000000000000A7 /* NewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B7 /* NewSessionView.swift */; };
 		A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B9 /* GitQuickCommitView.swift */; };
 		A200000000000000000000AA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BA /* SettingsView.swift */; };
+		D17A00000000000000000001 /* DingTalkSettingsWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17A00000000000000000002 /* DingTalkSettingsWebView.swift */; };
 		A200000000000000000000AB /* LocalNetworkPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BB /* LocalNetworkPermission.swift */; };
 		A200000000000000000000AC /* BrandLogos.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BC /* BrandLogos.swift */; };
 		A200000000000000000000AE /* MainShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000BE /* MainShellView.swift */; };
@@ -164,6 +165,7 @@
 		A200000000000000000000B7 /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
 		A200000000000000000000B9 /* GitQuickCommitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitQuickCommitView.swift; sourceTree = "<group>"; };
 		A200000000000000000000BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D17A00000000000000000002 /* DingTalkSettingsWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DingTalkSettingsWebView.swift; sourceTree = "<group>"; };
 		A200000000000000000000BB /* LocalNetworkPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkPermission.swift; sourceTree = "<group>"; };
 		A200000000000000000000BC /* BrandLogos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandLogos.swift; sourceTree = "<group>"; };
 		A200000000000000000000BE /* MainShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShellView.swift; sourceTree = "<group>"; };
@@ -295,6 +297,7 @@
 				A200000000000000000000B7 /* NewSessionView.swift */,
 				A200000000000000000000B9 /* GitQuickCommitView.swift */,
 				A200000000000000000000BA /* SettingsView.swift */,
+				D17A00000000000000000002 /* DingTalkSettingsWebView.swift */,
 				A200000000000000000000BB /* LocalNetworkPermission.swift */,
 				A200000000000000000000BC /* BrandLogos.swift */,
 				A200000000000000000000BE /* MainShellView.swift */,
@@ -519,6 +522,7 @@
 				A200000000000000000000A7 /* NewSessionView.swift in Sources */,
 				A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */,
 				A200000000000000000000AA /* SettingsView.swift in Sources */,
+				D17A00000000000000000001 /* DingTalkSettingsWebView.swift in Sources */,
 				A200000000000000000000AB /* LocalNetworkPermission.swift in Sources */,
 				A200000000000000000000AC /* BrandLogos.swift in Sources */,
 				A200000000000000000000AE /* MainShellView.swift in Sources */,

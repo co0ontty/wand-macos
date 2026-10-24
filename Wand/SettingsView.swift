@@ -183,7 +183,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 directoryGroup("个人偏好", panes: [.employees, .general])
-                directoryGroup("连接与诊断", panes: [.connection, .permissions, .troubleshooting])
+                directoryGroup("连接与诊断", panes: [.connectors, .connection, .permissions, .troubleshooting])
                 directoryGroup("应用", panes: [.about])
             }
             .frame(maxWidth: 1120, alignment: .leading)
@@ -266,6 +266,8 @@ struct SettingsView: View {
                     SettingsEmployeeIdentities(api: WandAPI(baseURL: serverURL, token: token), loadData: loadIdentities)
                 case .general:
                     generalContent
+                case .connectors:
+                    DingTalkSettingsWebView(api: WandAPI(baseURL: serverURL, token: token))
                 case .connection:
                     connectionContent
                 case .permissions:
@@ -895,6 +897,7 @@ struct SettingsEmployeeIdentities: View {
 private enum SettingsPane: String, CaseIterable, Identifiable {
     case employees
     case general
+    case connectors
     case connection
     case permissions
     case troubleshooting
@@ -906,6 +909,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .employees: return "员工"
         case .general: return "通用"
+        case .connectors: return "钉钉群聊接入"
         case .connection: return "连接与服务"
         case .permissions: return "权限"
         case .troubleshooting: return "故障排查"
@@ -917,6 +921,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .employees: return "我的资料与员工配置。"
         case .general: return "让 Wand 适合你的工作习惯。"
+        case .connectors: return "选择群和员工，自动创建机器人并同步群消息。"
         case .connection: return "查看当前服务器，或切换连接。"
         case .permissions: return "查看 Wand 在这台 Mac 上使用的系统权限。"
         case .troubleshooting: return "诊断连接与本地网络权限问题。"
@@ -928,6 +933,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .employees: return "person.2"
         case .general: return "slider.horizontal.3"
+        case .connectors: return "person.3"
         case .connection: return "server.rack"
         case .permissions: return "hand.raised"
         case .troubleshooting: return "stethoscope"

@@ -70,11 +70,12 @@ struct CommunicationsSidebar: View {
                         ForEach(conversationRows) { conversation in
                             Button { store.select(conversation.id) } label: {
                                 HStack(spacing: 9) {
-                                    if conversation.isGroup { ContactGroupAvatar(profile: store.userProfile, members: conversation.members, contacts: store.contacts) }
+                                    if conversation.external != nil { Image(systemName: "person.3").frame(width: 44, height: 44).foregroundColor(Theme.textSecondary) }
+                                    else if conversation.isGroup { ContactGroupAvatar(profile: store.userProfile, members: conversation.members, contacts: store.contacts) }
                                     else { ContactAvatar(id: conversation.peerEmployeeId ?? conversation.id, avatar: store.contact(conversation.peerEmployeeId)?.avatar ?? "", name: conversation.displayTitle, size: 44) }
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(conversation.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                                        Text(conversation.dissolvedAt != nil ? "已解散 · 历史保留" : conversation.preview ?? "尚无消息")
+                                        Text(conversation.external != nil ? "钉钉 · " + (conversation.preview ?? "等待群消息同步") : conversation.dissolvedAt != nil ? "已解散 · 历史保留" : conversation.preview ?? "尚无消息")
                                             .font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(2)
                                     }
                                     Spacer(minLength: 0)
@@ -339,7 +340,16 @@ struct ConversationPane: View {
                     Button("重新读取") { store.refreshDetail() }.buttonStyle(WandSecondaryButtonStyle())
                 }.padding(12)
             }
-            if conversation.isGroup {
+            if let origin = conversation.external {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(origin.statusText).font(.system(size: 13, weight: .medium))
+                    Text(origin.syncError ?? "普通群消息只同步展示；请在钉钉中原生 @员工。最终正文回群，执行过程只在 Wand 查看。")
+                        .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                    Text("已接入员工：" + (origin.bindings ?? []).map { store.contact($0.employeeId)?.name ?? "员工已不可用" }.joined(separator: "、"))
+                        .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                Divider()
+            } else if conversation.isGroup {
                 groupContext.padding(.horizontal, 24).padding(.vertical, 12)
                 Divider()
             }
@@ -358,7 +368,7 @@ struct ConversationPane: View {
                             Text("没有匹配的已加载消息").font(.system(size: 13)).foregroundColor(Theme.textSecondary)
                         }
                         if conversation.turns.isEmpty {
-                            Text(conversation.isGroup ? "群内尚无消息。普通消息仅沟通；明确 @成员 才会派发新任务。" : "这里是你和员工的独立私聊。发送新工作后，会出现精确的执行会话入口。")
+                            Text(conversation.external != nil ? "正在同步钉钉群消息；普通消息不启动员工。" : conversation.isGroup ? "群内尚无消息。普通消息仅沟通；明确 @成员 才会派发新任务。" : "这里是你和员工的独立私聊。发送新工作后，会出现精确的执行会话入口。")
                                 .font(.system(size: 14)).foregroundColor(Theme.textSecondary).padding(.vertical, 32)
                         }
                         ForEach(displayed, id: \.id) { item in
@@ -728,18 +738,21 @@ struct ConversationComposerSurface: View {
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
                 Button("恢复员工默认执行配置") { store.executionPreference = nil; menuOpen = false }
             }
+            if conversation.external == nil {
             setting("执行工具", value: candidate?.toolLabel ?? "工具未就绪", icon: "terminal")
             setting("首选模型", value: preferredModel, icon: "cpu")
             setting("权限", value: candidate?.mode.map(composerPermissionLabel) ?? "未取得", icon: "shield")
             setting("思考", value: preferredThinking, icon: "brain")
+            } else { Text("钉钉群消息：仅文字；普通发言不派发内部任务。请在钉钉中原生 @已接入员工。")
+                .font(.system(size: 12)).foregroundColor(Theme.textSecondary) }
             Divider()
-            Button("添加附件") { focus.borrow("files", open: true); menuOpen = false; importFiles = true }.buttonStyle(WandSecondaryButtonStyle())
+            Button("添加附件") { focus.borrow("files", open: true); menuOpen = false; importFiles = true }.buttonStyle(WandSecondaryButtonStyle()).disabled(conversation.external != nil)
             if conversation.isGroup {
                 ForEach(conversation.members, id: \.id) { member in
                     Button("@\(member.name)") { owner.edit("@\(member.id) " + owner.text); menuOpen = false; focus.focus() }.buttonStyle(.plain)
                 }
             }
-            TextField("工作目录（可选）", text: Binding(get: { owner.cwd }, set: { owner.editCwd($0) })).textFieldStyle(.roundedBorder)
+            if conversation.external == nil { TextField("工作目录（可选）", text: Binding(get: { owner.cwd }, set: { owner.editCwd($0) })).textFieldStyle(.roundedBorder) }
             Button("清除当前草稿") { owner.discard(); menuOpen = false }.buttonStyle(.plain)
         }.padding(16).frame(width: 280)
     }

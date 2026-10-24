@@ -416,7 +416,9 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            sessionActionBar
+            if !sessionSubtasks.isEmpty || (!store.loading && store.loadError == nil && hasGitChanges) {
+                sessionActionBar
+            }
             if showingFind { conversationFindBar }
             if !store.connected && !store.loading { reconnectBanner }
             GeometryReader { geometry in
@@ -2013,28 +2015,19 @@ struct PtySessionView: View {
 
             Spacer(minLength: 8)
 
-            // 右侧：操作按钮组
+            // Display commands live in one native menu; the output keeps its space.
             HStack(spacing: 1) {
-                statusBarButton(systemName: "minus", help: "缩小（Cmd−）") {
-                    store.adjustScale(-0.25)
-                }
-                Text(store.scaleLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(Color.white.opacity(0.6))
-                    .frame(width: 36, height: 22)
-                    .help("缩放比例（Cmd+0 重置）")
-                statusBarButton(systemName: "plus", help: "放大（Cmd+）") {
-                    store.adjustScale(0.25)
-                }
-
-                statusBarDivider()
-
-                statusBarButton(systemName: "trash", help: "清除本地回滚历史（Cmd+K）") {
-                    store.terminal.clearScrollback()
-                }
-                statusBarButton(systemName: "arrow.clockwise", help: "重新同步终端") {
-                    store.refresh()
-                }
+                Menu {
+                    Button("放大终端字号") { store.adjustScale(0.25) }
+                    Button("缩小终端字号") { store.adjustScale(-0.25) }
+                    Button("恢复默认字号 · 当前 \(store.scaleLabel)") { store.adjustScale(nil) }
+                    Divider()
+                    Button("刷新终端显示") { store.refresh() }
+                    Button("清除本地回滚历史") { store.terminal.clearScrollback() }
+                } label: { Image(systemName: "ellipsis").frame(width: 26, height: 22) }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .foregroundColor(Color.white.opacity(0.7))
+                .accessibilityLabel("终端显示选项").help("终端字号与显示选项")
 
                 if store.ready && store.status == "running" {
                     statusBarDivider()

@@ -190,6 +190,9 @@ final class CommunicationsStore: ObservableObject {
     }
     func send(_ scope: ConversationScope) async {
         guard sendBlockReason(for: scope) == nil else { return }
+        if metadata[scope.conversationID]?.external != nil && !composer(for: scope).attachments.isEmpty {
+            composer(for: scope).reportAttachmentBlocked("钉钉接入当前仅支持文字，附件和草稿保留。"); return
+        }
         let preference = scope.target == nil && metadata[scope.conversationID]?.kind == "dm" ? executionPreference : nil
         let receipt = await composer(for: scope).submit(ledger: ledger, executionPreference: preference)
         if receipt != nil { await refreshIndex() }
@@ -236,6 +239,7 @@ final class CommunicationsStore: ObservableObject {
     }
 
     func addAttachments(_ urls: [URL], scope: ConversationScope) async {
+        if metadata[scope.conversationID]?.external != nil { composer(for: scope).reportAttachmentBlocked("钉钉接入当前仅支持文字。"); return }
         let owner = composer(for: scope)
         guard sendBlockReason(for: scope) == nil, !urls.isEmpty else { return }
         guard urls.count + owner.attachments.count <= 5 else { owner.failUpload(ConversationDeliveryError.notSent("最多添加 5 个附件。")); return }

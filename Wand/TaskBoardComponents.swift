@@ -895,11 +895,15 @@ struct WandGoalChildren: View {
     var body: some View {
         let children = wandBoardChildren(of: task, in: tasks)
         if !children.isEmpty {
-            DisclosureGroup("\(children.count) 个子任务 · \(children.filter { $0.acceptance?.acceptedAt != nil }.count) 个已验收 · \(task.acceptance?.acceptedAt == nil ? "主目标待整体验收" : "主目标验收通过")") {
+            DisclosureGroup("\(children.count) 个子任务 · \(children.filter { $0.status == "done" && $0.acceptance?.acceptedAt == nil }.count) 个等待验收 · \(children.filter { $0.acceptance?.acceptedAt != nil }.count) 个已验收 · \(task.acceptance?.acceptedAt == nil ? "主目标待整体验收" : "主目标验收通过")") {
                 ForEach(children) { child in
                     VStack(alignment: .leading, spacing: 4) {
                         Button("\(child.identifier) · \(child.title)") { onOpen(child.id) }
-                        Text("\(child.displayStatusLabel) · \(child.hasQueuedExecution ? "等待执行" : child.sessions.isEmpty ? "尚未派发" : "交付待验收 · \(child.sessions.count) 个执行会话")")
+                        Text("工作：\(wandBoardTaskWorkLabel(child)) · 验收：\(wandBoardTaskReviewLabel(child))")
+                            .font(.caption).foregroundColor(Theme.textSecondary)
+                        if child.status == "archived" { Text("已归档").font(.caption).foregroundColor(Theme.textSecondary) }
+                        if let owner = child.assignedExecutor?.name { Text(owner).font(.caption) }
+                        Text(child.hasQueuedExecution ? "等待执行" : child.sessions.isEmpty ? "尚未派发" : "\(child.sessions.count) 个执行会话")
                             .font(.caption).foregroundColor(Theme.textSecondary)
                         if let due = child.dueDate, !due.isEmpty { Text("截止 \(due)").font(.caption) }
                         if let employee = child.sessions.compactMap(\.employeeName).first { Text(employee).font(.caption) }
