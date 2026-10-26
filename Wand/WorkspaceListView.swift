@@ -507,7 +507,7 @@ struct WorkspaceListView: View {
         collapsible: Bool,
         containsSelection: Bool
     ) -> some View {
-        let sessionTotal = group.tasks.filter { $0.archived != true && $0.status != "done" }.reduce(0) { $0 + $1.listedSessionCount }
+        let sessionTotal = group.tasks.filter { $0.archived != true && $0.status != "done" }.reduce(0) { $0 + TaskListPresentation.sidebarSessionCount($1) }
         return SidebarHoveringRow { hovering in
             HStack(spacing: 2) {
                 collapsibleControl(
@@ -759,9 +759,10 @@ struct WorkspaceListView: View {
     }
 
     private func taskSummaryRow(_ summary: WorkspaceTaskSummary, group: TaskDirectoryGroup) -> some View {
-        let childSessionSelected = summary.sessions.contains { $0.id == selectedSessionId }
+        let presentedSessions = TaskListPresentation.sidebarSessions(summary.sessions)
+        let childSessionSelected = presentedSessions.contains { $0.id == selectedSessionId }
         let selected = selectedTaskId == summary.id && !childSessionSelected
-        let visibleOwnCount = summary.archived == true || summary.status == "done" ? 0 : summary.listedSessionCount
+        let visibleOwnCount = summary.archived == true || summary.status == "done" ? 0 : TaskListPresentation.sidebarSessionCount(summary)
         let canCollapseSessions = TaskListPresentation.showsTaskSessionDisclosure(sessionCount: visibleOwnCount)
         let expanded = TaskListPresentation.isTaskSessionsExpanded(
             userCollapsed: collapsedTaskIds.contains(summary.id),
@@ -897,7 +898,7 @@ struct WorkspaceListView: View {
             }
 
             if expanded && visibleOwnCount > 0 {
-                let split = WorkspaceSessionSummary.splitArchived(summary.sessions)
+                let split = WorkspaceSessionSummary.splitArchived(presentedSessions)
                 if split.active.isEmpty && split.archived.isEmpty {
                     Text(activeOnly ? "没有活动会话" : "还没有终端。点右侧「＋」新建。")
                         .font(.system(size: 11))
@@ -913,7 +914,7 @@ struct WorkspaceListView: View {
                         taskOwnedSessionRow(session, summary: summary, workspace: workspace, index: index)
                     }
                     if summary.listedSessionCount > summary.sessions.count {
-                        Text("列表仅显示 \(summary.sessions.count)/\(summary.listedSessionCount) 个会话，打开任务可查看全部。")
+                        Text("列表仅显示 \(presentedSessions.count) 个会话，打开任务可查看全部。")
                             .font(.system(size: 10))
                             .foregroundColor(Theme.textMuted)
                             .padding(.leading, TreeIndent.session)

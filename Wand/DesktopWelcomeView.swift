@@ -5,11 +5,12 @@ struct DesktopWelcomeView: View {
     let api: WandAPI
     let draft: SessionCreationDraft
     let workspaceStore: WorkspaceStore
+    var onTaskCreated: ((WandBoardTask) -> Void)? = nil
     let onCreated: (SessionSnapshot) -> Void
 
     var body: some View {
         NewSessionView(api: api, draft: draft, workspaceStore: workspaceStore,
-                       embedded: true, onCreated: onCreated)
+                       embedded: true, onTaskCreated: onTaskCreated, onCreated: onCreated)
     }
 }
 

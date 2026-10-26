@@ -841,3 +841,249 @@ extension TaskBoardTests {
         XCTAssertEqual(TaskCommentMention.caretOffset(from: "请", to: "请@"), 2)
     }
 }
+
+/// Creation semantics are exercised through the real API encoder with an isolated transport.
+final class TaskPlanningTests: XCTestCase {
+    private func makeAPI(_ handler: @escaping (URLRequest) throws -> Data) -> WandAPI {
+        let host = UUID().uuidString.lowercased() + ".invalid"
+        TaskPlanningProtocol.register(host: host, handler: handler)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TaskPlanningProtocol.self]
+        return WandAPI(baseURL: URL(string: "https://\(host)")!, token: nil,
+            session: URLSession(configuration: config), reportServerFailure: { _, _, _ in })
+    }
+
+    private static func body(_ request: URLRequest) throws -> [String: Any] {
+        if let body = request.httpBody { return try JSONSerialization.jsonObject(with: body) as! [String: Any] }
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open(); defer { stream.close() }
+        var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        return try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    }
+
+    @MainActor
+    func testEntryContextsSharePageAndPreservePlanningMetadata() {
+        let regular = SessionCreationDraft()
+        XCTAssertFalse(regular.planningMode)
+        let workspace = SessionCreationDraft(context: .init(workspaceId: "w", startsNewTask: true))
+        XCTAssertTrue(workspace.planningMode)
+        XCTAssertEqual(workspace.taskPlanning.draft.workspaceId, "w")
+        XCTAssertEqual(workspace.taskPlanning.draft.status, "backlog")
+        let child = SessionCreationDraft(context: .init(startsNewTask: true,
+            taskPlanning: .init(workspaceId: "w", status: "todo", parentTaskId: "parent")), initialMessage: "共享草稿")
+        child.planningMode = false; child.planningMode = true
+        XCTAssertEqual(child.firstMessage, "共享草稿")
+        XCTAssertEqual(child.taskPlanning.draft.parentTaskId, "parent")
+        XCTAssertEqual(child.taskPlanning.draft.status, "todo")
+    }
+
+    @MainActor
+    func testSaveOnlyRetainsAttributesAndNeverDispatchesOrResubmits() async throws {
+        let api = makeAPI { request in
+            XCTAssertEqual(request.url?.path, "/api/wand-tasks")
+            let body = try Self.body(request)
+            XCTAssertEqual(body["title"] as? String, "明确标题")
+            XCTAssertEqual(body["description"] as? String, "任务说明")
+            XCTAssertEqual(body["workspaceId"] as? String, "w")
+            XCTAssertEqual(body["parentTaskId"] as? String, "p")
+            XCTAssertEqual(body["priority"] as? String, "high")
+            XCTAssertEqual(body["dueDate"] as? String, "2026-11-03")
+            XCTAssertEqual(body["milestoneId"] as? String, "m")
+            XCTAssertEqual(body["labels"] as? [String], ["验收", "桌面"])
+            return Data(#"{"id":"saved","title":"明确标题","status":"todo"}"#.utf8)
+        }
+        let owner = WandTaskPlanningDraft(context: .init(workspaceId: "w", status: "todo", parentTaskId: "p"))
+        owner.loading = false
+        owner.draft.priority = "high"; owner.draft.dueDate = "2026-11-03"
+        owner.draft.milestoneId = "m"; owner.draft.labels = "验收, 桌面"
+        let saved = await owner.submit(text: "任务说明", title: "明确标题", execute: false, api: api)
+        XCTAssertEqual(saved?.id, "saved")
+        XCTAssertFalse(owner.canSubmit(text: "任务说明", title: "明确标题", execute: false))
+        let duplicate = await owner.submit(text: "任务说明", title: "明确标题", execute: true, api: api)
+        XCTAssertNil(duplicate)
+    }
+
+    @MainActor
+    func testExplicitDispatchFailureKeepsCreatedTaskAndDoesNotRecreate() async throws {
+        let api = makeAPI { request in
+            if request.url?.path == "/api/wand-tasks" {
+                return Data(#"{"id":"saved","title":"任务","description":"说明","status":"todo"}"#.utf8)
+            }
+            XCTAssertEqual(request.url?.path, "/api/wand-tasks/saved/dispatch")
+            let body = try Self.body(request)
+            XCTAssertFalse((body["requestId"] as? String ?? "").isEmpty)
+            XCTAssertTrue((body["prompt"] as? String ?? "").contains("说明"))
+            throw WandAPI.APIError.server(status: 503, message: "fixture")
+        }
+        let owner = WandTaskPlanningDraft(context: .init(status: "todo")); owner.loading = false
+        let task = await owner.submit(text: "说明", title: "任务", execute: true, api: api)
+        XCTAssertEqual(task?.id, "saved")
+        XCTAssertEqual(owner.createdTask?.id, "saved")
+        XCTAssertTrue(owner.errorMessage?.contains("执行结果未确认") == true)
+        let duplicate = await owner.submit(text: "说明", title: "任务", execute: true, api: api)
+        XCTAssertNil(duplicate)
+    }
+
+    @MainActor
+    func testUnknownCreationBlocksRetryAndBacklogNeverExecutes() async {
+        let api = makeAPI { _ in throw WandAPI.APIError.server(status: 500, message: "fixture") }
+        let owner = WandTaskPlanningDraft(context: .init()); owner.loading = false
+        XCTAssertFalse(owner.canSubmit(text: "说明", title: "任务", execute: true))
+        let rejected = await owner.submit(text: "说明", title: "任务", execute: false, api: api)
+        XCTAssertNil(rejected)
+        XCTAssertTrue(owner.unconfirmed)
+        XCTAssertFalse(owner.canSubmit(text: "说明", title: "任务", execute: false))
+        owner.allowRetryAfterReview()
+        XCTAssertTrue(owner.canSubmit(text: "说明", title: "任务", execute: false))
+    }
+
+    @MainActor
+    func testSuccessfulHTTPWithUnreadableReceiptIsUnknownAndCannotReplay() async {
+        let api = makeAPI { _ in Data("{broken receipt".utf8) }
+        let owner = WandTaskPlanningDraft(context: .init(status: "todo")); owner.loading = false
+        let result = await owner.submit(text: "说明", title: "任务", execute: false, api: api)
+        XCTAssertNil(result)
+        XCTAssertTrue(owner.unconfirmed)
+        XCTAssertFalse(owner.canSubmit(text: "说明", title: "任务", execute: true))
+        XCTAssertFalse(owner.canSubmit(text: "说明", title: "任务", execute: false))
+    }
+}
+
+private final class TaskPlanningProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var handlers: [String: (URLRequest) throws -> Data] = [:]
+    static func register(host: String, handler: @escaping (URLRequest) throws -> Data) {
+        lock.lock(); defer { lock.unlock() }; handlers[host] = handler
+    }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.lock(); let handler = Self.handlers[request.url?.host ?? ""]; Self.lock.unlock()
+        do {
+            guard let handler else { throw URLError(.unsupportedURL) }
+            let data = try handler(request)
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self)
+        } catch WandAPI.APIError.server(let status, let message) {
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: ["error": message]))
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
+    }
+    override func stopLoading() {}
+}
+
+final class TaskPlanningLiveTests: XCTestCase {
+    @MainActor
+    func testInstalledCreationPageIMEAndResponsiveLayoutReadOnly() async throws {
+        guard ProcessInfo.processInfo.environment["WAND_PLANNING_LIVE"] == "1" else { throw XCTSkip("Opt-in installed-service acceptance") }
+        XCTAssertTrue(NativeAcceptance.enabled)
+        let storage = NativeAcceptance.defaults
+        defer { NativeAcceptance.cleanup() }
+        let origin = try XCTUnwrap(URL(string: try XCTUnwrap(storage.string(forKey: "wand.serverURL"))))
+        let api = WandAPI(baseURL: origin, token: try XCTUnwrap(storage.string(forKey: "wand.token")))
+        let draft = SessionCreationDraft(context: .init(startsNewTask: true, taskPlanning: .init(status: "todo")), initialMessage: "输入法验收草稿（未发送）")
+        let host = NSHostingView(rootView: NewSessionView(api: api, draft: draft, embedded: true,
+            onTaskCreated: { _ in XCTFail("Read-only verification never creates a task") }) { _ in XCTFail("No session creation") }
+            .defaultAppStorage(storage))
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 760)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = host; window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        for _ in 0..<300 {
+            host.layoutSubtreeIfNeeded()
+            if !draft.taskPlanning.loading { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertNil(draft.taskPlanning.loadError)
+        XCTAssertFalse(draft.taskPlanning.loading)
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let editor = try XCTUnwrap(descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.setMarkedText("zhongwen", selectedRange: NSRange(location: 8, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        let commandReturn = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        _ = editor.performKeyEquivalent(with: commandReturn)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(draft.taskPlanning.errorMessage)
+        XCTAssertNil(draft.taskPlanning.createdTask)
+        XCTAssertFalse(draft.taskPlanning.creating)
+        editor.insertText("中文草稿", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertTrue(editor.string.contains("中文草稿"))
+        if ProcessInfo.processInfo.environment["WAND_PLANNING_INVITATION_CHECK"] == "1" {
+            // Points come from the accepted 900x760 installed-service capture.
+            // Events stay in this test host; no OS accessibility setting is changed.
+            func click(_ x: CGFloat, _ y: CGFloat) throws {
+                let point = host.convert(NSPoint(x: x, y: host.isFlipped ? y : host.bounds.height - y), to: nil)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                    NSApp.sendEvent(event)
+                }
+            }
+            // Task and directory fields are captured in this injection host.
+            // Employee avatar/arrow and native outside-dismissal need interactive acceptance.
+            for (name, x) in [("task", CGFloat(535)), ("directory", 389)] {
+                let previousWindows = Set(NSApp.windows.map(\.windowNumber))
+                try click(x, 325)
+                try await Task.sleep(nanoseconds: 500_000_000)
+                let popover = try XCTUnwrap(NSApp.windows.first {
+                    $0 !== window && $0.isVisible && $0.contentView != nil && !previousWindows.contains($0.windowNumber)
+                }, "\(name) must open its own editable popover")
+                let surface = try XCTUnwrap(popover.contentView)
+                surface.layoutSubtreeIfNeeded()
+                surface.displayIfNeeded()
+                XCTAssertGreaterThan(surface.bounds.height, 80, "The inline entry must open an editable popover")
+                let editableFields = descendants(surface).compactMap({ $0 as? NSTextField }).filter(\.isEditable)
+                XCTAssertFalse(editableFields.isEmpty, "\(name) must expose editable form controls")
+                for field in editableFields {
+                    XCTAssertLessThanOrEqual(field.font?.pointSize ?? 0, 14, "Invitation typography must not leak into form fields")
+                    XCTAssertTrue(field.isEnabled)
+                }
+                if name == "task" {
+                    XCTAssertNotNil(descendants(surface).compactMap { $0 as? NSTextField }.first { $0.placeholderString == "留空按描述生成" })
+                }
+                if let directory = ProcessInfo.processInfo.environment["WAND_PLANNING_OUTPUT"] {
+                    let output = URL(fileURLWithPath: directory, isDirectory: true)
+                    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                    let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                    surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                    try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("invitation-" + name + "-popover.png"))
+                }
+                try click(20, 100)
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                // Opt in separately: synthetic NSApplication events may not run the
+                // native outside-event monitor in this XCTest injection host.
+                if ProcessInfo.processInfo.environment["WAND_PLANNING_OUTSIDE_CLICK_CHECK"] == "1" {
+                    XCTAssertFalse(popover.isVisible)
+                }
+                XCTAssertTrue(editor === descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+            }
+        }
+        for (name, size, appearance) in [
+            ("planning-light", NSSize(width: 900, height: 760), NSAppearance.Name.aqua),
+            ("planning-narrow-dark", NSSize(width: 540, height: 680), NSAppearance.Name.darkAqua)
+        ] {
+            host.appearance = NSAppearance(named: appearance)
+            window.setContentSize(size); host.frame.size = size
+            try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
+            XCTAssertTrue(editor === descendants(host).compactMap { $0 as? ComposerNSTextView }.first)
+            XCTAssertLessThanOrEqual(editor.convert(editor.bounds, to: host).maxX, host.bounds.maxX)
+            if let directory = ProcessInfo.processInfo.environment["WAND_PLANNING_OUTPUT"] {
+                let output = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
+            }
+        }
+    }
+}

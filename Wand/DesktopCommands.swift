@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+/// Presentation-only switch; existing group data, routes and execution remain available.
+enum DesktopGroupChatPresentation {
+    static let isVisible = false
+}
+
 /// One catalog owns the menu bar, command palette and keyboard reference.
 enum DesktopCommand: String, CaseIterable, Identifiable {
     case newSession, newTask, search, toggleSidebar, toggleInspector
@@ -36,7 +41,7 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .workspaces: return "定位侧栏上方的工作空间与任务"
         case .sessions: return "定位侧栏下方的独立会话与历史记录"
         case .taskBoard: return "管理待办、进度、优先级与归档"
-        case .conversations: return "员工私聊、群聊与精确执行入口"
+        case .conversations: return DesktopGroupChatPresentation.isVisible ? "员工私聊、群聊与精确执行入口" : "员工私聊与精确执行入口"
         case .contacts: return "浏览员工职责与候选，发起独立私聊"
         case .settings: return "外观、输入、连接和客户端更新"
         case .focusComposer: return "继续当前对话；终端保持自己的按键语义"
@@ -305,7 +310,7 @@ struct DesktopCommandPalette: View {
             async let workspaceList = api.listWorkspaces()
             let (loadedSessions, loadedWorkspaces) = try await (sessionList, workspaceList)
             let selectedID = results.indices.contains(selection) ? results[selection].id : nil
-            sessions = loadedSessions
+            sessions = loadedSessions.filter { DesktopGroupChatPresentation.isVisible || $0.teamChat == nil }
             workspaces = loadedWorkspaces
             selection = results.firstIndex(where: { $0.id == selectedID }) ?? 0
             error = nil

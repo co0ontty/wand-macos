@@ -111,7 +111,9 @@ final class CommunicationsTests: XCTestCase {
         api.items = try JSONDecoder().decode([NativeConversation].self, from: JSONSerialization.data(withJSONObject: [
             ["id":"a", "kind":"dm", "peerEmployeeId":"a", "title":"活动"],
             ["id":"b", "kind":"dm", "peerEmployeeId":"b", "title":"空闲"],
-            ["id":"c", "kind":"group", "dissolvedAt":"2026-10-01", "title":"归档", "tasks":[["task":["id":"t","title":"任务","status":"archived"],"runs":[]]]]
+            ["id":"c", "kind":"dm", "peerEmployeeId":"c", "title":"归档", "tasks":[["task":["id":"t","title":"任务","status":"archived"],"runs":[]]]],
+            ["id":"g", "kind":"group", "title":"隐藏群聊"],
+            ["id":"external", "kind":"group", "title":"隐藏钉钉", "dissolvedAt":"2026-10-01", "external":["provider":"dingtalk", "groupId":"fixture-group", "syncState":"at_only", "historyComplete":false]]
         ]))
         let storage = defaults()
         let store = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: storage)
@@ -121,12 +123,20 @@ final class CommunicationsTests: XCTestCase {
             ["id":"s2", "employeeId":"b", "status":"running", "provider":"pi", "providerCliActive":true]
         ]))
         XCTAssertEqual(store.conversationList(sessions: sessions).count, 3)
+        XCTAssertEqual(store.items.count, 5, "Navigation visibility must not discard server metadata")
+        store.query = "隐藏"
+        XCTAssertTrue(store.conversationList(sessions: sessions).isEmpty)
+        store.query = ""
         store.activityOnly = true
         XCTAssertEqual(store.conversationList(sessions: sessions).map(\.id), ["a"])
         store.archiveFilter = .archived
         XCTAssertTrue(store.conversationList(sessions: sessions).isEmpty)
         store.activityOnly = false
         XCTAssertEqual(store.conversationList(sessions: sessions).map(\.id), ["c"])
+        api.detailHandler = { id in try XCTUnwrap(api.items.first { $0.id == id }) }
+        store.select("g"); await store.waitForDetailForTesting()
+        XCTAssertEqual(store.selectedID, "g", "Existing direct navigation is preserved")
+        XCTAssertTrue(store.detail?.isGroup == true)
         let restored = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: storage)
         XCTAssertEqual(restored.archiveFilter, .archived)
         XCTAssertFalse(restored.activityOnly)

@@ -73,6 +73,7 @@ final class CommunicationsStore: ObservableObject {
     var filteredConversations: [NativeConversation] { conversationList() }
     func conversationList(sessions: [WorkspaceSessionSummary] = [], selectedSessionID: String? = nil) -> [NativeConversation] {
         items.filter { item in
+            if !DesktopGroupChatPresentation.isVisible && item.isGroup { return false }
             if archiveFilter == .archived && !item.isArchived || archiveFilter == .unarchived && item.isArchived { return false }
             if activityOnly && !item.isActivity(sessions: sessions, selectedConversationID: selectedID, selectedSessionID: selectedSessionID) { return false }
             return matches([item.displayTitle, item.preview ?? ""] + (item.tasks ?? []).map { $0.task.title })

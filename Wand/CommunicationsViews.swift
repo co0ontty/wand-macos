@@ -88,7 +88,7 @@ struct CommunicationsSidebar: View {
                             .accessibilityLabel(conversation.displayTitle)
                         }
                         if conversationRows.isEmpty && !store.indexLoading {
-                            Text(!store.query.isEmpty ? "没有匹配的对话" : store.activityOnly ? "现在没有符合筛选条件的活动对话。" : store.archiveFilter == .archived ? "还没有已归档的对话。" : store.archiveFilter == .unarchived ? "还没有未归档的对话。" : "从通讯录选择员工开始私聊，或在上方加号发起群聊。")
+                            Text(!store.query.isEmpty ? "没有匹配的对话" : store.activityOnly ? "现在没有符合筛选条件的活动对话。" : store.archiveFilter == .archived ? "还没有已归档的对话。" : store.archiveFilter == .unarchived ? "还没有未归档的对话。" : DesktopGroupChatPresentation.isVisible ? "从通讯录选择员工开始私聊，或在上方加号发起群聊。" : "从通讯录选择员工开始私聊。")
                                 .font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(16)
                         }
                     }
@@ -134,12 +134,14 @@ struct CommunicationsContent: View {
                 if store.section == .conversations && store.selectedID != nil { ConversationMessageSearch(store: store) }
                 Button { Task { await store.refreshVisible() } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(WandIconButtonStyle()).frame(width: 32, height: 32).help("刷新通讯录与对话")
-                Button { groupEditorOpen.toggle() } label: { Image(systemName: "plus") }
-                    .buttonStyle(WandIconButtonStyle(isActive: groupEditorOpen)).frame(width: 32, height: 32)
-                    .accessibilityLabel("发起群聊").help("发起群聊")
-                    .popover(isPresented: $groupEditorOpen, arrowEdge: .top) {
-                        ConversationGroupEditor(store: store, invitation: nil) { groupEditorOpen = false }
-                    }
+                if DesktopGroupChatPresentation.isVisible {
+                    Button { groupEditorOpen.toggle() } label: { Image(systemName: "plus") }
+                        .buttonStyle(WandIconButtonStyle(isActive: groupEditorOpen)).frame(width: 32, height: 32)
+                        .accessibilityLabel("发起群聊").help("发起群聊")
+                        .popover(isPresented: $groupEditorOpen, arrowEdge: .top) {
+                            ConversationGroupEditor(store: store, invitation: nil) { groupEditorOpen = false }
+                        }
+                }
             }
             .padding(.horizontal, 24).frame(height: 56)
             Divider()

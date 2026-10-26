@@ -144,6 +144,79 @@ final class CommunicationsVisualTests: XCTestCase {
         return false
     }
 
+    func testHiddenGroupNavigationHasNoCreationAction() async throws {
+        let (store, _) = try await setup()
+        XCTAssertTrue(store.items.contains(where: \.isGroup))
+        XCTAssertTrue(store.filteredConversations.allSatisfy { !$0.isGroup })
+        try await verifyHiddenGroupNavigation(store: store, baseURL: URL(string: "https://fixture.example.test")!, name: "fixture-sidebar")
+        store.query = "不存在的对话"
+        XCTAssertTrue(store.filteredConversations.isEmpty)
+        try await verifyHiddenGroupNavigation(store: store, baseURL: URL(string: "https://fixture.example.test")!, name: "fixture-no-results")
+    }
+
+    func testInstalledServiceGroupNavigationIsHiddenReadOnly() async throws {
+        guard NativeAcceptance.enabled else { throw XCTSkip("Installed-service read-only acceptance is opt-in") }
+        let storage = NativeAcceptance.defaults
+        defer { NativeAcceptance.cleanup() }
+        let origin = try XCTUnwrap(URL(string: try XCTUnwrap(storage.string(forKey: "wand.serverURL"))))
+        let token = try XCTUnwrap(storage.string(forKey: "wand.token"))
+        let store = CommunicationsStore(api: WandAPI(baseURL: origin, token: token), serverURL: origin, defaults: storage)
+        defer { store.stopRealtime() }
+        await store.refreshIndex()
+        XCTAssertNil(store.conversationsError)
+        XCTAssertTrue(store.indexLoaded)
+        XCTAssertEqual(Set(store.filteredConversations.map(\.id)), Set(store.items.filter { !$0.isGroup }.map(\.id)))
+        try await verifyHiddenGroupNavigation(store: store, baseURL: origin, name: "installed-sidebar")
+        store.section = .contacts
+        try await verifyHiddenGroupNavigation(store: store, baseURL: origin, name: "installed-contacts")
+    }
+
+    private func verifyHiddenGroupNavigation(store: CommunicationsStore, baseURL: URL, name: String) async throws {
+        let view = HStack(spacing: 0) {
+            CommunicationsSidebar(store: store).frame(width: 260).padding(.top, 12)
+            Divider()
+            CommunicationsContent(store: store, baseURL: baseURL, onOpenSession: { _ in })
+        }.frame(width: 900, height: 780).background(Theme.workspaceBackground)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 900, height: 780)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 150_000_000); host.layoutSubtreeIfNeeded()
+        // The view owns a refresh task. Let it settle before capturing or removing
+        // the host so a previous window cannot surface cancellation in the next one.
+        for _ in 0..<50 where store.indexLoading { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertFalse(store.indexLoading)
+        XCTAssertNil(store.contactsError)
+        XCTAssertNil(store.conversationsError)
+        host.needsDisplay = true
+        host.layoutSubtreeIfNeeded(); window.displayIfNeeded(); host.displayIfNeeded()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let children = NSSelectorFromString("accessibilityChildren")
+        let nameSelector = NSSelectorFromString("accessibilityLabel")
+        var queue: [NSObject] = [host], seen = Set<ObjectIdentifier>(), labels: [String] = []
+        while !queue.isEmpty && seen.count < 2000 {
+            let node = queue.removeFirst()
+            guard seen.insert(ObjectIdentifier(node)).inserted else { continue }
+            if node.responds(to: nameSelector), let value = node.perform(nameSelector)?.takeUnretainedValue() as? String { labels.append(value) }
+            if node.responds(to: children), let next = node.perform(children)?.takeUnretainedValue() as? [NSObject] { queue.append(contentsOf: next) }
+        }
+        XCTAssertFalse(labels.contains("发起群聊"))
+        if let path = ProcessInfo.processInfo.environment["WAND_GROUP_NAVIGATION_VISUAL_DIR"] {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let evidence: [String: Any] = ["accessibilityNodes": seen.count, "accessibilityLabels": labels.count,
+                "accessibilityExportAvailable": !labels.isEmpty,
+                "groupCreationAccessibilityFound": labels.isEmpty ? NSNull() : NSNumber(value: labels.contains("发起群聊")), "visibleConversations": store.filteredConversations.count,
+                "sourceConversations": store.items.count]
+            try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
+                .write(to: directory.appendingPathComponent(name + ".json"))
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent(name + ".png"))
+        }
+    }
+
     func testIsolatedNativeCommunicationsScreenshots() async throws {
         guard let output = ProcessInfo.processInfo.environment["WAND_COMMUNICATIONS_VISUAL_DIR"] else {
             throw XCTSkip("opt-in isolated native screenshot matrix")

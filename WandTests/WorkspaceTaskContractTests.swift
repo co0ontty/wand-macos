@@ -228,6 +228,36 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(duplicate.flatMap(\.entries).count, 4)
     }
 
+    func testSidebarHidesGroupChatSessionsAndKeepsTeamWorkAndMetadata() throws {
+        let data = Data(#"[{"id":"group","teamChat":{"teamId":"t","runId":"r","teamName":"群聊","chatTitle":"群聊","memberCount":2}},{"id":"work","teamStep":{"runId":"r","stepId":"s","kind":"work","title":"工作","memberId":"m","memberName":"员工","teamName":"团队","stepStatus":"running","runStatus":"running","runFinished":false}},{"id":"ordinary","title":"普通会话"}]"#.utf8)
+        let sessions = try JSONDecoder().decode([WorkspaceSessionSummary].self, from: data)
+        let group = TaskDirectoryGroup(workspaceId: "w", workspaceName: "目录", workspaceCwd: "/repo",
+            synthetic: false, tasks: [], standaloneSessions: sessions)
+        let directory = TaskListPresentation.sidebarDirectoryGroups([group], workspaces: [], query: "", activeOnly: false,
+            selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(directory.flatMap(\.standaloneSessions).map(\.id), ["work", "ordinary"])
+        let recent = TaskListPresentation.recentGroups([group], query: "", activeOnly: false, selectedSessionId: nil)
+        XCTAssertEqual(Set(recent.flatMap(\.entries).map(\.id)), ["work", "ordinary"])
+        XCTAssertTrue(TaskListPresentation.recentGroups([group], query: "群聊", activeOnly: false, selectedSessionId: nil).isEmpty)
+        XCTAssertEqual(group.standaloneSessions.count, 3)
+        let task = WorkspaceTaskSummary(id: "task", workspaceId: "w", name: "普通任务", worktree: nil, layout: nil,
+            status: "active", createdAt: "", lastOpenedAt: nil, cwd: "/repo", isolated: false, worktreeError: nil,
+            sessions: sessions, totalSessions: 12)
+        let taskGroup = TaskDirectoryGroup(workspaceId: "w", workspaceName: "目录", workspaceCwd: "/repo",
+            synthetic: false, tasks: [task], standaloneSessions: [])
+        XCTAssertEqual(TaskListPresentation.sidebarSessionCount(task), 2)
+        XCTAssertTrue(TaskListPresentation.sidebarDirectoryGroups([taskGroup], workspaces: [], query: "群聊", activeOnly: false,
+            selectedSessionId: nil, selectedTaskId: nil).isEmpty)
+        let matched = TaskListPresentation.sidebarDirectoryGroups([taskGroup], workspaces: [], query: "团队", activeOnly: false,
+            selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(matched.flatMap(\.tasks).map(\.id), ["task"])
+        XCTAssertEqual(matched.first?.tasks.first?.sessions.count, 3, "Task operations retain complete membership")
+        let snapshots = try JSONDecoder().decode([SessionSnapshot].self, from: data)
+        for available in [false, true] {
+            XCTAssertEqual(TaskListPresentation.standaloneSessions(sessions: snapshots, groups: [group], groupsAvailable: available).map(\.id), ["work", "ordinary"])
+        }
+    }
+
     func testActiveSidebarDoesNotTreatAnIdleRunningProviderAsActive() throws {
         let sessions = try JSONDecoder().decode([WorkspaceSessionSummary].self, from: Data(#"""
         [
@@ -691,6 +721,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
             }
         }
         let draft = SessionCreationDraft(context: .init(startsNewTask: true))
+        draft.planningMode = false // Explicit execution variant still honors the worktree default.
         let host = NSHostingView(rootView: NewSessionView(api: api, draft: draft, embedded: true) { _ in
             XCTFail("Loading defaults must not create a session")
         })
@@ -1702,7 +1733,7 @@ final class SidebarLiveTests: XCTestCase {
         XCTAssertTrue(projected.filter { !$0.tasks.isEmpty }.allSatisfy { expanded.contains($0.id) })
         let recent = TaskListPresentation.recentGroups(groups, query: "", activeOnly: false, selectedSessionId: nil)
         let expectedSessions = tasks.flatMap(\.sessions) + groups.flatMap(\.standaloneSessions)
-        XCTAssertEqual(Set(recent.flatMap(\.entries).map(\.id)), Set(expectedSessions.filter { $0.archived != true }.map(\.id)))
+        XCTAssertEqual(Set(recent.flatMap(\.entries).map(\.id)), Set(expectedSessions.filter { $0.archived != true && $0.teamChat == nil }.map(\.id)))
         storage.set(false, forKey: "wand.desktop.sidebarRecent")
         storage.set(false, forKey: "wand.desktop.sidebarActiveOnly")
         let host = NSHostingView(rootView: MainShellView(serverURL: origin, token: token).defaultAppStorage(storage))

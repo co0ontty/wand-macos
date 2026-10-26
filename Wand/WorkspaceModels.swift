@@ -715,15 +715,24 @@ enum TaskListPresentation {
         }
     }
 
+    static func sidebarSessions(_ sessions: [WorkspaceSessionSummary]) -> [WorkspaceSessionSummary] {
+        sessions.filter { DesktopGroupChatPresentation.isVisible || $0.teamChat == nil }
+    }
+
+    static func sidebarSessionCount(_ task: WorkspaceTaskSummary) -> Int {
+        DesktopGroupChatPresentation.isVisible ? task.listedSessionCount : sidebarSessions(task.sessions).count
+    }
+
     static func sidebarDirectoryGroups(_ groups: [TaskDirectoryGroup], workspaces: [Workspace], query: String,
                                        activeOnly: Bool, selectedSessionId: String?, selectedTaskId: String?) -> [TaskDirectoryGroup] {
         return groups.compactMap { group in
             let candidates = group.tasks
             let matching = candidates.filter { task in
-                task.archived != true && task.status != "done" &&
-                (!activeOnly || task.hasActiveExecution || task.sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }) &&
+                let sessions = sidebarSessions(task.sessions)
+                return task.archived != true && task.status != "done" &&
+                (!activeOnly || task.hasActiveExecution || sessions.contains { isActive($0, selectedSessionId: selectedSessionId) }) &&
                 (task.hasActiveExecution || task.sessions.count > 0 || (task.id == selectedTaskId) || !query.isEmpty) &&
-                searchMatches(query, values: [group.displayName, group.workspaceCwd, task.name, task.cwd] + task.sessions.map { groupSearchText($0) })
+                searchMatches(query, values: [group.displayName, group.workspaceCwd, task.name, task.cwd] + sessions.map { groupSearchText($0) })
             }
             var keep = Set(matching.map(\.id))
             for task in matching {
@@ -734,7 +743,7 @@ enum TaskListPresentation {
                     parent = candidates.first { $0.id == id }?.parentWorkspaceTaskId
                 }
             }
-            let sessions = group.standaloneSessions.filter { ($0.archived != true || !query.isEmpty) && (!activeOnly || isActive($0, selectedSessionId: selectedSessionId)) && searchMatches(query, values: [groupSearchText($0), group.displayName, group.workspaceCwd]) }
+            let sessions = sidebarSessions(group.standaloneSessions).filter { ($0.archived != true || !query.isEmpty) && (!activeOnly || isActive($0, selectedSessionId: selectedSessionId)) && searchMatches(query, values: [groupSearchText($0), group.displayName, group.workspaceCwd]) }
             let tasks = candidates.filter { keep.contains($0.id) }
             guard !tasks.isEmpty || !sessions.isEmpty else { return nil }
             return TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
@@ -774,7 +783,7 @@ enum TaskListPresentation {
             entries += group.standaloneSessions.map { RecentEntry(group: group, task: nil, session: $0) }
         }
         entries = entries.filter { entry in
-            entry.session.archived != true && seen.insert(entry.id).inserted
+            (DesktopGroupChatPresentation.isVisible || entry.session.teamChat == nil) && entry.session.archived != true && seen.insert(entry.id).inserted
         }.sorted { left, right in
             let a = left.session.startedAt ?? "", b = right.session.startedAt ?? ""
             return a == b ? left.id < right.id : a > b
@@ -817,12 +826,13 @@ enum TaskListPresentation {
         groups: [TaskDirectoryGroup],
         groupsAvailable: Bool
     ) -> [SessionSnapshot] {
-        guard groupsAvailable else { return sessions }
+        let visibleSessions = sessions.filter { DesktopGroupChatPresentation.isVisible || $0.teamChat == nil }
+        guard groupsAvailable else { return visibleSessions }
         let tasks = groups.flatMap(\.tasks)
         let taskIds = Set(tasks.map(\.id))
         let ownedSessionIds = Set(tasks.flatMap { $0.sessions.map(\.id) })
         let standaloneIds = Set(groups.flatMap { $0.standaloneSessions.map(\.id) })
-        return sessions.filter { session in
+        return visibleSessions.filter { session in
             if ownedSessionIds.contains(session.id) { return false }
             // The task response may be newer than the cached session's membership.
             if standaloneIds.contains(session.id) { return true }

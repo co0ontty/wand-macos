@@ -12,11 +12,12 @@ struct TaskBoardView: View {
     let onOpenSession: (String) -> Void
     var onDismiss: (() -> Void)? = nil
     var embedded = false
+    var initialTaskId: String? = nil
+    let onRequestCreation: (WandTaskPlanningContext) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
     @State private var executionQueue = false
-    @State private var createParent: WandBoardTask?
     @State private var tasks: [WandBoardTask] = []
     @State private var workspaces: [Workspace] = []
     @State private var milestones: [WandBoardMilestone] = []
@@ -39,8 +40,6 @@ struct TaskBoardView: View {
     @State private var commentToRevealTaskId: String?
     /// 右键「派发」只打开空的指派框，不把任务描述当成提示词发出去。
     @State private var composeRequest: (id: String, token: UUID)?
-    @State private var showCreate = false
-    @State private var createStatus = WandBoardStatus.todo.rawValue
     @State private var busyId = ""
     @State private var lastAgent = WandBoardTaskAgent.default
     @State private var ganttZoom: WandBoardGanttZoom = .week
@@ -127,24 +126,6 @@ struct TaskBoardView: View {
         }
         .frame(minWidth: embedded ? 0 : 640, minHeight: embedded ? 0 : 520)
         .background(Theme.workspaceBackground)
-        .sheet(isPresented: $showCreate) {
-            WandBoardCreateView(
-                employees: employees,
-                workspaces: workspaces,
-                milestones: milestones,
-                catalog: catalog,
-                defaultWorkspaceId: createParent?.workspaceId ?? (workspaceFilter.isEmpty ? (linkedWorkspaceId ?? "") : workspaceFilter),
-                initialStatus: createStatus,
-                lastAgent: lastAgent,
-                parentTaskId: createParent?.id,
-                parent: createParent,
-                allTasks: tasks,
-                onCreate: { draft in await createTask(draft) },
-                onCreateMilestone: { name, workspaceId in
-                    try await api.createBoardMilestone(name: name, workspaceId: workspaceId)
-                }
-            )
-        }
         .alert(item: $archiveConfirm) { task in
             Alert(
                 title: Text("归档「\(task.title)」？"),
@@ -237,7 +218,7 @@ struct TaskBoardView: View {
                 .help("刷新任务")
                 .accessibilityLabel("刷新任务")
                 Button {
-                    openCreate(WandBoardStatus.todo.rawValue)
+                    openCreate(WandBoardStatus.backlog.rawValue)
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
@@ -358,7 +339,7 @@ struct TaskBoardView: View {
                 composeToken: composeRequest?.id == task.id ? composeRequest?.token : nil,
                 onPatch: { body in await patchTask(task, body) },
                 onRemember: rememberAgent,
-                onCreateChild: { createParent = task; createStatus = WandBoardStatus.todo.rawValue; showCreate = true },
+                onCreateChild: { openCreate(WandBoardStatus.todo.rawValue, parent: task) },
                 employees: employees,
                 onDispatchEmployee: { prompt, employeeId, override in await dispatch(task, agent: override ?? task.agent ?? .default, prompt: prompt, employeeId: employeeId, employeeOverride: override != nil) },
                 onDispatch: { prompt, agent in
@@ -519,6 +500,7 @@ struct TaskBoardView: View {
 
     private func bootstrap() async {
         // 沿用上次的视图 / 搜索 / 筛选；显式链接进来的工作区优先于历史记录。
+        selectedId = initialTaskId ?? ""
         let state = wandBoardReadViewState()
         view = state.view
         query = state.query
@@ -588,15 +570,10 @@ struct TaskBoardView: View {
         if let onDismiss { onDismiss() } else { dismiss() }
     }
 
-    private func openCreate(_ status: String) {
-        createParent = nil
-        createStatus = status
-        showCreate = true
-        Task {
-            await loadWorkspaceChoices()
-            milestones = (try? await api.listBoardMilestones()) ?? milestones
-            catalog = try? await api.models()
-        }
+    private func openCreate(_ status: String, parent: WandBoardTask? = nil) {
+        onRequestCreation(WandTaskPlanningContext(
+            workspaceId: parent?.workspaceId ?? (workspaceFilter.isEmpty ? (linkedWorkspaceId ?? "") : workspaceFilter),
+            status: status, parentTaskId: parent?.id))
     }
 
     private func toggleArchive() {
@@ -620,53 +597,6 @@ struct TaskBoardView: View {
             errorMessage = error.localizedDescription
         }
         busyId = ""
-    }
-
-    private func createTask(_ draft: WandBoardDraft) async -> Bool {
-        var created: WandBoardTask?
-        await runFor("__create__") {
-            let task = try await api.createBoardTask(
-                title: draft.title.trimmingCharacters(in: .whitespacesAndNewlines),
-                description: draft.description.trimmingCharacters(in: .whitespacesAndNewlines),
-                status: draft.status,
-                priority: draft.priority,
-                labels: draft.parsedLabels,
-                dueDate: draft.dueDate.isEmpty ? nil : draft.dueDate,
-                milestoneId: draft.milestoneId.isEmpty ? nil : draft.milestoneId,
-                workspaceId: draft.workspaceId.isEmpty ? nil : draft.workspaceId,
-                agent: draft.agent,
-                parentTaskId: draft.parentTaskId,
-                employeeId: draft.employeeId.isEmpty ? nil : draft.employeeId,
-                employeeOverride: draft.employeeOverride
-            )
-            created = task
-            await reload(showProgress: false)
-            // 只有「处理中」列 + 有描述才顺带第一次指派；失败只提示，不回滚已创建的任务。
-            let prompt = draft.description.trimmingCharacters(in: .whitespacesAndNewlines)
-            if draft.saveAndDispatch && !prompt.isEmpty {
-                do {
-                    let result = try await api.dispatchBoardTask(
-                        id: task.id,
-                        agent: draft.agent,
-                        prompt: wandBoardExecutionPrompt(task, parent: tasks.first { $0.id == draft.parentTaskId }, instruction: prompt),
-                        workspaceId: draft.workspaceId.isEmpty ? nil : draft.workspaceId,
-                        employeeId: draft.employeeId.isEmpty ? nil : draft.employeeId,
-                        employeeOverride: draft.employeeOverride
-                    )
-                    showNotice(result.queued ? "「\(task.title)」已排队，等待员工空闲后自动开始" : "\(wandBoardProviderLabel(result.provider)) 已开始处理「\(task.title)」")
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-                await reload(showProgress: false)
-            } else {
-                showNotice("已创建任务「\(task.title)」，可在详情中启动执行。")
-            }
-            // 标题留空时由服务端后台生成，轮询几次把真标题取回来。
-            if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, task.titleSource == "auto" {
-                await awaitGeneratedTitle(taskId: task.id, placeholder: task.title)
-            }
-        }
-        return created != nil
     }
 
     private func patchTask(_ task: WandBoardTask, _ body: [String: Any]) async {
@@ -820,20 +750,6 @@ struct TaskBoardView: View {
         }
     }
 
-    /**
-     * 标题留空时标题由服务端后台生成。创建响应里只有描述首行占位，
-     * 这里短轮询几次，拿到真标题就刷新列表；一直没变就保留占位。
-     */
-    private func awaitGeneratedTitle(taskId: String, placeholder: String) async {
-        for delayMs in [1_200, 2_000, 3_000, 5_000, 8_000] {
-            // 部署目标是 macOS 12，不能用只在新系统可用的 Task.sleep(for:)。
-            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-            guard let task = try? await api.getBoardTask(id: taskId) else { continue }
-            guard !task.title.isEmpty, task.title != placeholder else { continue }
-            await reload(showProgress: false)
-            return
-        }
-    }
 }
 
 // MARK: - 筛选菜单

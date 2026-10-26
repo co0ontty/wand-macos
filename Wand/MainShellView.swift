@@ -70,6 +70,7 @@ struct MainShellView: View {
     @State private var connectionState: ShellConnectionState = .connecting
     @State private var showTroubleshooting = false
     @State private var showTaskBoard = false
+    @State private var createdBoardTaskId: String?
     @State private var showCommunications = false
     @StateObject private var communicationsStore: CommunicationsStore
     @StateObject private var gitStatusStore = GitStatusStore()
@@ -107,12 +108,15 @@ struct MainShellView: View {
     /// and refreshed server preferences do not discard a partially edited form.
     private enum CreationDraftKey: Hashable {
         case task(String)
+        case planning(WandTaskPlanningContext)
         case workspace(String, startsNewTask: Bool)
         case directory(String, startsNewTask: Bool)
         case home(startsNewTask: Bool)
 
         init(_ context: SessionCreationContext) {
-            if let taskId = context.taskId {
+            if let planning = context.taskPlanning {
+                self = .planning(planning)
+            } else if let taskId = context.taskId {
                 self = .task(taskId)
             } else if let workspaceId = context.workspaceId {
                 self = .workspace(workspaceId, startsNewTask: context.startsNewTask)
@@ -1098,7 +1102,9 @@ struct MainShellView: View {
             sidebarScrollRequest = SidebarScrollRequest(
                 section: command == .workspaces ? .workspaces : .sessions
             )
-        case .taskBoard: showCommunications = false; showCreation = false; showTaskBoard = true; filePanelOpen = false
+        case .taskBoard:
+            createdBoardTaskId = nil
+            showCommunications = false; showCreation = false; showTaskBoard = true; filePanelOpen = false
         case .conversations, .contacts:
             showCommunications = true; showCreation = false; showTaskBoard = false
             communicationsStore.section = command == .contacts ? .contacts : .conversations
@@ -1128,7 +1134,11 @@ struct MainShellView: View {
         } else if showCreation {
             creationView
         } else if showTaskBoard {
-            TaskBoardView(api: api, onOpenSession: openSessionFromMissions, embedded: true)
+            TaskBoardView(api: api, onOpenSession: openSessionFromMissions, embedded: true,
+                initialTaskId: createdBoardTaskId, onRequestCreation: { planning in
+                    beginCreation(context: SessionCreationContext(workspaceId: planning.workspaceId.isEmpty ? nil : planning.workspaceId,
+                        startsNewTask: true, taskPlanning: planning))
+                })
         } else if let selection = selectedWorkspaceTask {
             WorkspaceTaskView(
                 workspace: selection.workspace,
@@ -1161,7 +1171,15 @@ struct MainShellView: View {
 
     private var creationView: some View {
         let originDraftID = creationDraft.id
-        return DesktopWelcomeView(api: api, draft: creationDraft, workspaceStore: workspaceStore) {
+        return DesktopWelcomeView(api: api, draft: creationDraft, workspaceStore: workspaceStore, onTaskCreated: { task in
+            guard SessionCreationDraft.shouldOpenReceipt(originDraftID: originDraftID,
+                currentDraftID: creationDraft.id, creationVisible: creationDestinationVisible) else { return }
+            creationDrafts = creationDrafts.filter { $0.value.id != originDraftID }
+            creationDraft = SessionCreationDraft(context: creationDraft.context)
+            createdBoardTaskId = task.id
+            showCreation = false
+            showTaskBoard = true
+        }) {
             openCreatedSession($0, originDraftID: originDraftID)
         }
         .id(originDraftID)

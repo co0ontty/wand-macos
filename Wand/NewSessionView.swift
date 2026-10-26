@@ -9,6 +9,7 @@ struct SessionCreationContext: Equatable {
     var workspaceDefaultProvider: String? = nil
     var startsNewTask = false
     var employeeId: String? = nil
+    var taskPlanning: WandTaskPlanningContext? = nil
 }
 
 struct SessionTaskOption: Identifiable {
@@ -25,6 +26,9 @@ struct SessionTaskOption: Identifiable {
 final class SessionCreationDraft: ObservableObject, Identifiable {
     let id = UUID()
     let context: SessionCreationContext
+    let taskPlanning: WandTaskPlanningDraft
+    @Published var planningMode: Bool
+    private var planningChanges: AnyCancellable?
     @Published var cwd: String
     @Published var firstMessage: String { didSet { messageRevision &+= 1 } }
     private var messageRevision: UInt64 = 0
@@ -92,12 +96,16 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
 
     init(context: SessionCreationContext = .init(), initialMessage: String = "") {
         self.context = context
+        taskPlanning = WandTaskPlanningDraft(context: context.taskPlanning ?? WandTaskPlanningContext(workspaceId: context.workspaceId ?? ""), cwd: context.cwd ?? "")
+        planningMode = context.startsNewTask || context.taskPlanning != nil
         let initialCwd = context.cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         cwd = initialCwd
         unboundCwd = initialCwd
         firstMessage = initialMessage
         employeeId = context.employeeId
+        taskPlanning.draft.employeeId = context.employeeId ?? ""
         destination = context.taskId ?? (context.startsNewTask ? "new" : "none")
+        planningChanges = taskPlanning.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     var resolvedTaskName: String? {
@@ -295,6 +303,7 @@ struct NewSessionView: View {
     let workspaceStore: WorkspaceStore?
     let embedded: Bool
     let onCreated: (SessionSnapshot) -> Void
+    var onTaskCreated: ((WandBoardTask) -> Void)?
     @StateObject private var draft: SessionCreationDraft
     @Environment(\.desktopPageActive) private var pageActive
     @Environment(\.dismiss) private var dismiss
@@ -316,11 +325,12 @@ struct NewSessionView: View {
 
     init(api: WandAPI, initialCwd: String? = nil, initialMessage: String = "",
          draft: SessionCreationDraft? = nil, workspaceStore: WorkspaceStore? = nil,
-         embedded: Bool = false, onCreated: @escaping (SessionSnapshot) -> Void) {
+         embedded: Bool = false, onTaskCreated: ((WandBoardTask) -> Void)? = nil, onCreated: @escaping (SessionSnapshot) -> Void) {
         self.api = api
         self.workspaceStore = workspaceStore
         self.embedded = embedded
         self.onCreated = onCreated
+        self.onTaskCreated = onTaskCreated
         _draft = StateObject(wrappedValue: draft ?? SessionCreationDraft(
             context: SessionCreationContext(cwd: initialCwd), initialMessage: initialMessage
         ))
@@ -508,7 +518,7 @@ struct NewSessionView: View {
 
     var body: some View {
         Group {
-            if embedded { form }
+            if embedded { creationForm }
             else {
                 VStack(spacing: 0) {
                     HStack {
@@ -518,7 +528,7 @@ struct NewSessionView: View {
                             .buttonStyle(WandSecondaryButtonStyle())
                             .keyboardShortcut(.cancelAction)
                     }.padding(20)
-                    form
+                    creationForm
                 }
                 .frame(minWidth: 720, idealWidth: 780, minHeight: 540, idealHeight: 720)
                 .focusedSceneValue(\.wandDesktopCommandsEnabled, false)
@@ -532,7 +542,18 @@ struct NewSessionView: View {
                 showBrowser = false
             }
         }
-        .task { await loadInitial() }
+        .task { if !draft.planningMode { await loadInitial() } }
+        .onChange(of: draft.planningMode) { planning in
+            if planning {
+                draft.taskPlanning.prepare(cwd: draft.cwd, employeeId: draft.employeeId)
+            } else {
+                if draft.destination == "new", draft.sessionType == .structured { draft.destination = "none" }
+                Task { await loadInitial() }
+            }
+        }
+        .onChange(of: draft.sessionType) { kind in
+            if kind != .structured { draft.planningMode = false }
+        }
         .onAppear { composerFocused = true }
 
         .confirmationDialog("已核对没有新任务或会话？", isPresented: $confirmUnknownRetry) {
@@ -549,123 +570,126 @@ struct NewSessionView: View {
         }
     }
 
-    private var form: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 32)
-                    VStack(spacing: 20) {
-                        if draft.sessionType == .structured {
-                            HStack(alignment: .center, spacing: 8) {
-                                Text("今天你想与")
-                                Button { showEmployeePicker.toggle() } label: {
-                                    HStack(spacing: 4) {
-                                        if let employee = draft.employees.first(where: { $0.id == draft.employeeId }) {
-                                            WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 28)
-                                        } else {
-                                            Image(systemName: "sparkles")
-                                                .frame(width: 28, height: 28)
-                                        }
-                                        Image(systemName: "chevron.down")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(Theme.textSecondary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .help(draft.employeeId?.isEmpty != false ? "选择员工" : (draft.employees.first(where: { $0.id == draft.employeeId })?.name ?? "选择员工"))
-                                Text("在")
-                                Button { showDirectoryOptions = true } label: {
-                                    HStack(spacing: 4) {
-                                        Text(projectName)
-                                            .underline(true, color: Theme.border)
-                                        Image(systemName: "chevron.down")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(Theme.textSecondary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .help(draft.cwd.isEmpty ? "选择工作目录" : draft.cwd)
-                                Text("的")
-                                Button { showTaskOptions = true } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "square.stack")
-                                            .font(.system(size: 11))
-                                            .foregroundColor(Theme.textSecondary)
-                                        Text(taskLabel)
-                                            .underline(true, color: Theme.border)
-                                        Image(systemName: "chevron.down")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(Theme.textSecondary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .help("归属任务：\(taskLabel)")
-                                Text("中创造些什么？")
-                            }
-                            .font(.system(size: geometry.size.width < 600 ? 20 : 26, weight: .regular))
-                            .foregroundColor(Theme.textPrimary)
-                            .multilineTextAlignment(.center)
-                            .accessibilityAddTraits(.isHeader)
-                        } else {
-                            Text(draft.sessionType == .pty ? "从这里开始 CLI 工作" : "从这里打开空白终端")
-                                .font(.system(size: geometry.size.width < 600 ? 22 : 28, weight: .regular))
-                                .foregroundColor(Theme.textPrimary).multilineTextAlignment(.center)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityAddTraits(.isHeader)
-                        }
-                    }
-                    Spacer(minLength: 32)
-                    creationFeedback
-                        .frame(maxWidth: 760)
-                        .padding(.bottom, draft.errorMessage == nil ? 0 : 12)
-                    VStack(spacing: 0) {
-                        submissionReadiness
-                        HStack(spacing: 4) {
-                            directoryButton
-                            Spacer(minLength: 4)
-                            if draft.sessionType == .structured { employeeButton }
-                            runSettingsButton
-                        }
-                        .padding(.horizontal, 8).padding(.bottom, 8)
-                        .background(Theme.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .padding(.horizontal, 12)
-                        .disabled(draft.creating || draft.creationUnconfirmed)
-                        VStack(alignment: .leading, spacing: 0) {
-                        firstMessageCard
-                        if draft.loading {
-                            HStack(spacing: 8) {
-                                ProgressView().controlSize(.small)
-                                Text("正在读取默认配置…").font(.system(size: 12))
-                            }.foregroundColor(Theme.textSecondary).frame(height: 34).padding(.horizontal, 14)
-                        } else if let error = draft.loadError {
-                            VStack(alignment: .leading, spacing: 8) {
-                                errorBanner(error)
-                                Button("重试加载") { Task { await loadInitial() } }
-                                    .buttonStyle(WandSecondaryButtonStyle())
-                            }.padding(14)
-                        } else {
-                            composerOptions(compact: geometry.size.width < 700)
-                                .padding(.horizontal, 12).padding(.bottom, 12)
-                                .disabled(draft.creating)
-                        }
-                        }
-                        .wandInputSurface(focused: composerFocused, cornerRadius: 24)
-                    }
-                    .frame(maxWidth: 760)
-                    if let error = draft.taskError {
-                        VStack(alignment: .leading, spacing: 8) {
-                            errorBanner(error)
-                            Button("重新读取任务") { selectDestination(draft.destination) }
-                                .buttonStyle(WandSecondaryButtonStyle())
-                        }
-                    }
+    private var creationForm: some View {
+        VStack(spacing: 0) {
+            if draft.context.taskId == nil || draft.planningMode {
+                Picker("新建工作方式", selection: $draft.planningMode) {
+                    Text("开始工作").tag(false)
+                    Text("创建任务").tag(true)
                 }
-                .frame(minHeight: max(0, geometry.size.height - 64), alignment: .top)
-                .padding(.horizontal, geometry.size.width < 600 ? 16 : 28).padding(.vertical, 32)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .pickerStyle(.segmented).frame(maxWidth: 260).padding(.top, 16)
+                .disabled(draft.creating || draft.creationUnconfirmed || draft.taskPlanning.creating
+                    || draft.taskPlanning.unconfirmed || draft.taskPlanning.createdTask != nil)
+            }
+            if draft.planningMode {
+                WandBoardCreateView(api: api, owner: draft.taskPlanning, text: $draft.firstMessage,
+                    title: $draft.taskName, kind: $draft.sessionType, composerFocused: $composerFocused) { task in onTaskCreated?(task) }
+            } else { form }
+        }
+    }
+
+    private var form: some View {
+        NewWorkPage { width in
+            if draft.sessionType == .structured {
+                NewWorkInvitation(width: width) {
+                    Button { showEmployeePicker.toggle() } label: {
+                        HStack(spacing: 4) {
+                            if let employee = draft.employees.first(where: { $0.id == draft.employeeId }) {
+                                WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 28)
+                            } else {
+                                Image(systemName: "sparkles")
+                                    .frame(width: 28, height: 28)
+                            }
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(draft.employeeId?.isEmpty != false ? "选择员工" : (draft.employees.first(where: { $0.id == draft.employeeId })?.name ?? "选择员工"))
+                } directory: {
+                    Button { showDirectoryOptions = true } label: {
+                        HStack(spacing: 4) {
+                            Text(projectName)
+                                .underline(true, color: Theme.border)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(draft.cwd.isEmpty ? "选择工作目录" : draft.cwd)
+                } task: {
+                    Button { showTaskOptions = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.stack")
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textSecondary)
+                            Text(taskLabel)
+                                .underline(true, color: Theme.border)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("归属任务：\(taskLabel)")
+                }
+            } else {
+                Text(draft.sessionType == .pty ? "从这里开始 CLI 工作" : "从这里打开空白终端")
+                    .font(.system(size: width < 600 ? 22 : 28, weight: .regular))
+                    .foregroundColor(Theme.textPrimary).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+            }
+        } content: { width in
+            creationFeedback
+                .frame(maxWidth: 760)
+                .padding(.bottom, draft.errorMessage == nil ? 0 : 12)
+            VStack(spacing: 0) {
+                submissionReadiness
+                HStack(spacing: 4) {
+                    directoryButton
+                    Spacer(minLength: 4)
+                    if draft.sessionType == .structured { employeeButton }
+                    runSettingsButton
+                }
+                .padding(.horizontal, 8).padding(.bottom, 8)
+                .background(Theme.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal, 12)
+                .disabled(draft.creating || draft.creationUnconfirmed)
+                VStack(alignment: .leading, spacing: 0) {
+                firstMessageCard
+                if draft.loading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("正在读取默认配置…").font(.system(size: 12))
+                    }.foregroundColor(Theme.textSecondary).frame(height: 34).padding(.horizontal, 14)
+                } else if let error = draft.loadError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        errorBanner(error)
+                        Button("重试加载") { Task { await loadInitial() } }
+                            .buttonStyle(WandSecondaryButtonStyle())
+                    }.padding(14)
+                } else {
+                    composerOptions(compact: width < 700)
+                        .padding(.horizontal, 12).padding(.bottom, 12)
+                        .disabled(draft.creating)
+                }
+                }
+                .wandInputSurface(focused: composerFocused, cornerRadius: 24)
+            }
+            .frame(maxWidth: 760)
+            if let error = draft.taskError {
+                VStack(alignment: .leading, spacing: 8) {
+                    errorBanner(error)
+                    Button("重新读取任务") { selectDestination(draft.destination) }
+                        .buttonStyle(WandSecondaryButtonStyle())
+                }
             }
         }
     }
+
 
     private var projectName: String {
         let name = (draft.cwd as NSString).lastPathComponent
@@ -1229,6 +1253,12 @@ struct NewSessionView: View {
     }
 
     private func selectDestination(_ destination: String) {
+        if destination == "new", draft.sessionType == .structured {
+            showTaskOptions = false
+            draft.taskPlanning.directory = draft.cwd
+            draft.planningMode = true
+            return
+        }
         if !isExistingTask { draft.unboundCwd = draft.cwd }
         draft.destination = destination
         draft.taskGeneration += 1
@@ -1522,5 +1552,51 @@ struct DirectoryBrowserView: View {
             errorMessage = error.localizedDescription
         }
         loading = false
+    }
+}
+
+/// Both task planning and immediate execution share the same page geometry.
+struct NewWorkPage<Heading: View, Content: View>: View {
+    @ViewBuilder let heading: (CGFloat) -> Heading
+    @ViewBuilder let content: (CGFloat) -> Content
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 32)
+                    heading(geometry.size.width)
+                    Spacer(minLength: 32)
+                    content(geometry.size.width).frame(maxWidth: 760)
+                }
+                .frame(minHeight: max(0, geometry.size.height - 64), alignment: .top)
+                .padding(.horizontal, geometry.size.width < 600 ? 16 : 28).padding(.vertical, 32)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+    }
+}
+
+/// The original invitation sentence is shared by both new-work modes.
+struct NewWorkInvitation<EmployeeContent: View, DirectoryContent: View, TaskContent: View>: View {
+    let width: CGFloat
+    @ViewBuilder let employee: () -> EmployeeContent
+    @ViewBuilder let directory: () -> DirectoryContent
+    @ViewBuilder let task: () -> TaskContent
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text("今天你想与")
+            employee()
+            Text("在")
+            directory()
+            Text("的")
+            task()
+            Text("中创造些什么？")
+        }
+        .font(.system(size: width < 600 ? 20 : 26, weight: .regular))
+        .foregroundColor(Theme.textPrimary)
+        .multilineTextAlignment(.center)
+        .accessibilityAddTraits(.isHeader)
     }
 }
