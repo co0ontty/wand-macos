@@ -9,7 +9,7 @@ enum DesktopGroupChatPresentation {
 /// One catalog owns the menu bar, command palette and keyboard reference.
 enum DesktopCommand: String, CaseIterable, Identifiable {
     case newSession, newTask, search, toggleSidebar, toggleInspector
-    case workspaces, sessions, taskBoard, settings, conversations, contacts
+    case workspaces, sessions, knowledge, taskBoard, settings, conversations, contacts
     case focusComposer, findConversation, reconnect
 
     var id: String { rawValue }
@@ -22,6 +22,7 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .toggleInspector: return "显示 / 隐藏检查器"
         case .workspaces: return "工作空间"
         case .sessions: return "单独会话"
+        case .knowledge: return "知识库"
         case .taskBoard: return "任务看板"
         case .conversations: return "对话"
         case .contacts: return "通讯录"
@@ -40,6 +41,7 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .toggleInspector: return "文件预览、Git 变更和会话详情"
         case .workspaces: return "定位侧栏上方的工作空间与任务"
         case .sessions: return "定位侧栏下方的独立会话与历史记录"
+        case .knowledge: return "按项目和员工整理长期知识"
         case .taskBoard: return "管理待办、进度、优先级与归档"
         case .conversations: return DesktopGroupChatPresentation.isVisible ? "员工私聊、群聊与精确执行入口" : "员工私聊与精确执行入口"
         case .contacts: return "浏览员工职责与候选，发起独立私聊"
@@ -58,6 +60,7 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .toggleInspector: return "sidebar.right"
         case .workspaces: return "folder"
         case .sessions: return "bubble.left.and.bubble.right"
+        case .knowledge: return "doc.text"
         case .taskBoard: return "checklist"
         case .conversations: return "bubble.left.and.bubble.right"
         case .contacts: return "person.crop.rectangle"
@@ -76,6 +79,7 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .toggleInspector: return "⌥⌘I"
         case .workspaces: return "⌘2"
         case .sessions: return "⌘1"
+        case .knowledge: return "⌘6"
         case .taskBoard: return "⌘3"
         case .conversations: return "⌘4"
         case .contacts: return "⌘5"
@@ -93,6 +97,7 @@ enum DesktopCommand: String, CaseIterable, Identifiable {
         case .toggleInspector: return "i"
         case .workspaces: return "2"
         case .sessions: return "1"
+        case .knowledge: return "6"
         case .taskBoard: return "3"
         case .conversations: return "4"
         case .contacts: return "5"

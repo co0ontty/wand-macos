@@ -1382,6 +1382,8 @@ struct NewSessionView: View {
 /// 首页和会话中的模型搜索共用焦点、清空和输入表面。
 struct SessionModelSearchField: View {
     @Binding var query: String
+    var placeholder = "搜索模型"
+    var clearLabel = "清除模型搜索"
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -1389,11 +1391,11 @@ struct SessionModelSearchField: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(Theme.textMuted)
-            TextField("搜索模型", text: $query)
+            TextField(placeholder, text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($focused)
-                .accessibilityLabel("搜索模型")
+                .accessibilityLabel(placeholder)
             Button {
                 query = ""
                 focused = true
@@ -1407,7 +1409,7 @@ struct SessionModelSearchField: View {
             .opacity(query.isEmpty ? 0 : 1)
             .disabled(query.isEmpty)
             .accessibilityHidden(query.isEmpty)
-            .accessibilityLabel("清除模型搜索")
+            .accessibilityLabel(clearLabel)
         }
         .padding(.horizontal, 9)
         .frame(height: 34)

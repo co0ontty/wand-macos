@@ -380,7 +380,7 @@ final class NativeTerminalTests: XCTestCase {
         var requests: [String] = []
         CommunicationsContractURLProtocol.register(host: host) { request in
             requests.append(request.httpMethod ?? "GET")
-            return Data(#"{"id":"pty-1","sessionKind":"pty","cwd":"/worktree","status":"running"}"#.utf8)
+            return Data(#"{"id":"pty-1","sessionKind":"pty","sessionSource":"quick-terminal","cwd":"/worktree","status":"running"}"#.utf8)
         }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CommunicationsContractURLProtocol.self]
@@ -443,6 +443,260 @@ final class NativeTerminalTests: XCTestCase {
         model.close()
         model.open(cwd: nil)
         XCTAssertFalse(store.terminal.inputEnabled, "An ended shell stays read-only when reopened")
+    }
+
+    func testQuickTerminalMissingReferenceRequiresExplicitReplacement() async throws {
+        for status in [404, 410] {
+            let fixture = QuickTerminalRecoveryFixture()
+            defer { fixture.close() }
+            fixture.getStatus = status
+            let model = fixture.model()
+            model.open(cwd: "/new-worktree")
+            try await waitUntil { !model.busy }
+            XCTAssertTrue(model.canCreateTerminal)
+            XCTAssertTrue(model.recoveryMessage?.contains("已不存在") == true)
+            XCTAssertEqual(fixture.methods, ["GET"])
+            model.close()
+            model.open(cwd: "/new-worktree")
+            try await waitUntil { !model.busy }
+            XCTAssertEqual(fixture.methods, ["GET", "GET"], "Reopening cannot silently create a process")
+            model.createNewTerminal()
+            model.createNewTerminal()
+            try await waitUntil { !model.busy }
+            XCTAssertNotNil(model.terminal)
+            XCTAssertEqual(fixture.methods, ["GET", "GET", "POST"])
+            XCTAssertEqual(fixture.defaults.string(forKey: fixture.key + ".session"), "pty-new")
+            XCTAssertFalse(fixture.defaults.bool(forKey: fixture.key + ".creating"))
+            XCTAssertFalse(model.canCreateTerminal)
+        }
+    }
+
+    func testQuickTerminalTransientFailuresKeepOriginalReference() async throws {
+        for status in [401, 403, 500, 503, -1] {
+            let fixture = QuickTerminalRecoveryFixture()
+            defer { fixture.close() }
+            fixture.getStatus = status
+            let model = fixture.model()
+            model.open(cwd: "/worktree")
+            try await waitUntil { !model.busy }
+            XCTAssertFalse(model.canCreateTerminal, "HTTP \(status) does not confirm that the original terminal is gone")
+            model.createNewTerminal()
+            XCTAssertEqual(fixture.methods, ["GET"])
+            XCTAssertEqual(fixture.defaults.string(forKey: fixture.key + ".session"), "pty-old")
+            fixture.getStatus = 200
+            model.reconnect()
+            try await waitUntil { !model.busy }
+            XCTAssertNotNil(model.terminal)
+            XCTAssertEqual(fixture.methods, ["GET", "GET"])
+        }
+    }
+
+    func testQuickTerminalEndedProcessCanBeReplacedWithoutStoppingOrDeletingHistory() async throws {
+        let fixture = QuickTerminalRecoveryFixture()
+        defer { fixture.close() }
+        let model = fixture.model()
+        model.open(cwd: "/worktree")
+        try await waitUntil { !model.busy }
+        let original = try XCTUnwrap(model.terminal)
+        fixture.sockets[0].onEvent?(try event("init", data: ["status": "running", "output": "OLD HISTORY"], id: "pty-old"))
+        XCTAssertFalse(model.canCreateTerminal)
+        fixture.sockets[0].onEvent?(try event("ended", data: ["status": "exited"], id: "pty-old"))
+        XCTAssertTrue(model.canCreateTerminal)
+        XCTAssertTrue(model.recoveryMessage?.contains("已结束") == true)
+        model.createNewTerminal()
+        try await waitUntil { !model.busy }
+        XCTAssertFalse(model.terminal === original)
+        XCTAssertTrue(visibleText(original.terminal).contains("OLD HISTORY"))
+        XCTAssertEqual(fixture.methods, ["GET", "POST"], "Replacement only creates; it must never stop/delete the original session")
+    }
+
+    func testQuickTerminalEndedSnapshotAllowsReplacementBeforeSocketConnects() async throws {
+        let fixture = QuickTerminalRecoveryFixture()
+        defer { fixture.close() }
+        fixture.snapshotStatus = "exited"
+        let model = fixture.model()
+        model.open(cwd: "/worktree")
+        try await waitUntil { !model.busy }
+        XCTAssertTrue(model.canCreateTerminal)
+        XCTAssertEqual(model.connectionLabel, "进程已结束")
+        fixture.sockets[0].onEvent?(try event("init", data: ["status": "running"], id: "pty-old"))
+        XCTAssertFalse(model.canCreateTerminal, "A newer runtime fact supersedes the read snapshot")
+        fixture.sockets[0].onConnectionChange?(false)
+        XCTAssertFalse(model.canCreateTerminal, "A later disconnect cannot revive the superseded ended snapshot")
+        fixture.sockets[0].onEvent?(try event("ended", data: ["status": "exited"], id: "pty-old"))
+        XCTAssertTrue(model.canCreateTerminal)
+        fixture.snapshotStatus = "running"
+        model.reconnect()
+        try await waitUntil { !model.busy }
+        XCTAssertFalse(model.canCreateTerminal, "A newer HTTP fact also supersedes the old runtime status before reconnect finishes")
+    }
+
+    func testQuickTerminalUnknownReplacementIsNotRetriedAfterReopenOrReload() async throws {
+        for postStatus in [503, 404, 200] {
+            let fixture = QuickTerminalRecoveryFixture()
+            defer { fixture.close() }
+            fixture.getStatus = 404
+            fixture.postStatus = postStatus
+            fixture.invalidPostResponse = postStatus == 200
+            let model = fixture.model()
+            model.open(cwd: "/worktree")
+            try await waitUntil { !model.busy }
+            model.createNewTerminal()
+            try await waitUntil { !model.busy }
+            XCTAssertFalse(model.canCreateTerminal)
+            XCTAssertTrue(fixture.defaults.bool(forKey: fixture.key + ".creating"))
+            model.reconnect()
+            model.open(cwd: nil)
+            model.createNewTerminal()
+            let reloaded = fixture.model()
+            reloaded.open(cwd: "/worktree")
+            reloaded.createNewTerminal()
+            XCTAssertEqual(fixture.methods, ["GET", "POST"], "An unknown creation result remains guarded across every retry entry")
+            XCTAssertNil(reloaded.terminal)
+        }
+    }
+
+    func testQuickTerminalReconnectChecksMountedSessionBeforeReattaching() async throws {
+        let fixture = QuickTerminalRecoveryFixture()
+        defer { fixture.close() }
+        let model = fixture.model()
+        model.open(cwd: "/worktree")
+        try await waitUntil { !model.busy }
+        let original = try XCTUnwrap(model.terminal)
+        fixture.sockets[0].onEvent?(try event("init", data: ["status": "running"], id: "pty-old"))
+        model.reconnect()
+        try await waitUntil { !model.busy }
+        XCTAssertTrue(model.terminal === original, "A successful reconnect keeps the terminal surface")
+        XCTAssertEqual(fixture.sockets[0].connects, 2)
+        fixture.getStatus = 404
+        model.reconnect()
+        try await waitUntil { !model.busy }
+        XCTAssertTrue(model.canCreateTerminal, "A reference deleted after mounting must not be trapped in WebSocket retries")
+        XCTAssertFalse(original.terminal.inputEnabled)
+        fixture.getStatus = 503
+        model.reconnect()
+        try await waitUntil { !model.busy }
+        XCTAssertFalse(model.canCreateTerminal, "The latest failed verification must not retain an old replacement decision")
+        XCTAssertEqual(fixture.methods, ["GET", "GET", "GET", "GET"])
+    }
+
+    func testQuickTerminalReplacementIsSharedAcrossWindows() async throws {
+        let fixture = QuickTerminalRecoveryFixture()
+        defer { fixture.close() }
+        fixture.getStatus = 404
+        let first = fixture.model(), second = fixture.model()
+        first.open(cwd: "/first")
+        second.open(cwd: "/second")
+        try await waitUntil { !first.busy && !second.busy }
+        first.createNewTerminal()
+        second.createNewTerminal()
+        try await waitUntil { !first.busy && !second.busy }
+        XCTAssertEqual(fixture.methods.filter { $0 == "POST" }.count, 1)
+        fixture.getStatus = 200
+        second.reconnect()
+        try await waitUntil { !second.busy }
+        XCTAssertNotNil(second.terminal)
+        XCTAssertEqual(fixture.sockets.last?.subscriptions, ["pty-new:true"])
+        XCTAssertEqual(fixture.methods.filter { $0 == "POST" }.count, 1)
+    }
+
+    func testQuickTerminalCreationMarksOnlyTheDetailPanelShell() async throws {
+        let fixture = QuickTerminalRecoveryFixture()
+        defer { fixture.close() }
+        fixture.defaults.set("", forKey: fixture.key + ".session")
+        let model = fixture.model()
+        model.open(cwd: "/panel-worktree")
+        try await waitUntil { !model.busy }
+        XCTAssertNotNil(model.terminal)
+        XCTAssertEqual(fixture.requestBodies[0]["sessionSource"] as? String, "quick-terminal")
+        XCTAssertEqual(fixture.requestBodies[0]["cwd"] as? String, "/panel-worktree")
+        let ordinary = try await fixture.api.createBlankTerminal(cwd: "/ordinary-shell", initialInput: nil)
+        XCTAssertEqual(fixture.requestBodies[1]["sessionSource"] as? String, "interactive")
+        XCTAssertEqual(ordinary.sessionSource, "interactive")
+        XCTAssertEqual(fixture.methods, ["POST", "POST"])
+    }
+
+    func testQuickTerminalLegacyReferenceIsClaimedBeforeMountingWithoutCreating() async throws {
+        let fixture = QuickTerminalRecoveryFixture()
+        defer { fixture.close() }
+        fixture.sessionSource = "interactive"
+        var refreshes = 0
+        let observer = NotificationCenter.default.addObserver(forName: .wandRefreshLists, object: nil, queue: .main) { _ in refreshes += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let model = fixture.model()
+        model.open(cwd: "/different-worktree")
+        try await waitUntil { !model.busy }
+        XCTAssertNotNil(model.terminal)
+        XCTAssertEqual(fixture.methods, ["GET", "PUT"])
+        XCTAssertEqual(fixture.requests[1].url?.path, "/api/sessions/pty-old/quick-terminal")
+        XCTAssertEqual(fixture.sockets[0].subscriptions, ["pty-old:true"])
+        XCTAssertEqual(fixture.defaults.string(forKey: fixture.key + ".session"), "pty-old")
+        XCTAssertEqual(refreshes, 1)
+        model.reconnect()
+        try await waitUntil { !model.busy }
+        XCTAssertEqual(fixture.methods, ["GET", "PUT", "GET"])
+        XCTAssertEqual(refreshes, 1, "Already marked shells need no metadata write or list refresh")
+    }
+
+    func testQuickTerminalFailedClaimCannotMasqueradeAsMissingOriginal() async throws {
+        for status in [404, 410, 403, 503] {
+            let fixture = QuickTerminalRecoveryFixture()
+            defer { fixture.close() }
+            fixture.sessionSource = "interactive"
+            fixture.claimStatus = status
+            let model = fixture.model()
+            model.open(cwd: "/worktree")
+            try await waitUntil { !model.busy }
+            XCTAssertNil(model.terminal)
+            XCTAssertFalse(model.canCreateTerminal)
+            model.createNewTerminal()
+            XCTAssertEqual(fixture.methods, ["GET", "PUT"])
+            XCTAssertEqual(fixture.defaults.string(forKey: fixture.key + ".session"), "pty-old")
+            fixture.claimStatus = 200
+            model.reconnect()
+            try await waitUntil { !model.busy }
+            XCTAssertNotNil(model.terminal)
+            XCTAssertEqual(fixture.methods, ["GET", "PUT", "GET", "PUT"])
+        }
+    }
+
+    func testQuickTerminalAuthenticatedReconciliationDoesNotOpenOrCreate() async throws {
+        let fixture = QuickTerminalRecoveryFixture()
+        defer { fixture.close() }
+        fixture.sessionSource = "interactive"
+        let model = fixture.model()
+        await model.reconcileSavedTerminal()
+        XCTAssertEqual(fixture.methods, ["GET", "PUT"])
+        XCTAssertFalse(model.isOpen)
+        XCTAssertNil(model.terminal)
+        XCTAssertTrue(fixture.sockets.isEmpty)
+        await model.reconcileSavedTerminal()
+        XCTAssertEqual(fixture.methods, ["GET", "PUT", "GET"])
+        fixture.defaults.set("", forKey: fixture.key + ".session")
+        await model.reconcileSavedTerminal()
+        fixture.defaults.set("unconfirmed", forKey: fixture.key + ".session")
+        fixture.defaults.set(true, forKey: fixture.key + ".creating")
+        await model.reconcileSavedTerminal()
+        XCTAssertEqual(fixture.methods, ["GET", "PUT", "GET"], "Empty or unconfirmed references must never trigger discovery or creation")
+    }
+
+    func testQuickTerminalAuthenticatedReconciliationIgnoresOtherSessionKindsAndFailures() async throws {
+        for scenario in ["structured", "provider", "missing", "claim-failed"] {
+            let fixture = QuickTerminalRecoveryFixture()
+            defer { fixture.close() }
+            fixture.sessionSource = "interactive"
+            if scenario == "structured" { fixture.sessionKind = "structured" }
+            if scenario == "provider" { fixture.provider = "claude" }
+            if scenario == "missing" { fixture.getStatus = 404 }
+            if scenario == "claim-failed" { fixture.claimStatus = 503 }
+            let model = fixture.model()
+            await model.reconcileSavedTerminal()
+            XCTAssertEqual(fixture.methods, scenario == "claim-failed" ? ["GET", "PUT"] : ["GET"])
+            XCTAssertFalse(model.isOpen)
+            XCTAssertNil(model.terminal)
+            XCTAssertFalse(model.canCreateTerminal)
+            XCTAssertEqual(fixture.defaults.string(forKey: fixture.key + ".session"), "pty-old")
+        }
     }
 
     private func captureQuickTerminal(model: QuickTerminalModel, directory: String) async throws {
@@ -636,6 +890,109 @@ final class NativeTerminalTests: XCTestCase {
         XCTFail("Native terminal acceptance condition timed out (credentials intentionally omitted)", file: file, line: line)
         throw NSError(domain: "NativeTerminalAcceptance", code: 1)
     }
+}
+
+@MainActor
+private final class QuickTerminalRecoveryFixture {
+    let host = "quick-recovery-\(UUID().uuidString).example.test"
+    let suite = "QuickTerminalRecovery.\(UUID().uuidString)"
+    let defaults: UserDefaults
+    let session: URLSession
+    let api: WandAPI
+    let key: String
+    var getStatus = 200
+    var postStatus = 200
+    var claimStatus = 200
+    var sessionSource = "quick-terminal"
+    var sessionKind = "pty"
+    var provider: String?
+    var invalidPostResponse = false
+    var snapshotStatus = "running"
+    var methods: [String] = []
+    var requests: [URLRequest] = []
+    var requestBodies: [[String: Any]] = []
+    var sockets: [RecordingTerminalSocket] = []
+    private var models: [QuickTerminalModel] = []
+
+    init() {
+        defaults = UserDefaults(suiteName: suite)!
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [QuickTerminalRecoveryURLProtocol.self]
+        session = URLSession(configuration: configuration)
+        let url = URL(string: "https://\(host)")!
+        api = WandAPI(baseURL: url, token: nil, session: session, reportServerFailure: { _, _, _ in })
+        key = "wand.quick-terminal.v1." + url.absoluteString
+        defaults.set("pty-old", forKey: key + ".session")
+        QuickTerminalRecoveryURLProtocol.register(host: host) { [weak self] request in
+            guard let self else { throw URLError(.cancelled) }
+            let method = request.httpMethod ?? "GET"
+            self.methods.append(method)
+            self.requests.append(request)
+            var bodyData = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; bodyData.append(buffer, count: count)
+                }
+            }
+            let body = bodyData.isEmpty ? [:] : try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+            self.requestBodies.append(body)
+            let status = method == "POST" ? self.postStatus : method == "PUT" ? self.claimStatus : self.getStatus
+            if status == -1 { throw URLError(.notConnectedToInternet) }
+            if method == "POST", self.invalidPostResponse { return (200, Data("invalid-json".utf8)) }
+            let id = method == "POST" ? "pty-new" : method == "PUT" ? request.url!.deletingLastPathComponent().lastPathComponent : request.url!.lastPathComponent
+            if method == "PUT", status == 200 { self.sessionSource = "quick-terminal" }
+            let source = method == "POST" ? body["sessionSource"] as? String ?? "interactive" : self.sessionSource
+            var payload: [String: Any] = ["id": id, "sessionKind": self.sessionKind, "sessionSource": source, "cwd": "/worktree", "status": self.snapshotStatus]
+            if let provider = self.provider { payload["provider"] = provider }
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (status, data)
+        }
+    }
+
+    func model() -> QuickTerminalModel {
+        let model = QuickTerminalModel(api: api, defaults: defaults) { [unowned self] id, api in
+            let socket = RecordingTerminalSocket()
+            self.sockets.append(socket)
+            return PtyTerminalStore(sessionId: id, api: api, socket: socket, defaults: self.defaults)
+        }
+        models.append(model)
+        return model
+    }
+
+    func close() {
+        for model in models { model.terminal?.shutdown() }
+        session.invalidateAndCancel()
+        QuickTerminalRecoveryURLProtocol.unregister(host: host)
+        defaults.removePersistentDomain(forName: suite)
+    }
+}
+
+private final class QuickTerminalRecoveryURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var handlers: [String: @MainActor (URLRequest) throws -> (Int, Data)] = [:]
+    static func register(host: String, handler: @escaping @MainActor (URLRequest) throws -> (Int, Data)) {
+        lock.lock(); defer { lock.unlock() }; handlers[host] = handler
+    }
+    static func unregister(host: String) { lock.lock(); defer { lock.unlock() }; handlers.removeValue(forKey: host) }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.lock(); let handler = Self.handlers[request.url?.host ?? ""]; Self.lock.unlock()
+        Task { @MainActor in
+            do {
+                guard let handler, let url = self.request.url else { throw URLError(.unsupportedURL) }
+                let (status, data) = try handler(self.request)
+                let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                self.client?.urlProtocol(self, didLoad: data)
+                self.client?.urlProtocolDidFinishLoading(self)
+            } catch { self.client?.urlProtocol(self, didFailWithError: error) }
+        }
+    }
+    override func stopLoading() {}
 }
 
 private final class RecordingTerminalSocket: PtySocketTransport {

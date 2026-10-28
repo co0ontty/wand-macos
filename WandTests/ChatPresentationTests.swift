@@ -130,6 +130,71 @@ final class ChatPresentationTests: XCTestCase {
         XCTAssertEqual(ChatDisclosurePresentation.toolStatus(hasResult: true, isError: false, running: true), "完成")
     }
 
+    @MainActor
+    func testTodoLifecycleUsesTranscriptSourceAndObservedTerminalEvidence() throws {
+        let store = ChatStore(sessionId: "todo", api: WandAPI(baseURL: URL(string: "http://fixture.example.test")!, token: nil))
+        defer { store.shutdown() }
+        let messages: [[String: Any]] = [
+            ["role": "user", "requestId": "r1", "content": [["type": "text", "text": "相同输入"]]],
+            ["role": "assistant", "content": [["type": "tool_use", "id": "list", "name": "TodoWrite", "input": ["todos": [["content": "已完成", "status": "completed"], ["content": "最后记录", "status": "in_progress"]]]]]],
+        ]
+        func receive(_ type: String, _ extra: [String: Any]) throws {
+            var data: [String: Any] = ["id": "todo", "sessionKind": "structured", "messages": messages, "messageTotal": messages.count, "messageOffset": 0]
+            data.merge(extra) { _, new in new }
+            let raw = try JSONSerialization.data(withJSONObject: ["type": type, "sessionId": "todo", "data": data])
+            store.receiveForTesting(try JSONDecoder().decode(WsIncoming.self, from: raw))
+        }
+        let active: [String: Any] = ["status": "running", "structuredState": ["inFlight": true, "activeRequestId": "r1"]]
+        let idle: [String: Any] = ["status": "idle", "structuredState": ["inFlight": false]]
+        try receive("init", active)
+        XCTAssertEqual(store.todoProgress?.context.kind, .running)
+        try receive("output", idle)
+        XCTAssertEqual(store.todoProgress?.context.kind, .unknown, "idle is not a stop receipt")
+        try receive("ended", idle.merging(["turnOutcome": "stopped"]) { _, new in new })
+        XCTAssertEqual(store.todoProgress?.context.kind, .stopped)
+        XCTAssertEqual(store.todoProgress?.todos.filter { $0.status == "completed" }.count, 1)
+        XCTAssertEqual(store.todoProgress?.todos.last?.status, "in_progress", "history must not rewrite Todo state")
+        try receive("init", idle)
+        XCTAssertEqual(store.todoProgress?.context.kind, .unknown, "reconnect cannot reconstruct a missed reason")
+        try receive("output", ["status": "running", "structuredState": ["inFlight": true, "activeRequestId": "r2"]])
+        XCTAssertNil(store.todoProgress, "accepted new request retires old Todo even before its user message arrives")
+        let next = messages + [["role": "user", "requestId": "r2", "content": [["type": "text", "text": "相同输入"]]]]
+        try receive("output", ["messages": next, "messageTotal": next.count, "status": "running", "structuredState": ["inFlight": true, "activeRequestId": "r2"]])
+        XCTAssertNil(store.todoProgress, "new round without Todo cannot reuse the old list")
+    }
+
+    func testTodoToolResultsKeepLogicalSourceAndPartialLegacySourcesAreConservative() throws {
+        let first = try decode(ConversationTurn.self, #"{"role":"user","requestId":"r1","content":[{"type":"text","text":"开始"}]}"#)
+        let task = try decode(ConversationTurn.self, #"{"role":"assistant","content":[{"type":"tool_use","id":"todo","name":"TodoWrite","input":{"todos":[{"content":"A","status":"in_progress"}]}}]}"#)
+        let answer = try decode(ConversationTurn.self, #"{"role":"user","requestId":"r2","content":[{"type":"tool_result","tool_use_id":"q","content":"是"}]}"#)
+        let old = try XCTUnwrap(TodoTurnSource.find(sessionID: "s", messages: [first, task], offset: 10))
+        let source = try XCTUnwrap(TodoTurnSource.find(sessionID: "s", messages: [first, task, answer], offset: 10, activeRequestID: "r2"))
+        XCTAssertEqual(source.key, old.key)
+        XCTAssertEqual(source.requestID, "r2")
+        XCTAssertEqual(TodoItem.currentTodos(in: [first, task, answer], startIndex: source.startIndex).count, 1)
+        XCTAssertNil(TodoTurnSource.find(sessionID: "s", messages: [first, task], offset: 10, leadingBlockOffset: 1))
+        XCTAssertNil(TodoTurnSource.find(sessionID: "s", messages: [task], offset: 10))
+        XCTAssertNil(TodoTurnSource.find(sessionID: "s", messages: [ConversationTurn(role: "user", content: [.text(text: "旧记录", subagent: nil)]), task], offset: 0))
+    }
+
+    func testTodoWaitingFailureCompletionAndEvidenceConflictRemainDistinct() throws {
+        let messages = try decode([ConversationTurn].self, #"[{"role":"user","requestId":"r","content":[{"type":"text","text":"开始"}]},{"role":"assistant","content":[{"type":"tool_use","id":"q","name":"AskUserQuestion","input":{"questions":[]}}]}]"#)
+        let source = try XCTUnwrap(TodoTurnSource.find(sessionID: "s", messages: messages, offset: 0))
+        func view(_ status: String, active: Bool = false, permission: Bool = false, connected: Bool = true, outcome: String? = nil) -> TodoExecutionPresentation {
+            .make(source: source, status: status, active: active, permission: permission, archived: false, connected: connected,
+                  evidence: outcome.map { TodoTurnEvidence(sourceKey: source.key, requestID: "r", outcome: $0) })
+        }
+        XCTAssertEqual(view("running").kind, .waiting)
+        XCTAssertEqual(view("idle").kind, .unknown)
+        XCTAssertEqual(view("running", active: true).kind, .running)
+        XCTAssertEqual(view("running", permission: true).kind, .permission)
+        XCTAssertEqual(view("failed").kind, .failed)
+        XCTAssertEqual(view("idle", outcome: "done").kind, .ended)
+        XCTAssertEqual(view("idle", outcome: "stopped").kind, .stopped)
+        XCTAssertEqual(view("running", active: true, outcome: "stopped").kind, .unknown)
+        XCTAssertEqual(view("idle", connected: false, outcome: "stopped").kind, .unknown)
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         try JSONDecoder().decode(type, from: Data(json.utf8))
     }
@@ -366,6 +431,62 @@ final class NativeSubtaskLiveTests: XCTestCase {
         try capture("installed-900px")
         try await click("subtasks-trigger")
         XCTAssertEqual(input.string, draft)
+    }
+
+}
+
+final class NativeQueueDensityTests: XCTestCase {
+    @MainActor
+    func testQueueDensityUsesActualOverflowAndNativeActions() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let output = root.appendingPathComponent("output/architecture-stage2/qoderwake-p2-previews/TASK-159/implementation/native")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let long = String(repeating: "完整正文保留换行与路径。\n", count: 12) + "全文末尾不可丢失"
+        var heights: [String: CGFloat] = [:]
+        for width in [CGFloat(536), CGFloat(264)] {
+            for (name, text) in [("short", "先检查桌面。"), ("long", long)] {
+                let row = QueueItemRow(index: 0, text: text, onPromote: {}, onDelete: {}, onRetrieve: {}, onMove: { _ in }, canRetrieve: true, canDelete: true, count: 2)
+                let host = NSHostingView(rootView: row.frame(width: width).padding(8).background(Theme.surface).transaction { $0.animation = nil; $0.disablesAnimations = true })
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width + 16, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+                window.contentView = host; window.orderFront(nil)
+                defer { window.orderOut(nil); window.contentView = nil }
+                host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 120_000_000); host.layoutSubtreeIfNeeded()
+                heights["\(Int(width))-\(name)"] = host.fittingSize.height
+                XCTAssertLessThanOrEqual(host.fittingSize.width, width + 17)
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("queue-\(Int(width))-\(name).png"))
+            }
+        }
+        XCTAssertLessThan(try XCTUnwrap(heights["536-short"]), 80)
+        XCTAssertGreaterThan(try XCTUnwrap(heights["264-short"]), try XCTUnwrap(heights["536-short"]))
+    }
+
+    @MainActor
+    func testQueueFullTextAndRetrieveUseRealNativeButtons() async throws {
+        var retrieved = 0
+        let long = String(repeating: "长文完整内容不可丢失。\n", count: 12) + "全文末尾"
+        let row = QueueItemRow(index: 0, text: long, onPromote: {}, onDelete: {}, onRetrieve: { retrieved += 1 }, onMove: { _ in }, canRetrieve: true, canDelete: true, count: 2)
+        let host = NSHostingView(rootView: row.frame(width: 536).padding(8).background(Theme.surface).transaction { $0.animation = nil; $0.disablesAnimations = true })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 552, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 120_000_000)
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func press(_ id: String) throws {
+            let node = try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id }, "Missing native queue control: \(id)")
+            let rect = node.convert(node.bounds, to: nil)
+            window.makeKeyAndOrderFront(nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+            }
+        }
+        let collapsed = host.fittingSize.height
+        try press("queue-expand-0"); try await Task.sleep(nanoseconds: 120_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.height, collapsed + 80)
+        try press("queue-expand-0"); try await Task.sleep(nanoseconds: 120_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(host.fittingSize.height, collapsed, accuracy: 1)
+        try press("queue-retrieve-0"); XCTAssertEqual(retrieved, 1)
     }
 
 }

@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F271A0000000000000000201 /* KnowledgeLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271A0000000000000000202 /* KnowledgeLibraryTests.swift */; };
+		F271A0000000000000000101 /* KnowledgeLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271A0000000000000000102 /* KnowledgeLibraryView.swift */; };
+		F271A0000000000000000001 /* KnowledgeLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271A0000000000000000002 /* KnowledgeLibrary.swift */; };
+		F27110000000000000000001 /* MessageLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27110000000000000000002 /* MessageLink.swift */; };
+		F27110000000000000000003 /* MessageLinkPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27110000000000000000004 /* MessageLinkPreview.swift */; };
+		F27110000000000000000005 /* MessageLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27110000000000000000006 /* MessageLinkTests.swift */; };
 		119000000000000000000001 /* DesktopPageLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119000000000000000000002 /* DesktopPageLink.swift */; };
 		D610000000000000000000A5 /* DesktopExecutionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B5 /* DesktopExecutionProgress.swift */; };
 		D610000000000000000000A4 /* DesktopActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D610000000000000000000B4 /* DesktopActivityTests.swift */; };
@@ -68,6 +74,7 @@
 		D5000000000000000000AC02 /* TaskBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC02 /* TaskBoardView.swift */; };
 		D5000000000000000000AC03 /* TaskBoardComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC03 /* TaskBoardComponents.swift */; };
 		D5000000000000000000AC04 /* TaskBoardBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC04 /* TaskBoardBoardView.swift */; };
+		A16300000000000000000002 /* TaskActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A16300000000000000000001 /* TaskActions.swift */; };
 		D5000000000000000000AC05 /* TaskBoardViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC05 /* TaskBoardViews.swift */; };
 		D5000000000000000000AC06 /* TaskBoardPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC06 /* TaskBoardPickers.swift */; };
 		D5000000000000000000AC07 /* TaskBoardDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5000000000000000000BC07 /* TaskBoardDetailView.swift */; };
@@ -119,6 +126,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		F271A0000000000000000202 /* KnowledgeLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeLibraryTests.swift; sourceTree = "<group>"; };
+		F271A0000000000000000102 /* KnowledgeLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeLibraryView.swift; sourceTree = "<group>"; };
+		F271A0000000000000000002 /* KnowledgeLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeLibrary.swift; sourceTree = "<group>"; };
+		F27110000000000000000002 /* MessageLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageLink.swift; sourceTree = "<group>"; };
+		F27110000000000000000004 /* MessageLinkPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageLinkPreview.swift; sourceTree = "<group>"; };
+		F27110000000000000000006 /* MessageLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageLinkTests.swift; sourceTree = "<group>"; };
 		119000000000000000000002 /* DesktopPageLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopPageLink.swift; sourceTree = "<group>"; };
 		D610000000000000000000B5 /* DesktopExecutionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopExecutionProgress.swift; sourceTree = "<group>"; };
 		D610000000000000000000B4 /* DesktopActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActivityTests.swift; sourceTree = "<group>"; };
@@ -182,6 +195,7 @@
 		D5000000000000000000BC02 /* TaskBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardView.swift; sourceTree = "<group>"; };
 		D5000000000000000000BC03 /* TaskBoardComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardComponents.swift; sourceTree = "<group>"; };
 		D5000000000000000000BC04 /* TaskBoardBoardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardBoardView.swift; sourceTree = "<group>"; };
+		A16300000000000000000001 /* TaskActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActions.swift; sourceTree = "<group>"; };
 		D5000000000000000000BC05 /* TaskBoardViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardViews.swift; sourceTree = "<group>"; };
 		D5000000000000000000BC06 /* TaskBoardPickers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardPickers.swift; sourceTree = "<group>"; };
 		D5000000000000000000BC07 /* TaskBoardDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskBoardDetailView.swift; sourceTree = "<group>"; };
@@ -284,6 +298,8 @@
 				C9000000000000000000B008 /* FocusComposer.swift */,
 				C9000000000000000000B00A /* NativeAcceptance.swift */,
 				C9000000000000000000B009 /* PlushScene */,
+				F271A0000000000000000002 /* KnowledgeLibrary.swift */,
+				F271A0000000000000000102 /* KnowledgeLibraryView.swift */,
 				A200000000000000000000B2 /* WandAPI.swift */,
 				A200000000000000000000B3 /* WandSocket.swift */,
 				FA11000000000000000000B1 /* ClientFeedback.swift */,
@@ -293,6 +309,9 @@
 				A200000000000000000000B4 /* ChatStore.swift */,
 				A200000000000000000000B5 /* ChatView.swift */,
 				F7000000000000000000B001 /* ChatImagePreview.swift */,
+				F27110000000000000000002 /* MessageLink.swift */,
+				F27110000000000000000004 /* MessageLinkPreview.swift */,
+
 				C9000000000000000000B00B /* ChatContentLayout.swift */,
 				A200000000000000000000B7 /* NewSessionView.swift */,
 				A200000000000000000000B9 /* GitQuickCommitView.swift */,
@@ -312,6 +331,7 @@
 				D5000000000000000000BC03 /* TaskBoardComponents.swift */,
 				D5000000000000000000BC04 /* TaskBoardBoardView.swift */,
 				D5000000000000000000BC05 /* TaskBoardViews.swift */,
+				A16300000000000000000001 /* TaskActions.swift */,
 				D5000000000000000000BC06 /* TaskBoardPickers.swift */,
 				D5000000000000000000BC07 /* TaskBoardDetailView.swift */,
 				FA11000000000000000000B2 /* TaskComments.swift */,
@@ -361,6 +381,7 @@
 				D7000000000000000000B103 /* DesktopLifecycleTests.swift */,
 				D7000000000000000000B104 /* GitStatusPresentationTests.swift */,
 				D7000000000000000000B105 /* ProviderCatalogTests.swift */,
+				F271A0000000000000000202 /* KnowledgeLibraryTests.swift */,
 				C9000000000000000000B101 /* CommunicationsTests.swift */,
 				C9000000000000000000B102 /* CommunicationsContractURLProtocol.swift */,
 				C9000000000000000000B103 /* CommunicationsVisualTests.swift */,
@@ -369,6 +390,8 @@
 				C9000000000000000000B106 /* ChatContentWidthTests.swift */,
 				C9000000000000000000B107 /* SettingsLayoutTests.swift */,
 				F7000000000000000000B101 /* ChatImagePreviewTests.swift */,
+				F27110000000000000000006 /* MessageLinkTests.swift */,
+
 				D800000000000000000000B4 /* NativeTerminalTests.swift */,
 				B9000000000000000000B03 /* EmployeeImTests.swift */,
 			);
@@ -509,6 +532,8 @@
 				C9000000000000000000A007 /* SharedPlushScene.swift in Sources */,
 				C9000000000000000000A008 /* FocusComposer.swift in Sources */,
 				C9000000000000000000A00A /* NativeAcceptance.swift in Sources */,
+				F271A0000000000000000001 /* KnowledgeLibrary.swift in Sources */,
+				F271A0000000000000000101 /* KnowledgeLibraryView.swift in Sources */,
 				A200000000000000000000A2 /* WandAPI.swift in Sources */,
 				A200000000000000000000A3 /* WandSocket.swift in Sources */,
 				FA11000000000000000000A1 /* ClientFeedback.swift in Sources */,
@@ -518,6 +543,9 @@
 				A200000000000000000000A4 /* ChatStore.swift in Sources */,
 				A200000000000000000000A5 /* ChatView.swift in Sources */,
 				F7000000000000000000A001 /* ChatImagePreview.swift in Sources */,
+				F27110000000000000000001 /* MessageLink.swift in Sources */,
+				F27110000000000000000003 /* MessageLinkPreview.swift in Sources */,
+
 				C9000000000000000000A00B /* ChatContentLayout.swift in Sources */,
 				A200000000000000000000A7 /* NewSessionView.swift in Sources */,
 				A200000000000000000000A9 /* GitQuickCommitView.swift in Sources */,
@@ -537,6 +565,7 @@
 				D5000000000000000000AC03 /* TaskBoardComponents.swift in Sources */,
 				D5000000000000000000AC04 /* TaskBoardBoardView.swift in Sources */,
 				D5000000000000000000AC05 /* TaskBoardViews.swift in Sources */,
+				A16300000000000000000002 /* TaskActions.swift in Sources */,
 				D5000000000000000000AC06 /* TaskBoardPickers.swift in Sources */,
 				D5000000000000000000AC07 /* TaskBoardDetailView.swift in Sources */,
 				FA11000000000000000000A2 /* TaskComments.swift in Sources */,
@@ -574,6 +603,7 @@
 				D7000000000000000000A103 /* DesktopLifecycleTests.swift in Sources */,
 				D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */,
 				D7000000000000000000A105 /* ProviderCatalogTests.swift in Sources */,
+				F271A0000000000000000201 /* KnowledgeLibraryTests.swift in Sources */,
 				C9000000000000000000A101 /* CommunicationsTests.swift in Sources */,
 				C9000000000000000000A102 /* CommunicationsContractURLProtocol.swift in Sources */,
 				C9000000000000000000A103 /* CommunicationsVisualTests.swift in Sources */,
@@ -582,6 +612,8 @@
 				C9000000000000000000A106 /* ChatContentWidthTests.swift in Sources */,
 				C9000000000000000000A107 /* SettingsLayoutTests.swift in Sources */,
 				F7000000000000000000A101 /* ChatImagePreviewTests.swift in Sources */,
+				F27110000000000000000005 /* MessageLinkTests.swift in Sources */,
+
 				D800000000000000000000A4 /* NativeTerminalTests.swift in Sources */,
 				B9000000000000000000A03 /* EmployeeImTests.swift in Sources */,
 			);

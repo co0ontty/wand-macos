@@ -6,9 +6,13 @@ import UniformTypeIdentifiers
 struct CommunicationsSidebar: View {
     @ObservedObject var store: CommunicationsStore
     var sessions: [WorkspaceSessionSummary] = []
+    var taskGroups: [TaskDirectoryGroup] = []
     var selectedSessionID: String? = nil
+    var onOpenSession: (String) -> Void = { _ in }
     private var conversationRows: [NativeConversation] { store.conversationList(sessions: sessions, selectedSessionID: selectedSessionID) }
     @FocusState private var searchFocused: Bool
+    @State private var expandedPeople: Set<String> = []
+    @State private var otherOpen = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -68,26 +72,15 @@ struct CommunicationsSidebar: View {
                         }
                     } else {
                         ForEach(conversationRows) { conversation in
-                            Button { store.select(conversation.id) } label: {
-                                HStack(spacing: 9) {
-                                    if conversation.external != nil { Image(systemName: "person.3").frame(width: 44, height: 44).foregroundColor(Theme.textSecondary) }
-                                    else if conversation.isGroup { ContactGroupAvatar(profile: store.userProfile, members: conversation.members, contacts: store.contacts) }
-                                    else { ContactAvatar(id: conversation.peerEmployeeId ?? conversation.id, avatar: store.contact(conversation.peerEmployeeId)?.avatar ?? "", name: conversation.displayTitle, size: 44) }
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(conversation.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                                        Text(conversation.external != nil ? "钉钉 · " + (conversation.preview ?? "等待群消息同步") : conversation.dissolvedAt != nil ? "已解散 · 历史保留" : conversation.preview ?? "尚无消息")
-                                            .font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(2)
-                                    }
-                                    Spacer(minLength: 0)
-                                    if conversation.pinnedAt != nil { Image(systemName: "pin.fill").font(.system(size: 9)) }
-                                }
-                                .foregroundColor(Theme.textPrimary).padding(.horizontal, 9).frame(minHeight: 56)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(DesktopNavigationButtonStyle(active: store.selectedID == conversation.id))
-                            .accessibilityLabel(conversation.displayTitle)
+                            conversationPerson(conversation)
                         }
-                        if conversationRows.isEmpty && !store.indexLoading {
+                        ForEach(sessionOnlyPeople, id: \.id) { person in
+                            sessionOnlyPerson(person)
+                        }
+                        if !otherConversationSessions.isEmpty {
+                            otherConversationSection
+                        }
+                        if conversationRows.isEmpty && otherConversationSessions.isEmpty && !store.indexLoading {
                             Text(!store.query.isEmpty ? "没有匹配的对话" : store.activityOnly ? "现在没有符合筛选条件的活动对话。" : store.archiveFilter == .archived ? "还没有已归档的对话。" : store.archiveFilter == .unarchived ? "还没有未归档的对话。" : DesktopGroupChatPresentation.isVisible ? "从通讯录选择员工开始私聊，或在上方加号发起群聊。" : "从通讯录选择员工开始私聊。")
                                 .font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(16)
                         }
@@ -97,6 +90,125 @@ struct CommunicationsSidebar: View {
                 .padding(.horizontal, 12).padding(.bottom, 16)
             }
         }
+    }
+
+    private var indexedSessions: [WorkspaceSessionSummary] {
+        if taskGroups.isEmpty { return sessions }
+        return taskGroups.flatMap { group in
+            group.tasks.flatMap(\.sessions) + group.standaloneSessions
+        }
+    }
+
+    private func sessions(for employeeId: String?) -> [WorkspaceSessionSummary] {
+        indexedSessions.filter { session in
+            session.employeeId == employeeId && session.teamChat == nil
+        }.sorted { ($0.startedAt ?? "") > ($1.startedAt ?? "") }
+    }
+
+    private var otherConversationSessions: [WorkspaceSessionSummary] {
+        indexedSessions.filter { $0.employeeId == nil && $0.teamChat == nil }
+    }
+
+    private var sessionOnlyPeople: [(id: String, name: String, preview: String)] {
+        let owned = Set(conversationRows.compactMap { $0.kind == "dm" ? $0.peerEmployeeId : nil })
+        var seen = Set<String>()
+        var rows: [(String, String, String)] = []
+        for session in indexedSessions where session.teamChat == nil {
+            guard let employeeId = session.employeeId, !owned.contains(employeeId), seen.insert(employeeId).inserted else { continue }
+            rows.append((employeeId, session.employeeName ?? "员工", session.title ?? "有工作会话，尚未开始私聊"))
+        }
+        return rows
+    }
+
+    private func sessionOnlyPerson(_ person: (id: String, name: String, preview: String)) -> some View {
+        let conversationId = "dm_\(person.id)"
+        let personSessions = sessions(for: person.id)
+        let expanded = expandedPeople.contains(conversationId) || !store.query.isEmpty
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Button { store.select(conversationId) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                        Text(person.preview).font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                    }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }.buttonStyle(.plain).accessibilityLabel("打开\(person.name)的私聊")
+                Button {
+                    if expandedPeople.contains(conversationId) { expandedPeople.remove(conversationId) } else { expandedPeople.insert(conversationId) }
+                } label: { Image(systemName: "chevron.right").rotationEffect(.degrees(expanded ? 90 : 0)).frame(width: 28, height: 32) }
+                    .buttonStyle(.plain).accessibilityLabel("展开\(person.name)的会话")
+            }
+            if expanded {
+                ForEach(personSessions, id: \.id) { session in conversationSessionRow(session) }
+            }
+        }.padding(.horizontal, 9)
+    }
+
+    @ViewBuilder private func conversationPerson(_ conversation: NativeConversation) -> some View {
+        let personSessions = sessions(for: conversation.peerEmployeeId)
+        let expanded = expandedPeople.contains(conversation.id) || !store.query.isEmpty
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Button { store.select(conversation.id) } label: {
+                    HStack(spacing: 9) {
+                        if conversation.external != nil { Image(systemName: "person.3").frame(width: 36, height: 36).foregroundColor(Theme.textSecondary) }
+                        else if conversation.isGroup { ContactGroupAvatar(profile: store.userProfile, members: conversation.members, contacts: store.contacts) }
+                        else { ContactAvatar(id: conversation.peerEmployeeId ?? conversation.id, avatar: store.contact(conversation.peerEmployeeId)?.avatar ?? "", name: conversation.displayTitle, size: 36) }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(conversation.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Text(personSessions.first?.title ?? conversation.preview ?? "私聊")
+                                .font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        if conversation.pinnedAt != nil { Image(systemName: "pin.fill").font(.system(size: 9)) }
+                    }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                }.buttonStyle(.plain).accessibilityLabel("打开\(conversation.displayTitle)的私聊")
+                if conversation.kind == "dm" && !personSessions.isEmpty {
+                    Button {
+                        if expandedPeople.contains(conversation.id) { expandedPeople.remove(conversation.id) }
+                        else { expandedPeople.insert(conversation.id) }
+                    } label: {
+                        Image(systemName: "chevron.right").rotationEffect(.degrees(expanded ? 90 : 0))
+                            .frame(width: 28, height: 32)
+                    }.buttonStyle(.plain).accessibilityLabel(expanded ? "收起\(conversation.displayTitle)的会话" : "展开\(conversation.displayTitle)的会话")
+                }
+            }
+            .foregroundColor(Theme.textPrimary).padding(.horizontal, 9)
+            .background(store.selectedID == conversation.id ? Theme.wandAccent.opacity(0.12) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            if expanded {
+                ForEach(personSessions, id: \.id) { session in
+                    conversationSessionRow(session)
+                }
+            }
+        }
+    }
+
+    private var otherConversationSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button { otherOpen.toggle() } label: {
+                HStack {
+                    Image(systemName: "terminal")
+                    Text("其他会话")
+                    Spacer()
+                    Text("\(otherConversationSessions.count)")
+                    Image(systemName: "chevron.right").rotationEffect(.degrees(otherOpen || !store.query.isEmpty ? 90 : 0))
+                }.font(.system(size: 12)).foregroundColor(Theme.textSecondary).frame(minHeight: 36)
+            }.buttonStyle(.plain).accessibilityLabel("其他会话")
+            if otherOpen || !store.query.isEmpty {
+                ForEach(otherConversationSessions, id: \.id) { session in conversationSessionRow(session) }
+            }
+        }.padding(.horizontal, 9).padding(.top, 8)
+    }
+
+    private func conversationSessionRow(_ session: WorkspaceSessionSummary) -> some View {
+        Button { onOpenSession(session.id) } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.title ?? "会话").font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text([session.status, session.providerLabel].compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 10)).foregroundColor(Theme.textSecondary).lineLimit(1)
+            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.leading, 28)
+        }.buttonStyle(DesktopNavigationButtonStyle(active: selectedSessionID == session.id))
+            .accessibilityLabel("继续会话：\(session.title ?? "会话")")
     }
 }
 
@@ -507,7 +619,9 @@ private struct CommunicationMessageRow: View {
                                 Text(status.label).font(.system(size: 12))
                                     .foregroundColor(status.stage == .failed ? Theme.danger : Theme.textSecondary)
                             }
-                            Text(preview.text.isEmpty ? "打开原会话查看完整进度。" : preview.text)
+                            Text(messageLinkedText(preview.text.isEmpty ? "打开原会话查看完整进度。" : preview.text))
+                                .messageLinkHandling(baseURL: baseURL)
+                                .environment(\.messageFileContext, WandMessageFileContext(sessionID: link.sessionId))
                                 .font(.system(size: 14)).lineSpacing(4).lineLimit(previewExpanded ? nil : 4).textSelection(.enabled)
                         }
                         Button("打开对应执行会话") { onOpenSession(link.sessionId) }

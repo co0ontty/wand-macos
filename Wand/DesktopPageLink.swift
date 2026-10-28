@@ -9,7 +9,8 @@ enum DesktopPageLink {
         "sidebar", "sidebarQuery", "workspaceView", "conversation", "conversationTask", "conversationRun",
         "chatFilter", "chatActivity", "chatQuery", "directoryTab", "directoryQuery", "boardView", "q", "directory",
         "sort", "filters", "scheduleView", "scheduleQuery", "scheduleFilter", "scheduleRange", "scheduleDate",
-        "teamQuery", "teamFilter", "teamPage", "settingsNested"
+        "teamQuery", "teamFilter", "teamPage", "settingsNested",
+        "knowledgeScope", "knowledgeOwner", "knowledgeDocument"
     ]
 
     static func url(base: URL, parameters: [String: String]) -> URL? {

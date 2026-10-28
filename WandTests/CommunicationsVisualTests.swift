@@ -5,6 +5,51 @@ import XCTest
 
 @MainActor
 final class CommunicationsVisualTests: XCTestCase {
+    func testRootNavigationContractAndSnapshot() async throws {
+        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Wand/MainShellView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let rail = try XCTUnwrap(source.components(separatedBy: "struct DesktopNavigationRail: View {").last)
+            .components(separatedBy: "private func item(").first ?? ""
+        XCTAssertFalse(rail.contains("item(.contacts"))
+        for command in ["conversations", "workspaces", "knowledge", "taskBoard", "settings"] {
+            XCTAssertTrue(rail.contains("item(." + command + ","), command)
+        }
+        let host = NSHostingView(rootView: DesktopNavigationRail(selection: .workspaces, onCommand: { _ in }))
+        host.frame = NSRect(x: 0, y: 0, width: 56, height: 700)
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let image = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        try image.write(to: URL(fileURLWithPath: "/tmp/wand-hide-contacts/macos-navigation.png"))
+    }
+
+    func testRootNavigationOmitsContactsAndKeepsWorkDestinations() async throws {
+        var commands: [DesktopCommand] = []
+        let host = NSHostingView(rootView: DesktopNavigationRail(selection: .workspaces, onCommand: { commands.append($0) }))
+        host.frame = NSRect(x: 0, y: 0, width: 56, height: 700)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host; window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 100_000_000)
+        let children = NSSelectorFromString("accessibilityChildren")
+        let label = NSSelectorFromString("accessibilityLabel")
+        var queue: [NSObject] = [host], seen = Set<ObjectIdentifier>(), labels: [String] = []
+        while !queue.isEmpty && seen.count < 2000 {
+            let node = queue.removeFirst()
+            guard seen.insert(ObjectIdentifier(node)).inserted else { continue }
+            if node.responds(to: label), let value = node.perform(label)?.takeUnretainedValue() as? String { labels.append(value) }
+            if node.responds(to: children), let next = node.perform(children)?.takeUnretainedValue() as? [NSObject] { queue.append(contentsOf: next) }
+        }
+        guard !labels.isEmpty else { throw XCTSkip("NSHostingView exports no accessibility labels in this test host") }
+        XCTAssertFalse(labels.contains("通讯录"))
+        for command in [DesktopCommand.conversations, .workspaces, .knowledge, .taskBoard, .settings] {
+            XCTAssertTrue(labels.contains(command.title), command.title)
+            XCTAssertTrue(try press(host, label: command.title))
+        }
+        XCTAssertEqual(commands, [.conversations, .workspaces, .knowledge, .taskBoard, .settings])
+    }
+
     struct Fixture: Decodable { let contacts: [EmployeeContact]; let conversations: [NativeConversation] }
     private var suites: [String] = []
     private func setup() async throws -> (CommunicationsStore, CommunicationsStub) {

@@ -479,6 +479,10 @@ final class WandAPI {
                           body: ["expectedText": expectedText])
     }
 
+    func reorderQueued(id: String, order: [Int], expectedQueue: [String]) async throws -> SessionSnapshot {
+        try await request(SessionSnapshot.self, method: "PATCH", path: "/api/structured-sessions/\(id)/queued", body: ["order": order, "expectedQueue": expectedQueue])
+    }
+
     func clearQueued(id: String, expectedQueue: [String]) async throws -> SessionSnapshot {
         try await request(SessionSnapshot.self, method: "DELETE", path: "/api/structured-sessions/\(id)/queued",
                           body: ["expectedQueue": expectedQueue])
@@ -650,14 +654,21 @@ final class WandAPI {
         return try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions", body: body)
     }
 
-    func createBlankTerminal(cwd: String, initialInput: String?, workspaceBinding: WorkspaceBinding? = nil) async throws -> SessionSnapshot {
-        var body: [String: Any] = ["kind": "pty", "shell": true, "cwd": workspaceBinding?.cwd ?? cwd, "sessionSource": "interactive"]
+    func createBlankTerminal(cwd: String, initialInput: String?, workspaceBinding: WorkspaceBinding? = nil,
+                             quickTerminal: Bool = false) async throws -> SessionSnapshot {
+        var body: [String: Any] = ["kind": "pty", "shell": true, "cwd": workspaceBinding?.cwd ?? cwd,
+                                   "sessionSource": quickTerminal ? "quick-terminal" : "interactive"]
         if let workspaceBinding {
             body["workspaceId"] = workspaceBinding.workspaceId
             body["workspaceTaskId"] = workspaceBinding.workspaceTaskId
         }
         if let initialInput, !initialInput.isEmpty { body["initialInput"] = initialInput }
         return try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions", body: body)
+    }
+
+    func claimQuickTerminal(id: String) async throws -> SessionSnapshot {
+        try await request(SessionSnapshot.self, method: "PUT",
+                          path: "/api/sessions/\(percentEncodePathComponent(id))/quick-terminal", body: [:])
     }
 
     // MARK: - Git 快速提交

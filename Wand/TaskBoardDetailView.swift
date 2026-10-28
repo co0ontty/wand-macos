@@ -42,6 +42,8 @@ struct WandBoardDetailView: View {
     @State private var title: String
     @State private var description: String
     @State private var editingDescription = false
+    @State private var acceptanceExpanded: Bool
+    let revealAcceptance: Bool
     @State private var submittedDescription: String?
     @State private var agent: WandBoardTaskAgent
     @State private var composeOpen: Bool
@@ -55,6 +57,7 @@ struct WandBoardDetailView: View {
         loadComments: @escaping (String, String?, Int) async throws -> WandTaskCommentsPage = { _, _, _ in WandTaskCommentsPage(comments: [], totalCount: 0, nextCursor: nil) },
         onOpenTask: ((String) -> Void)? = nil,
         commentToReveal: String? = nil,
+        revealAcceptance: Bool = false,
         onCommentsRevealed: @escaping () -> Void = {},
         workspaces: [Workspace],
         milestones: [WandBoardMilestone],
@@ -80,6 +83,8 @@ struct WandBoardDetailView: View {
         self.loadComments = loadComments
         self.onOpenTask = onOpenTask
         self.initialCommentToReveal = commentToReveal
+        self.revealAcceptance = revealAcceptance
+        _acceptanceExpanded = State(initialValue: revealAcceptance)
         self.onCommentsRevealed = onCommentsRevealed
         _commentToReveal = State(initialValue: commentToReveal)
         self.workspaces = workspaces
@@ -153,7 +158,7 @@ struct WandBoardDetailView: View {
                     catalog: catalog
                 )
             }
-            DisclosureGroup(wandBoardChildren(of: task, in: allTasks).isEmpty ? "交付与验收" : "主任务整体验收") {
+            DisclosureGroup(wandBoardChildren(of: task, in: allTasks).isEmpty ? "交付与验收" : "主任务整体验收", isExpanded: $acceptanceExpanded) {
                 WandTaskAcceptanceEditor(
                     task: task,
                     children: wandBoardChildren(of: task, in: allTasks),
@@ -162,6 +167,8 @@ struct WandBoardDetailView: View {
                 )
                 .id(task.id)
             }
+            .id("task-acceptance")
+            .onAppear { if revealAcceptance { scrollProxy.scrollTo("task-acceptance", anchor: .center) } }
             TaskCommentsSection(
                 comments: commentsStore.comments,
                 totalCount: commentsStore.totalCount,

@@ -238,15 +238,17 @@ struct TodoItem {
 
     /// 当前 turn 的待办列表：只看最后一条 user 消息之后的 TodoWrite，
     /// 对齐 Web 端 updateTodoProgress 的 scoping（上一轮的进度条不跨 turn 残留）。
-    static func currentTodos(in messages: [ConversationTurn]) -> [TodoItem] {
-        var startIdx = 0
-        for i in stride(from: messages.count - 1, through: 0, by: -1) where messages[i].role == "user" {
-            startIdx = i + 1
-            break
+    static func currentTodos(in messages: [ConversationTurn], startIndex: Int? = nil) -> [TodoItem] {
+        var startIdx = startIndex ?? 0
+        if startIndex == nil {
+            for i in stride(from: messages.count - 1, through: 0, by: -1) where messages[i].role == "user" {
+                startIdx = i + 1
+                break
+            }
         }
         for i in stride(from: messages.count - 1, through: startIdx, by: -1) {
             for block in messages[i].content.reversed() {
-                if case .toolUse(_, let name, _, let input, _) = block {
+                if case .toolUse(_, let name, _, let input, let subagent) = block, subagent == nil {
                     let source = input["__wandTasks"] != nil ? ["todos": input["__wandTasks"]!] : input
                     if name != "TodoWrite" && input["__wandTasks"] == nil { continue }
                     let todos = parse(input: source)
@@ -255,6 +257,112 @@ struct TodoItem {
             }
         }
         return []
+    }
+}
+
+/// Source identity and execution evidence only; Todo entries are always projected from messages.
+struct TodoTurnSource {
+    let key: String
+    let startIndex: Int
+    let requestID: String?
+    let waitingQuestion: Bool
+
+    static func find(sessionID: String, messages: [ConversationTurn], offset: Int, leadingBlockOffset: Int = 0, activeRequestID: String? = nil) -> Self? {
+        var latestRequest: String?
+        for index in messages.indices.reversed() {
+            let turn = messages[index]
+            guard turn.role == "user", turn.notice != true else { continue }
+            if latestRequest == nil { latestRequest = turn.requestId }
+            if !turn.content.isEmpty, turn.content.allSatisfy({ if case .toolResult = $0 { return true }; return false }) { continue }
+            guard let identity = turn.requestId ?? turn.messageId ?? turn.createdAt,
+                  !(index == 0 && max(leadingBlockOffset, turn.blockOffset ?? 0) > 0),
+                  turn.content.contains(where: { if case .text(let text, _) = $0 { return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }; return false }) else { return nil }
+            if let activeRequestID, activeRequestID != latestRequest { return nil }
+            var results = Set<String>()
+            var questions = Set<String>()
+            for message in messages.dropFirst(index + 1) {
+                for block in message.content {
+                    switch block {
+                    case .toolResult(let id, _, _, _, _, let subagent) where subagent == nil: results.insert(id)
+                    case .toolUse(let id, let name, _, let input, let subagent) where subagent == nil:
+                        if name == "AskUserQuestion" || input["__wandQuestions"] != nil { questions.insert(id) }
+                    default: break
+                    }
+                }
+            }
+            return Self(key: "\(sessionID):\(offset + index):\(identity)", startIndex: index + 1,
+                        requestID: latestRequest, waitingQuestion: !questions.subtracting(results).isEmpty)
+        }
+        return nil
+    }
+}
+
+struct TodoTurnEvidence {
+    let sourceKey: String
+    let requestID: String
+    var outcome: String?
+
+    static func observe(_ previous: Self?, source: TodoTurnSource?, active: Bool, event: WsIncoming? = nil) -> Self? {
+        guard let source else { return nil }
+        var evidence = previous?.sourceKey == source.key && previous?.requestID == source.requestID ? previous : nil
+        guard let event else { return evidence }
+        if event.type == "init" { evidence = nil }
+        if let state = event.data?.structuredState, state.inFlight == true,
+           let request = state.activeRequestId, request == source.requestID {
+            return Self(sourceKey: source.key, requestID: request)
+        }
+        if var terminal = evidence, !active, event.data?.messages != nil,
+           let outcome = event.data?.turnOutcome, ["done", "failed", "stopped"].contains(outcome),
+           event.data?.terminalRequestId == nil || event.data?.terminalRequestId == terminal.requestID {
+            terminal.outcome = outcome
+            return terminal
+        }
+        return evidence
+    }
+}
+
+struct TodoExecutionPresentation {
+    enum Kind: Equatable { case running, stopped, waiting, permission, failed, ended, unknown }
+    let sourceKey: String
+    let kind: Kind
+    var label: String {
+        switch kind {
+        case .running: return "运行中"
+        case .stopped: return "已停止"
+        case .waiting: return "等待输入"
+        case .permission: return "等待授权"
+        case .failed: return "执行失败"
+        case .ended: return "本轮已结束"
+        case .unknown: return "最近记录"
+        }
+    }
+    var summaryLabel: String { kind == .ended ? "已结束" : kind == .failed ? "失败" : label }
+    var note: String {
+        switch kind {
+        case .running: return "进度来自本轮工具记录；清单完成不代表执行已结束。"
+        case .stopped: return "本轮已停止。以下是停止前最后记录，不提供续跑操作。"
+        case .waiting: return "以下进度只读；请在本轮原提问卡回答，不在这里恢复执行。"
+        case .permission: return "以下进度只读；请在原授权入口处理。"
+        case .failed: return "以下是失败前最后记录，不自动重试或补全清单。"
+        case .ended: return "以下是本轮最后记录；未完成项不自动补全，执行结束不代表业务任务验收通过。"
+        case .unknown: return "执行状态未确认；未完成项不代表仍在运行。"
+        }
+    }
+    static let recent = Self(sourceKey: "", kind: .unknown)
+    static func make(source: TodoTurnSource, status: String, active: Bool, permission: Bool,
+                     archived: Bool, connected: Bool, evidence: TodoTurnEvidence?) -> Self {
+        var kind: Kind = .unknown
+        let outcome = evidence?.sourceKey == source.key && evidence?.requestID == source.requestID ? evidence?.outcome : nil
+        if connected && !archived {
+            if let outcome, !active { kind = outcome == "done" ? .ended : outcome == "failed" ? .failed : .stopped }
+            else if outcome != nil && active { kind = .unknown }
+            else if status == "failed" { kind = .failed }
+            else if status == "stopped" { kind = .stopped }
+            else if permission { kind = .permission }
+            else if !active && status == "running" && source.waitingQuestion { kind = .waiting }
+            else if active && status == "running" { kind = .running }
+        }
+        return Self(sourceKey: source.key, kind: kind)
     }
 }
 
@@ -483,6 +591,7 @@ struct StructuredSessionState: Decodable {
 struct SessionSnapshot: Decodable, Identifiable {
     let id: String
     let sessionKind: String?
+    var sessionSource: String? = nil
     var provider: String?
     var runner: String?
     let command: String?
@@ -510,6 +619,7 @@ struct SessionSnapshot: Decodable, Identifiable {
     let claudeSessionId: String?
     let messages: [ConversationTurn]?
     /// 窗口化：messages 是完整历史的一段后缀，messageOffset 是首条绝对下标。
+    var leadingBlockOffset: Int? = nil
     let messageOffset: Int?
     /// 完整历史 turn 数。更早的消息通过 /api/sessions/:id/messages 按需分页。
     let messageTotal: Int?
@@ -716,6 +826,9 @@ struct WsData: Decodable {
     let messages: [ConversationTurn]?
     let messageOffset: Int?
     let messageTotal: Int?
+    let leadingBlockOffset: Int?
+    let turnOutcome: String?
+    let terminalRequestId: String?
     let queuedMessages: [String]?
     @WireOptional var structuredState: StructuredSessionState? = nil
     let pendingEscalation: EscalationRequest?

@@ -5,6 +5,33 @@ import XCTest
 @testable import Wand
 
 final class TaskBoardTests: XCTestCase {
+    func testTaskActionProjectionKeepsExactSourcesAndDoesNotInventAcceptance() throws {
+        let json = #"""
+        {"incompleteSources":1,"items":[
+          {"key":"permission:s:p","taskId":"task","identifier":"TASK-1","title":"授权","workspaceId":null,"kind":"permission","reason":"确认本次写入","source":{"sessionId":"s","requestId":"p"}},
+          {"key":"question:s:q","taskId":"task","identifier":"TASK-1","title":"回答","workspaceId":null,"kind":"question","reason":"请选择范围","source":{"sessionId":"s","toolId":"q"}},
+          {"key":"review:t","taskId":"t","identifier":"TASK-2","title":"交付","workspaceId":null,"kind":"review","reason":"待验收","source":{}},
+          {"key":"blocker:b","taskId":"b","identifier":"TASK-3","title":"缺口","workspaceId":null,"kind":"blocker","reason":"未明确处理人","source":{}}
+        ]}
+        """#
+        let value = try JSONDecoder().decode(WandTaskActionSnapshot.self, from: Data(json.utf8))
+        XCTAssertEqual(value.incompleteSources, 1)
+        XCTAssertEqual(value.items[0].source.requestId, "p")
+        XCTAssertEqual(value.items[1].source.toolId, "q")
+        XCTAssertEqual(value.items[2].label, "等待你验收")
+        XCTAssertEqual(value.items[3].actionLabel, "核对交付缺口")
+        XCTAssertNil(value.items[2].source.sessionId)
+        XCTAssertEqual(Set(value.items.map(\.id)).count, 4)
+    }
+
+    func testTaskActionTeamLinkUsesExistingWebRunWithoutCredentials() throws {
+        let url = try XCTUnwrap(DesktopPageLink.url(base: URL(string: "https://user:secret@wand.test/?token=private")!,
+            parameters: ["view": "teamchat", "run": "run-stable"]))
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "run" })?.value, "run-stable")
+        XCTAssertFalse(url.absoluteString.contains("secret"))
+        XCTAssertFalse(url.absoluteString.contains("token"))
+    }
+
     func testWorkSubmissionAndUserAcceptanceRemainIndependent() throws {
         let json = #"[{"id":"submitted","status":"done","acceptance":{"evidence":"report","blocker":"设备验收待核对","acceptedAt":null}},{"id":"accepted","status":"done","acceptance":{"evidence":"report","blocker":"","acceptedAt":"2026-01-01"}},{"id":"archived","status":"archived"},{"id":"working","status":"doing","sessions":[{"id":"idle","status":"idle"}]}]"#
         let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(json.utf8))

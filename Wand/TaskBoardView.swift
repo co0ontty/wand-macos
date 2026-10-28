@@ -38,6 +38,7 @@ struct TaskBoardView: View {
     @State private var collapsedList: Set<String> = [WandBoardStatus.archived.rawValue]
     @State private var selectedId = ""
     @State private var commentToRevealTaskId: String?
+    @State private var acceptanceToRevealTaskId: String?
     /// 右键「派发」只打开空的指派框，不把任务描述当成提示词发出去。
     @State private var composeRequest: (id: String, token: UUID)?
     @State private var busyId = ""
@@ -331,6 +332,7 @@ struct TaskBoardView: View {
                 loadComments: { taskId, before, limit in try await api.boardTaskComments(id: taskId, before: before, limit: limit) },
                 onOpenTask: { selectedId = $0 },
                 commentToReveal: commentToRevealTaskId == task.id ? "__latest__" : nil,
+                revealAcceptance: acceptanceToRevealTaskId == task.id,
                 onCommentsRevealed: { commentToRevealTaskId = nil },
                 workspaces: workspaces,
                 milestones: milestones,
@@ -364,7 +366,7 @@ struct TaskBoardView: View {
                     .foregroundColor(Theme.textSecondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if !loading && visible.isEmpty && filtered {
+        } else if !loading && visible.isEmpty && filtered && view != .dashboard {
             VStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 26))
@@ -390,6 +392,9 @@ struct TaskBoardView: View {
                     projectName: projectName,
                     tasks: visible,
                     allTasks: tasks,
+                    api: api,
+                    actionWorkspaceId: workspaceFilter,
+                    onOpenAcceptance: { acceptanceToRevealTaskId = $0; selectedId = $0 },
                     onOpenTask: { selectedId = $0 },
                     onOpenSession: onOpenSession
                 )

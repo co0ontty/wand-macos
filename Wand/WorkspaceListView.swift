@@ -1201,8 +1201,12 @@ struct WorkspaceListView: View {
                             cwd: session.cwd, index: 0))
                             .font(.system(size: 12, weight: selected ? .semibold : .medium))
                             .foregroundColor(Theme.textPrimary).lineLimit(2)
-                        Text([entry.group.displayName, entry.task?.name].compactMap { $0 }.joined(separator: " · "))
-                            .font(.system(size: 10)).foregroundColor(Theme.textMuted).lineLimit(1)
+                        let context = [TaskListPresentation.workspaceLabel(entry.group), entry.task?.name]
+                            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                        if !context.isEmpty {
+                            Text(context).font(.system(size: 10)).foregroundColor(Theme.textMuted).lineLimit(1)
+                                .help(context)
+                        }
                     }
                     Spacer(minLength: 0)
                     if session.isJustCompleted {

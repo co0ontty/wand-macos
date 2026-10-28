@@ -28,6 +28,8 @@ final class ChatStore: ObservableObject {
         didSet { queueMutationRevision &+= 1 }
     }
     @Published private(set) var queueMutationPending = false
+    struct RemovedQueueText { let text: String; var confirmed = false; var pending = true }
+    @Published private(set) var removedQueueText: RemovedQueueText?
     @Published var pendingEscalation: EscalationRequest?
     /// PTY 旧式权限提示（permissionBlocked 为 true 但没有结构化 escalation 时）。
     @Published var legacyPermissionPrompt: PermissionRequestInfo?
@@ -48,6 +50,21 @@ final class ChatStore: ObservableObject {
     // 消息窗口化：messages 是完整历史的后缀，loadedOffset = messages[0] 的绝对下标。
     @Published private(set) var loadedOffset = 0
     @Published private(set) var messageTotal = 0
+    @Published private(set) var todoTurnEvidence: TodoTurnEvidence?
+    private var todoLeadingBlockOffset = 0
+    private var todoSource: TodoTurnSource? {
+        TodoTurnSource.find(sessionID: sessionId, messages: messages, offset: loadedOffset,
+            leadingBlockOffset: todoLeadingBlockOffset,
+            activeRequestID: snapshot?.structuredState?.inFlight == true ? snapshot?.structuredState?.activeRequestId : nil)
+    }
+    var todoProgress: (todos: [TodoItem], context: TodoExecutionPresentation)? {
+        guard let source = todoSource else { return nil }
+        let todos = TodoItem.currentTodos(in: messages, startIndex: source.startIndex)
+        guard !todos.isEmpty else { return nil }
+        return (todos, .make(source: source, status: status, active: isResponding,
+            permission: permissionBlocked || pendingEscalation != nil, archived: snapshot?.archived == true,
+            connected: connected, evidence: todoTurnEvidence))
+    }
     @Published private(set) var loadingEarlier = false
 
     let sessionId: String
@@ -99,7 +116,10 @@ final class ChatStore: ObservableObject {
             MainActor.assumeIsolated { self?.handle(event) }
         }
         socket.onConnectionChange = { [weak self] up in
-            MainActor.assumeIsolated { self?.connected = up }
+            MainActor.assumeIsolated {
+                self?.connected = up
+                if !up { self?.todoTurnEvidence = nil }
+            }
         }
 
         socket.subscribe(sessionId: sessionId)
@@ -154,12 +174,13 @@ final class ChatStore: ObservableObject {
 
     /// 应用一份窗口化消息快照。服务端 init/output/ended 可能只给最近一窗；
     /// 本地如果已经加载过更早前缀，需要保留，避免用户刚展开历史又被 WS 尾窗覆盖。
-    private func applyWindowedMessages(_ incoming: [ConversationTurn]?, offset: Int?, total: Int?) {
+    private func applyWindowedMessages(_ incoming: [ConversationTurn]?, offset: Int?, total: Int?, leadingBlockOffset: Int? = nil) {
         guard let incoming else { return }
         let snapOffset = offset ?? 0
         let snapTotal = total ?? max(snapOffset + incoming.count, incoming.count)
         if incoming.isEmpty, !messages.isEmpty, snapTotal == 0 { return }
 
+        if messages.isEmpty || loadedOffset >= snapOffset { todoLeadingBlockOffset = leadingBlockOffset ?? 0 }
         if messages.isEmpty {
             messages = incoming
             loadedOffset = snapOffset
@@ -177,13 +198,14 @@ final class ChatStore: ObservableObject {
         let previousError = snapshot?.structuredState?.lastError
         self.snapshot = snap
         if let modelCatalog { applyModelCatalog(modelCatalog) }
-        applyWindowedMessages(snap.messages, offset: snap.messageOffset, total: snap.messageTotal)
+        applyWindowedMessages(snap.messages, offset: snap.messageOffset, total: snap.messageTotal, leadingBlockOffset: snap.leadingBlockOffset)
         status = snap.status ?? status
         isResponding = snap.isResponding
         if sessionEnded { clearRuntimeFacts() }
         queuedMessages = snap.queuedMessages ?? []
         pendingEscalation = snap.pendingEscalation
         permissionBlocked = snap.permissionBlocked ?? (snap.pendingEscalation != nil)
+        todoTurnEvidence = TodoTurnEvidence.observe(todoTurnEvidence, source: todoSource, active: isResponding)
         currentTaskTitle = snap.currentTaskTitle
         selectedModel = snap.selectedModel
         thinkingEffort = snap.thinkingEffort ?? "off"
@@ -197,6 +219,7 @@ final class ChatStore: ObservableObject {
     private func handle(_ event: WsIncoming) {
         if ["init", "output", "status", "ended"].contains(event.type) { realtimeRevision += 1 }
         guard event.sessionId == sessionId || event.sessionId == nil else { return }
+        defer { todoTurnEvidence = TodoTurnEvidence.observe(todoTurnEvidence, source: todoSource, active: isResponding, event: event) }
         switch event.type {
         case "init":
             if let data = event.data {
@@ -209,7 +232,7 @@ final class ChatStore: ObservableObject {
             if let data = event.data { applyStatus(data) }
         case "ended":
             if let data = event.data {
-                applyWindowedMessages(data.messages, offset: data.messageOffset, total: data.messageTotal)
+                applyWindowedMessages(data.messages, offset: data.messageOffset, total: data.messageTotal, leadingBlockOffset: data.leadingBlockOffset)
                 status = data.status ?? "exited"
                 isResponding = false
                 applyCommonFields(data)
@@ -227,7 +250,7 @@ final class ChatStore: ObservableObject {
 
     /// init 的 data 就是一份完整 SessionSnapshot（以 WsData 超集形状承接）。
     private func applyWsSnapshot(_ data: WsData) {
-        applyWindowedMessages(data.messages, offset: data.messageOffset, total: data.messageTotal)
+        applyWindowedMessages(data.messages, offset: data.messageOffset, total: data.messageTotal, leadingBlockOffset: data.leadingBlockOffset)
         status = data.status ?? status
         if let s = data.structuredState { isResponding = s.inFlight ?? false }
         if snapshot == nil, let id = data.id {
@@ -273,7 +296,7 @@ final class ChatStore: ObservableObject {
         let incremental = data.incremental ?? false
         if let msgs = data.messages {
             // 全量赢（窗口合并：保留已加载的更早前缀）。
-            applyWindowedMessages(msgs, offset: data.messageOffset, total: data.messageTotal)
+            applyWindowedMessages(msgs, offset: data.messageOffset, total: data.messageTotal, leadingBlockOffset: data.leadingBlockOffset)
         } else if incremental, let incoming = data.lastMessage {
             let expected = data.messageCount ?? 0
             if let last = messages.last, last.role == incoming.role {
@@ -648,8 +671,9 @@ final class ChatStore: ObservableObject {
     }
 
     func deleteQueued(index: Int) {
-        guard !queueMutationPending, !sending, queuedMessages.indices.contains(index) else { return }
+        guard !queueMutationPending, !sending, removedQueueText == nil, queuedMessages.indices.contains(index) else { return }
         let picked = queuedMessages[index]
+        removedQueueText = RemovedQueueText(text: picked)
         let revision = queueMutationRevision
         queueMutationPending = true
         Task {
@@ -657,16 +681,19 @@ final class ChatStore: ObservableObject {
             do {
                 let snap = try await api.deleteQueued(id: sessionId, index: index, expectedText: picked)
                 try applyQueueReceipt(snap, revision: revision)
+                removedQueueText?.confirmed = true
             } catch {
                 socket.requestResync()
-                toast = error.localizedDescription
+                toast = "移除结果待核对；原文已保留，未自动重试。"
             }
+            removedQueueText?.pending = false
         }
     }
 
     func clearQueued() {
-        guard !queueMutationPending, !sending, !queuedMessages.isEmpty else { return }
+        guard !queueMutationPending, !sending, removedQueueText == nil, !queuedMessages.isEmpty else { return }
         let expected = queuedMessages
+        removedQueueText = RemovedQueueText(text: expected.joined(separator: "\n\n"))
         let revision = queueMutationRevision
         queueMutationPending = true
         Task {
@@ -674,10 +701,46 @@ final class ChatStore: ObservableObject {
             do {
                 let snap = try await api.clearQueued(id: sessionId, expectedQueue: expected)
                 try applyQueueReceipt(snap, revision: revision)
+                removedQueueText?.confirmed = true
             } catch {
                 socket.requestResync()
-                toast = error.localizedDescription
+                toast = "清空结果待核对；原文已保留，未自动重试。"
             }
+            removedQueueText?.pending = false
+        }
+    }
+
+    func recoverRemovedQueueToDraft() {
+        guard let removed = removedQueueText, removed.confirmed, !removed.pending else { return }
+        removedQueueText = nil
+        drafts.recover(submitted: ConversationDraft(text: removed.text, attachments: []), serverURL: api.baseURL, sessionID: sessionId, reason: .queueRetrieval)
+    }
+
+    func dismissRemovedQueueText() {
+        if removedQueueText?.pending == false { removedQueueText = nil }
+    }
+
+    func moveQueued(index: Int, delta: Int) {
+        let destination = index + delta
+        guard !queueMutationPending, !sending, queuedMessages.indices.contains(index), queuedMessages.indices.contains(destination) else { return }
+        reorderQueued(index: index, destination: destination, expected: queuedMessages)
+    }
+
+    /// Both menu moves and native handle drops share the same snapshot/receipt owner.
+    func reorderQueued(index: Int, destination: Int, expected: [String]) {
+        guard !queueMutationPending, !sending, queuedMessages == expected,
+              expected.indices.contains(index), expected.indices.contains(destination), index != destination else { return }
+        var order = Array(expected.indices)
+        let picked = order.remove(at: index)
+        order.insert(picked, at: destination)
+        let revision = queueMutationRevision
+        queueMutationPending = true
+        Task {
+            defer { queueMutationPending = false }
+            do {
+                let snap = try await api.reorderQueued(id: sessionId, order: order, expectedQueue: expected)
+                try applyQueueReceipt(snap, revision: revision)
+            } catch { socket.requestResync(); toast = "排序结果待核对，未自动重试。" }
         }
     }
 

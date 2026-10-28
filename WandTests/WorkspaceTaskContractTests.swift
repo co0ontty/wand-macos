@@ -5,6 +5,25 @@ import XCTest
 
 /// 任务一级容器契约的对齐测试（与 iOS WorkspaceWorktreeTests 同源，防两端漂移）。
 final class WorkspaceTaskContractTests: XCTestCase {
+    func testPersonSessionWorkspaceLabelIsCompactAndOmitsGlobalOwnership() throws {
+        func label(_ name: String, cwd: String = "/work/wand", global: Bool = false, id: String = "w") throws -> String? {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "workspaceId": id, "workspaceName": name, "workspaceCwd": cwd, "global": global,
+                "tasks": [], "standaloneSessions": []
+            ] as [String: Any])
+            let group = try JSONDecoder().decode(TaskDirectoryGroup.self, from: data)
+            return TaskListPresentation.workspaceLabel(group)
+        }
+        XCTAssertEqual(try label("wand"), "wand")
+        XCTAssertEqual(try label(" 产品工作区 "), "产品工作区")
+        XCTAssertEqual(try label("/work/wand/"), "wand")
+        XCTAssertEqual(try label("C:\\work\\wand\\"), "wand")
+        XCTAssertEqual(try label(" "), "wand")
+        XCTAssertNil(try label("", cwd: "/"))
+        XCTAssertNil(try label("wand", global: true))
+        XCTAssertNil(try label("wand", id: "wand-global"))
+    }
+
     @MainActor
     func testSidebarCopiesTheClickedServerDirectoryWithoutChangingEmptyClipboard() {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("wand-directory-copy-\(UUID().uuidString)"))

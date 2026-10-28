@@ -22,7 +22,7 @@ import SwiftUI
     }
     func failed() { awaitingAck = false; recovery = true; editing = true }
     func resetPresentation() { awaitingAck = false; recovery = false; restore = false; borrowers = []; focused = false; editing = false }
-    func collapseFromContent() { if borrowers.isEmpty { collapse() } }
+    func collapseFromContent() { if borrowers.isEmpty { focused = false } }
     func borrow(_ owner: String, open: Bool = false) {
         restore = restore || focused || open
         if open { editing = true }
@@ -33,7 +33,7 @@ import SwiftUI
         let shouldRestore = restore && editing; restore = false
         if shouldRestore { focused = true }
     }
-    func lostFocus() { if borrowers.isEmpty { collapse() } }
+    func lostFocus() { focused = false }
 }
 
 enum FocusComposerMetrics {
@@ -55,6 +55,8 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
     var primaryVisible = true
     var isFocused = false
     var showsAdvancedSettings = false
+    var sendWidth: CGFloat = 32
+    var onCollapse: (() -> Void)? = nil
     var accessory: AnyView? = nil
     @Environment(\.accessibilityReduceMotion) private var reduced
     var body: some View {
@@ -80,7 +82,8 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
                 }
                 .buttonStyle(.plain).opacity(expanded ? 0 : 1)
                 .allowsHitTesting(!expanded).accessibilityHidden(expanded)
-                send().frame(width: FocusComposerMetrics.touch, height: FocusComposerMetrics.touch)
+                if let onCollapse { Button(action: onCollapse) { Image(systemName: "chevron.down") }.buttonStyle(.plain).frame(width: 32, height: 32).opacity(expanded ? 1 : 0).allowsHitTesting(expanded).accessibilityHidden(!expanded).help("收起输入框") }
+                send().frame(width: sendWidth, height: FocusComposerMetrics.touch)
                     .opacity(primaryVisible ? 1 : 0).allowsHitTesting(primaryVisible).accessibilityHidden(!primaryVisible)
                     .animation(reduced ? nil : Theme.Motion.feedback, value: primaryVisible)
                     .padding(.leading, 2)
@@ -109,29 +112,23 @@ struct ComposerIdentityHeader<Portrait: View, Identity: View, Runtime: View>: Vi
     @ViewBuilder let runtime: () -> Runtime
     @State private var viewportWidth: CGFloat? = nil
     var body: some View {
-        GeometryReader { geometry in
-            let compact = (viewportWidth ?? geometry.size.width) <= 640
-            let progressWidth = min(300, geometry.size.width * (compact ? 0.46 : 0.3))
-            let sideWidth = max(0, (geometry.size.width - progressWidth) / 2 - 8)
-            ZStack(alignment: .bottomLeading) {
-                if hasPortrait {
-                    portrait().frame(width: 72, height: 72).offset(y: kind == .task ? 7 : -4)
-                }
-                if hasPortrait ? (viewportWidth ?? geometry.size.width) > 640 : !compact {
-                    identity().font(.system(size: 12, weight: .medium)).lineLimit(1)
-                        .frame(maxWidth: progress == nil ? max(0, geometry.size.width - 320) : max(0, sideWidth - (hasPortrait ? 84 : 8)), minHeight: 24, alignment: .leading)
-                        .padding(.leading, hasPortrait ? 84 : 0).offset(y: hasPortrait ? (kind == .task ? 3 : -4) : 0)
-                }
-                runtime().frame(maxWidth: progress == nil || compact ? max(0, geometry.size.width - (hasPortrait ? 84 : 0)) : sideWidth, minHeight: kind == .task ? 32 : 24, alignment: .trailing)
-                    .frame(maxWidth: .infinity, alignment: .trailing).offset(y: hasPortrait ? (kind == .task ? 7 : -32) : 0)
-                if let progress {
-                    progress.frame(width: progressWidth)
-                        .frame(maxWidth: .infinity, alignment: compact ? .trailing : .center)
-                        .offset(y: compact ? -25 : 3)
-                }
-            }.frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomLeading)
+        VStack(spacing: 8) {
+            GeometryReader { geometry in
+                let compact = (viewportWidth ?? geometry.size.width) <= 640
+                ZStack(alignment: .bottomLeading) {
+                    if hasPortrait { portrait().frame(width: 72, height: 72).offset(y: kind == .task ? 7 : -4) }
+                    if !compact {
+                        identity().font(.system(size: 12, weight: .medium)).lineLimit(1)
+                            .frame(maxWidth: max(0, geometry.size.width - 320), minHeight: 24, alignment: .leading)
+                            .padding(.leading, hasPortrait ? 84 : 0)
+                    }
+                    runtime().frame(maxWidth: max(0, geometry.size.width - (hasPortrait ? 84 : 0)), minHeight: 32, alignment: .trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }.frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomLeading)
+            }
+            .frame(height: hasPortrait ? (kind == .task ? 65 : 76) : 32)
+            if let progress { progress.frame(maxWidth: .infinity).padding(.bottom, 4) }
         }
-        .frame(height: hasPortrait ? (kind == .task ? 65 : 76) : (kind == .task ? 32 : 28))
         .background(ComposerViewportWidth { width in
             if viewportWidth != width { viewportWidth = width }
         }.frame(width: 0, height: 0))
@@ -257,9 +254,20 @@ struct NativeComposerActionButton: View {
     let canSubmit: Bool
     let onSend: () -> Void
     var onStop: () -> Void = {}
+    var showLabel = false
     @Environment(\.accessibilityReduceMotion) private var reduced
-    private var stopping: Bool { turnRunning }
-    private var displayedPhase: NativeComposerPhase { nativeComposerActionPhase(phase: phase, turnRunning: turnRunning) }
+    private var stopping: Bool { turnRunning && !canSubmit }
+    private var displayedPhase: NativeComposerPhase { nativeComposerActionPhase(phase: phase, turnRunning: stopping) }
+    private var actionLabel: String {
+        if stopping { return "停止" }
+        switch displayedPhase {
+        case .sending: return "发送中"
+        case .sent: return "已接受"
+        case .failed: return "重试"
+        case .unknown: return "待核对"
+        case .idle: return turnRunning ? "加入队列" : "发送"
+        }
+    }
     private var tint: Color {
         switch displayedPhase {
         case .sent: return Theme.brand
@@ -270,21 +278,25 @@ struct NativeComposerActionButton: View {
     }
     var body: some View {
         Button { if stopping { onStop() } else { onSend() } } label: {
-            ZStack {
-                symbol("arrow.up", shown: displayedPhase == .idle && !stopping)
+            HStack(spacing: 6) {
+              ZStack {
+                symbol("arrow.up", shown: displayedPhase == .idle && !stopping && !turnRunning)
+                symbol("clock", shown: displayedPhase == .idle && !stopping && turnRunning)
                 symbol("stop.fill", shown: stopping)
                 symbol("checkmark", shown: displayedPhase == .sent)
                 symbol("exclamationmark", shown: displayedPhase == .failed)
                 Text("核对").font(.system(size: 11, weight: .semibold)).opacity(displayedPhase == .unknown ? 1 : 0)
                 ProgressView().controlSize(.small).tint(Theme.surface).opacity(displayedPhase == .sending ? 1 : 0)
+              }.frame(width: 18, height: 18)
+              if showLabel { Text(actionLabel).font(.system(size: 12, weight: .medium)) }
             }
             .font(.system(size: 14, weight: .medium))
             .foregroundColor(displayedPhase == .idle && !canSubmit && !stopping ? Theme.textSecondary : Theme.surface)
-            .frame(width: 32, height: 32)
+            .frame(width: showLabel ? 100 : 32, height: 32)
             .background(RoundedRectangle(cornerRadius: FocusComposerMetrics.controlRadius).fill(tint))
             .contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(!stopping && (displayedPhase == .sending || !canSubmit))
-            .accessibilityLabel(stopping ? "停止当前任务" : displayedPhase == .unknown ? "核对送达状态，不重发" : displayedPhase == .sending ? "发送中" : displayedPhase == .sent ? "已送达" : displayedPhase == .failed ? "发送异常" : "发送消息")
+            .accessibilityLabel(stopping ? "停止当前任务" : displayedPhase == .unknown ? "核对送达状态，不重发" : displayedPhase == .sending ? "发送中" : displayedPhase == .sent ? "已送达" : displayedPhase == .failed ? "发送异常" : turnRunning ? "加入发送队列" : "发送消息")
             .animation(reduced ? nil : Theme.Motion.feedback, value: displayedPhase)
             .animation(reduced ? nil : Theme.Motion.structure, value: stopping)
     }

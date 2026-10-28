@@ -759,6 +759,13 @@ enum TaskListPresentation {
             defaultProvider: nil, layout: nil, createdAt: "", lastOpenedAt: nil)
     }
 
+    static func workspaceLabel(_ group: TaskDirectoryGroup) -> String? {
+        guard !group.isGlobal, group.workspaceId != "wand-global" else { return nil }
+        let name = group.workspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = name.isEmpty ? group.workspaceCwd.trimmingCharacters(in: .whitespacesAndNewlines) : name
+        return value.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map(String.init)
+    }
+
     struct RecentEntry: Identifiable {
         let group: TaskDirectoryGroup
         let task: WorkspaceTaskSummary?

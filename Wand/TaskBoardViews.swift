@@ -157,6 +157,9 @@ struct WandBoardDashboardView: View {
     let projectName: String
     let tasks: [WandBoardTask]
     var allTasks: [WandBoardTask] = []
+    var api: WandAPI? = nil
+    var actionWorkspaceId = ""
+    var onOpenAcceptance: ((String) -> Void)? = nil
     let onOpenTask: (String) -> Void
     let onOpenSession: (String) -> Void
 
@@ -183,6 +186,10 @@ struct WandBoardDashboardView: View {
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if let api {
+                    WandTaskActionsView(api: api, workspaceId: actionWorkspaceId, onOpenSession: onOpenSession,
+                        onOpenAcceptance: onOpenAcceptance ?? onOpenTask)
+                }
                 ForEach(tasks) { task in WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask) }
                 VStack(alignment: .leading, spacing: 10) {
                     Text(projectName)

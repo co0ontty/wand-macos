@@ -10,10 +10,11 @@ private struct RuntimeSettingsProbe: View {
     var todos: [TodoItem] = []
     var queueStore: ChatStore? = nil
     @State private var queueExpanded = false
+    @State private var todoExpanded = false
     private var progress: AnyView? {
         guard !todos.isEmpty || queueStore != nil else { return nil }
         return AnyView(HStack(spacing: 4) {
-            if !todos.isEmpty { TodoProgressBar(todos: todos).frame(maxWidth: .infinity).background(ComposerGeometryProbe(id: "runtime-todo")) }
+            if !todos.isEmpty { TodoProgressBar(todos: todos, expanded: $todoExpanded).frame(maxWidth: .infinity).background(ComposerGeometryProbe(id: "runtime-todo")) }
             if let queueStore { ComposerQueue(store: queueStore, expanded: $queueExpanded).frame(maxWidth: .infinity).background(ComposerGeometryProbe(id: "runtime-queue")) }
         })
     }
@@ -209,7 +210,7 @@ final class AvatarComposerParityTests: XCTestCase {
             let view = try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id })
             return view.convert(view.bounds, to: host)
         }
-        for width: CGFloat in [390, 940] {
+        for width: CGFloat in [320, 390, 940] {
             window.setContentSize(NSSize(width: width, height: 240)); host.frame.size.width = width
             host.rootView = RuntimeSettingsProbe(focus: focus)
             host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
@@ -219,11 +220,16 @@ final class AvatarComposerParityTests: XCTestCase {
                 host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
                 let queue = try rect("runtime-queue")
                 XCTAssertEqual(try rect("runtime-send"), send)
-                XCTAssertGreaterThan(queue.width, 0); XCTAssertLessThanOrEqual(queue.height, FocusComposerMetrics.touch)
+                XCTAssertGreaterThan(queue.width, 0); XCTAssertLessThanOrEqual(queue.height, 36)
                 XCTAssertGreaterThanOrEqual(queue.minX, 0); XCTAssertLessThanOrEqual(queue.maxX, width)
                 XCTAssertFalse(queue.intersects(try rect("runtime-settings")))
                 XCTAssertFalse(queue.intersects(try rect("runtime-avatar")))
-                if withTodo { XCTAssertFalse(queue.intersects(try rect("runtime-todo"))) }
+                if withTodo {
+                    let todo = try rect("runtime-todo")
+                    XCTAssertFalse(queue.intersects(todo))
+                    XCTAssertEqual(queue.width, todo.width, accuracy: 1, "Todo and queue retain equal half-width slots")
+                    XCTAssertEqual(queue.minY, todo.minY, accuracy: 1, "Both summaries remain in the same horizontal row")
+                }
                 if let directory = ProcessInfo.processInfo.environment["WAND_COMPOSER_OUTPUT"] {
                     let output = URL(fileURLWithPath: directory, isDirectory: true)
                     try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -363,6 +369,19 @@ final class AvatarComposerParityTests: XCTestCase {
         for phase: NativeComposerPhase in [.sending, .failed, .unknown] {
             XCTAssertTrue(nativeComposerPrimaryVisible(text: "", hasAttachments: false, turnRunning: false, phase: phase))
         }
+    }
+
+    func testDraftRemainsExpandedWhenFocusLeaves() {
+        let focus = ComposerFocusController()
+        focus.focus()
+        focus.lostFocus()
+        XCTAssertTrue(focus.editing)
+        XCTAssertFalse(focus.focused)
+        focus.focus()
+        focus.collapseFromContent()
+        XCTAssertTrue(focus.editing)
+        focus.collapse()
+        XCTAssertFalse(focus.editing)
     }
 
     func testSendStopMouseDispatchAndStableSlotAcrossCollapse() async throws {

@@ -59,7 +59,7 @@ struct WandApp: App {
                 DesktopCommandMenuItem(command: .toggleInspector)
                 Divider()
                 Menu("前往") {
-                    ForEach([DesktopCommand.sessions, .workspaces, .taskBoard, .conversations, .contacts]) {
+                    ForEach([DesktopCommand.sessions, .workspaces, .knowledge, .taskBoard, .conversations, .contacts]) {
                         DesktopCommandMenuItem(command: $0)
                     }
                 }
