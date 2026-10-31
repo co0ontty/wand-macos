@@ -54,12 +54,12 @@ final class ChatImagePreviewTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         let opener = try await waitForProbe("chat-image-open-验收图", in: host)
         XCTAssertGreaterThan(opener.bounds.width, 1)
-        click(opener)
+        try await click(opener)
         try await waitUntil { presentedPreview(titled: "验收图", from: window) != nil }
         let sheet = try XCTUnwrap(presentedPreview(titled: "验收图", from: window))
         XCTAssertEqual(sheet.title, "验收图")
         let closer = try await waitForProbe("chat-image-close", in: try XCTUnwrap(sheet.contentView))
-        click(closer)
+        try await click(closer)
         try await waitUntil { window.attachedSheet == nil }
         XCTAssertNil(window.attachedSheet)
         XCTAssertNotNil(probe("chat-image-open-验收图", in: host))
@@ -94,19 +94,19 @@ final class ChatImagePreviewTests: XCTestCase {
         let tool = try await waitForProbe("chat-image-open-工具返回图片", in: host)
         XCTAssertNil(probe("chat-image-open-不要打开", in: host))
         XCTAssertFalse(descendants(host).isEmpty)
-        click(tool)
+        try await click(tool)
         try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) != nil }
         var sheet = try XCTUnwrap(presentedPreview(titled: "工具返回图片", from: window), "工具图片点击后应立刻挂出预览")
         XCTAssertEqual(sheet.title, "工具返回图片")
         ChatImagePreviewPresenter.shared.close()
         try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) == nil }
-        click(tool)
+        try await click(tool)
         try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) != nil }
         sheet = try XCTUnwrap(presentedPreview(titled: "工具返回图片", from: window), "同一张图片关闭后应能再次打开")
         XCTAssertEqual(sheet.title, "工具返回图片")
         ChatImagePreviewPresenter.shared.close()
         try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) == nil }
-        click(markdown)
+        try await click(markdown)
         try await waitUntil { presentedPreview(titled: "验收图", from: window) != nil }
         sheet = try XCTUnwrap(presentedPreview(titled: "验收图", from: window), "另一张图片应打开自己的预览")
         XCTAssertEqual(sheet.title, "验收图")
@@ -171,12 +171,15 @@ final class ChatImagePreviewTests: XCTestCase {
         return try XCTUnwrap(probe(id, in: root))
     }
 
-    private func click(_ view: NSView) {
+    private func click(_ view: NSView) async throws {
         guard let window = view.window else {
             XCTFail("点击目标不在窗口里")
             return
         }
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        // Allow activation and a preceding sheet dismissal to finish before input.
+        try await Task.sleep(nanoseconds: 250_000_000)
         view.layoutSubtreeIfNeeded()
         let location = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
         // AppKit may track mouse-down synchronously; queue mouse-up first.
