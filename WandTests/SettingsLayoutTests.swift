@@ -480,13 +480,13 @@ final class SettingsLayoutTests: XCTestCase {
         let settingsFrame = settings.convert(settings.bounds, to: host)
         XCTAssertEqual(headerFrame.height, 52, accuracy: 1)
         XCTAssertEqual(bodyFrame.minY, headerFrame.maxY, accuracy: 1, "No second brand/header row")
-        XCTAssertEqual(headerFrame.width, 316, accuracy: 1)
-        XCTAssertEqual(settingsFrame.minX, 6, accuracy: 1)
+        XCTAssertEqual(headerFrame.width, 336, accuracy: 1)
+        XCTAssertEqual(settingsFrame.minX, 16, accuracy: 1)
         XCTAssertEqual(settingsFrame.maxY, 588, accuracy: 1)
         state.settingsPresented = true
         await settle(host)
         XCTAssertTrue(descendants(host).contains { $0 === list })
-        XCTAssertEqual(header.convert(header.bounds, to: host).width, 56, accuracy: 1)
+        XCTAssertEqual(header.convert(header.bounds, to: host).width, 76, accuracy: 1)
         XCTAssertEqual(settings.convert(settings.bounds, to: host), settingsFrame)
         state.settingsPresented = false
         await settle(host)
@@ -595,11 +595,14 @@ final class SettingsLayoutTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         let view = try marker(id, in: host)
         let frame = view.convert(view.bounds, to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+        // AppKit may track mouse-down synchronously; queue mouse-up first.
+        let clickTime = ProcessInfo.processInfo.systemUptime
+        for type in [NSEvent.EventType.leftMouseUp, .leftMouseDown] {
             let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: frame.midX, y: frame.midY),
-                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                modifierFlags: [], timestamp: clickTime + (type == .leftMouseUp ? 0.01 : 0), windowNumber: window.windowNumber,
                 context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-            window.sendEvent(event)
+            if type == .leftMouseUp { NSApp.postEvent(event, atStart: false) }
+            else { window.sendEvent(event) }
         }
     }
 

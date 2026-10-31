@@ -175,19 +175,24 @@ final class ChatImagePreviewTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         view.layoutSubtreeIfNeeded()
         let location = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+        // AppKit may track mouse-down synchronously; queue mouse-up first.
+        let clickTime = ProcessInfo.processInfo.systemUptime
+        for type in [NSEvent.EventType.leftMouseUp, .leftMouseDown] {
             let event = NSEvent.mouseEvent(
                 with: type,
                 location: location,
                 modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
+                timestamp: clickTime + (type == .leftMouseUp ? 0.01 : 0),
                 windowNumber: window.windowNumber,
                 context: nil,
                 eventNumber: 1,
                 clickCount: 1,
                 pressure: 1
             )
-            if let event { window.sendEvent(event) }
+            if let event {
+                if type == .leftMouseUp { NSApp.postEvent(event, atStart: false) }
+                else { window.sendEvent(event) }
+            }
         }
     }
 

@@ -343,9 +343,13 @@ final class NativeSubtaskLiveTests: XCTestCase {
         func settle() async throws { try await Task.sleep(nanoseconds: 500_000_000); host.layoutSubtreeIfNeeded() }
         func click(_ id: String) async throws {
             let view = try marker(id), rect = view.convert(view.bounds, to: nil)
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY), modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+            // AppKit may track mouse-down synchronously; queue mouse-up first.
+            let clickTime = ProcessInfo.processInfo.systemUptime
+            for type in [NSEvent.EventType.leftMouseUp, .leftMouseDown] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY), modifierFlags: [],
+                    timestamp: clickTime + (type == .leftMouseUp ? 0.01 : 0), windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+                if type == .leftMouseUp { NSApp.postEvent(event, atStart: false) }
+                else { window.sendEvent(event) }
             }
             try await settle()
         }
@@ -480,8 +484,12 @@ final class NativeQueueDensityTests: XCTestCase {
             let node = try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id }, "Missing native queue control: \(id)")
             let rect = node.convert(node.bounds, to: nil)
             window.makeKeyAndOrderFront(nil)
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+            // AppKit may track mouse-down synchronously; queue mouse-up first.
+            let clickTime = ProcessInfo.processInfo.systemUptime
+            for type in [NSEvent.EventType.leftMouseUp, .leftMouseDown] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY), modifierFlags: [], timestamp: clickTime + (type == .leftMouseUp ? 0.01 : 0), windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+                if type == .leftMouseUp { NSApp.postEvent(event, atStart: false) }
+                else { window.sendEvent(event) }
             }
         }
         let collapsed = host.fittingSize.height

@@ -389,11 +389,14 @@ final class WorkspaceTaskContractTests: XCTestCase {
         func click(_ id: String) throws {
             let marker = try XCTUnwrap(sidebarPresenceView(host, id: id))
             let rect = marker.convert(marker.bounds, to: nil)
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            // AppKit may track mouse-down synchronously; queue mouse-up first.
+            let clickTime = ProcessInfo.processInfo.systemUptime
+            for type in [NSEvent.EventType.leftMouseUp, .leftMouseDown] {
                 let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY),
-                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    modifierFlags: [], timestamp: clickTime + (type == .leftMouseUp ? 0.01 : 0), windowNumber: window.windowNumber,
                     context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-                window.sendEvent(event)
+                if type == .leftMouseUp { NSApp.postEvent(event, atStart: false) }
+                else { window.sendEvent(event) }
             }
         }
         try await settle()
@@ -1867,10 +1870,13 @@ private func sidebarDescendants(_ root: NSView) -> [NSView] { [root] + root.subv
 private func clickSidebarMarker(_ host: NSView, window: NSWindow, id: String) throws {
     let marker = try XCTUnwrap(sidebarPresenceView(host, id: id))
     let rect = marker.convert(marker.bounds, to: nil)
-    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+    // AppKit may track mouse-down synchronously; queue mouse-up first.
+    let clickTime = ProcessInfo.processInfo.systemUptime
+    for type in [NSEvent.EventType.leftMouseUp, .leftMouseDown] {
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY),
-            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            modifierFlags: [], timestamp: clickTime + (type == .leftMouseUp ? 0.01 : 0), windowNumber: window.windowNumber,
             context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-        window.sendEvent(event)
+        if type == .leftMouseUp { NSApp.postEvent(event, atStart: false) }
+        else { window.sendEvent(event) }
     }
 }

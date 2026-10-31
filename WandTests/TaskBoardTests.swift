@@ -1058,11 +1058,14 @@ final class TaskPlanningLiveTests: XCTestCase {
             // Events stay in this test host; no OS accessibility setting is changed.
             func click(_ x: CGFloat, _ y: CGFloat) throws {
                 let point = host.convert(NSPoint(x: x, y: host.isFlipped ? y : host.bounds.height - y), to: nil)
-                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                // AppKit may track mouse-down synchronously; queue mouse-up first.
+                let clickTime = ProcessInfo.processInfo.systemUptime
+                for type in [NSEvent.EventType.leftMouseUp, .leftMouseDown] {
                     let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
-                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        timestamp: clickTime + (type == .leftMouseUp ? 0.01 : 0), windowNumber: window.windowNumber,
                         context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-                    NSApp.sendEvent(event)
+                    if type == .leftMouseUp { NSApp.postEvent(event, atStart: false) }
+                    else { NSApp.sendEvent(event) }
                 }
             }
             // Task and directory fields are captured in this injection host.
