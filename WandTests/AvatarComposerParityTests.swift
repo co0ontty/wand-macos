@@ -103,7 +103,7 @@ final class AvatarComposerParityTests: XCTestCase {
         let add = try rect("runtime-add"), send = try rect("runtime-send")
         XCTAssertEqual(add.height, 32, accuracy: 1)
         XCTAssertEqual(send.midY, add.midY, accuracy: 1)
-        XCTAssertEqual(try rect("runtime-surface").height, 47, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-surface").height, 56, accuracy: 1)
         XCTAssertEqual(try rect("runtime-settings").maxX, host.bounds.maxX, accuracy: 1)
         XCTAssertLessThan(try rect("runtime-settings").midY, add.midY)
         XCTAssertEqual(try rect("runtime-avatar").minX, 0, accuracy: 1)
@@ -114,7 +114,7 @@ final class AvatarComposerParityTests: XCTestCase {
         XCTAssertEqual(try rect("runtime-send").minY, send.minY, accuracy: 1)
         focus.collapse()
         host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(try rect("runtime-surface").height, 47, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-surface").height, 56, accuracy: 1)
         XCTAssertEqual(try rect("runtime-send"), send)
     }
 
@@ -140,13 +140,13 @@ final class AvatarComposerParityTests: XCTestCase {
                 host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 250_000_000)
                 host.layoutSubtreeIfNeeded()
                 let add = try rect("runtime-add"), send = try rect("runtime-send")
-                XCTAssertEqual(add.minX, 0, accuracy: 0.5)
-                XCTAssertEqual(send.maxX, width, accuracy: 0.5)
+                XCTAssertEqual(add.minX, 12, accuracy: 0.5)
+                XCTAssertEqual(send.maxX, width - 12, accuracy: 0.5)
                 XCTAssertEqual(send.width, 32, accuracy: 0.5)
                 XCTAssertEqual(try rect("runtime-settings").maxX, width, accuracy: 1)
                 XCTAssertGreaterThanOrEqual(try rect("runtime-settings").minX, 84)
                 XCTAssertLessThan(try rect("runtime-settings").maxY, send.minY)
-                if expanded { XCTAssertEqual(try rect("runtime-editor").width, width, accuracy: 1) }
+                if expanded { XCTAssertEqual(try rect("runtime-editor").width, width - 24, accuracy: 1) }
                 XCTAssertEqual(add.midY, send.midY, accuracy: 0.5)
                 if let directory = ProcessInfo.processInfo.environment["WAND_COMPOSER_OUTPUT"] {
                     let output = URL(fileURLWithPath: directory, isDirectory: true)
