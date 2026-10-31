@@ -1579,6 +1579,54 @@ final class WorkspaceTaskContractTests: XCTestCase {
         XCTAssertEqual(mounted.body["worktree"], .bool(true))
     }
 
+    @MainActor
+    func testSharedTaskPageRequestsArchivesAndKeepsSeparateReadOnlyProjections() async throws {
+        let groups = Data(#"[{"workspaceId":"w","workspaceName":"Wand","workspaceCwd":"/repo","tasks":[{"id":"active-task","workspaceId":"w","name":"active","status":"active","createdAt":"","cwd":"/repo","boardTaskId":"board","boardTaskStatus":"archived","sessions":[{"id":"active-session"},{"id":"archived-session","archived":true}],"totalSessions":2},{"id":"archived-task","workspaceId":"w","name":"archived","status":"active","createdAt":"","cwd":"/repo","archived":true,"sessions":[{"id":"inside-archived"}]}],"standaloneSessions":[{"id":"standalone-archived","archived":true}]}]"#.utf8)
+        let lock = NSLock()
+        var requests = 0
+        let revision = "archive-revision&one"
+        let api = makeAPI { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/tasks")
+            let url = try XCTUnwrap(request.url)
+            let query = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+            XCTAssertEqual(query.filter { $0.name == "includeArchived" }.map(\.value), ["1"])
+            let number = lock.withLock { requests += 1; return requests }
+            if number == 1 {
+                XCTAssertNil(query.first { $0.name == "revision" })
+                return try JSONSerialization.data(withJSONObject: ["revision": revision, "groups": JSONSerialization.jsonObject(with: groups)])
+            }
+            if number == 2 {
+                XCTAssertEqual(query.first { $0.name == "revision" }?.value, revision)
+                return try JSONSerialization.data(withJSONObject: ["unchanged": true, "revision": revision, "groups": []])
+            }
+            if number == 3 { throw URLError(.notConnectedToInternet) }
+            XCTAssertNil(query.first { $0.name == "revision" })
+            return groups
+        }
+        let store = trackedStore(api: api, serverID: "archive-projections")
+        await store.loadTaskGroups(force: true)
+        XCTAssertTrue(store.taskGroupsLoaded)
+        XCTAssertNil(store.taskGroupsError)
+        XCTAssertEqual(store.conversationTaskGroups[0].tasks.count, 2)
+        XCTAssertEqual(store.conversationTaskGroups[0].tasks[0].sessions.count, 2)
+        XCTAssertEqual(store.taskGroups[0].tasks.map(\.id), ["active-task"])
+        XCTAssertEqual(store.taskGroups[0].tasks[0].sessions.map(\.id), ["active-session"])
+        XCTAssertEqual(store.taskGroups[0].tasks[0].boardTaskStatus, "archived")
+        XCTAssertTrue(store.taskGroups[0].standaloneSessions.isEmpty)
+        let complete = store.conversationTaskGroups, active = store.taskGroups
+        await store.loadTaskGroups(force: true)
+        XCTAssertEqual(store.conversationTaskGroups, complete)
+        XCTAssertEqual(store.taskGroups, active)
+        await store.loadTaskGroups(force: true)
+        XCTAssertNotNil(store.taskGroupsError)
+        XCTAssertEqual(store.conversationTaskGroups, complete)
+        XCTAssertEqual(store.taskGroups, active)
+        let creationOptions = try await api.listTaskGroups()
+        XCTAssertEqual(creationOptions, active, "New-session pickers must retain their original archive scope")
+        XCTAssertEqual(lock.withLock { requests }, 4)
+    }
+
     func testTaskDirectoryGroupsDecodeAggregateShape() throws {
         // GET /api/tasks 的目录组形状：任务带运行期字段，未分组会话归 standaloneSessions。
         let json = """

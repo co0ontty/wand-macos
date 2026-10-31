@@ -582,6 +582,7 @@ struct StructuredSessionState: Decodable {
     var turnStartedAt: String?
     var phase: String? = nil
     var lastActivityAt: String? = nil
+    var inputMode: String? = nil
 }
 
 // MARK: - 会话快照
@@ -1247,6 +1248,16 @@ struct GitStatusResult: Decodable {
     let lastCommit: LastCommit?
     let latestTag: String?
     let hasSubmodule: Bool?
+    let head: String?
+    let worktreeCount: Int?
+    let error: String?
+}
+
+struct WorktreeBatchResult: Decodable {
+    let ok: Bool
+    let targetBranch: String
+    let mergedBranches: [String]
+    let pushed: Bool
     let error: String?
 }
 

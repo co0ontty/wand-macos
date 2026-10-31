@@ -7,40 +7,74 @@ struct CommunicationsSidebar: View {
     @ObservedObject var store: CommunicationsStore
     var sessions: [WorkspaceSessionSummary] = []
     var taskGroups: [TaskDirectoryGroup] = []
+    var taskGroupsLoaded = false
+    var taskGroupsError: String? = nil
     var selectedSessionID: String? = nil
+    var onCreateSession: ((EmployeeContact) -> Void)? = nil
+    var onShowConversation: () -> Void = {}
     var onOpenSession: (String) -> Void = { _ in }
-    private var conversationRows: [NativeConversation] { store.conversationList(sessions: sessions, selectedSessionID: selectedSessionID) }
+    private var conversationRows: [NativeConversation] { store.conversationList(sessions: sessions, selectedSessionID: selectedSessionID, entries: indexedEntries) }
     @FocusState private var searchFocused: Bool
+    @FocusState private var filterFocused: Bool
     @State private var expandedPeople: Set<String> = []
     @State private var otherOpen = false
+    @State private var filtersOpen = false
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundColor(Theme.textSecondary)
-                TextField(store.section == .contacts ? "搜索员工、职责、标签…" : "搜索对话…", text: $store.query)
-                    .textFieldStyle(.plain).focused($searchFocused)
-                if !store.query.isEmpty {
-                    Button { store.query = ""; searchFocused = true } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).accessibilityLabel("清除搜索")
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass").foregroundColor(Theme.textSecondary)
+                    TextField(store.section == .contacts ? "搜索员工、职责、标签…" : "搜索对话…", text: $store.query)
+                        .textFieldStyle(.plain).focused($searchFocused)
+                    if !store.query.isEmpty {
+                        Button { store.query = ""; searchFocused = true } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).accessibilityLabel("清除搜索")
+                    }
                 }
-            }
-            .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 32)
-            .wandInputSurface(focused: searchFocused, cornerRadius: Theme.Radius.control)
-            .padding(.horizontal, 12)
+                .font(.system(size: 12)).padding(.horizontal, 9).frame(height: 32)
+                .wandInputSurface(focused: searchFocused, cornerRadius: Theme.Radius.control)
+                if store.section == .conversations {
+                    Button { filtersOpen.toggle() } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                            Text(store.listFilters.count == 0 ? "筛选" : "\(store.listFilters.count)")
+                        }.font(.system(size: 12)).frame(width: 64, height: 32)
+                    }
+                    .buttonStyle(DesktopNavigationButtonStyle(active: store.listFilters.count > 0))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).stroke(Theme.border, lineWidth: 1))
+                    .focused($filterFocused)
+                    .help("设置会话列表的任务阶段、工作区、归档及活动筛选，不影响当前会话")
+                    .accessibilityLabel("筛选对话，\(store.listFilters.count) 个条件")
+                    .popover(isPresented: $filtersOpen, arrowEdge: .top) {
+                        ConversationFilterPanel(filters: store.listFilters, groups: taskGroups,
+                            close: { filtersOpen = false }, apply: { store.listFilters = $0; filtersOpen = false })
+                    }
+                    .onChange(of: filtersOpen) { if !$0 { filterFocused = true } }
+                }
+            }.padding(.horizontal, 12)
             if store.section == .contacts {
                 Toggle("显示已归档员工", isOn: $store.includesArchivedContacts)
                     .toggleStyle(.checkbox).font(.system(size: 11)).padding(.horizontal, 14)
             }
             if store.section == .conversations {
-                HStack(spacing: 6) {
-                    Picker("对话归档筛选", selection: $store.archiveFilter) {
-                        ForEach(CommunicationsStore.ArchiveFilter.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }.pickerStyle(.segmented).labelsHidden()
-                    SidebarActivityFilter(active: store.activityOnly, label: "只看活动对话") { store.activityOnly.toggle() }
-                }.padding(.horizontal, 12)
-                Text("\(conversationRows.count) 个对话").font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                if store.listFilters.count > 0 {
+                    HStack(spacing: 6) {
+                        Text(filterSummary).lineLimit(1).help(filterSummary).accessibilityLabel(filterSummary)
+                        Spacer(minLength: 0)
+                        Button("清除") { store.listFilters = ConversationListFilters() }
+                            .buttonStyle(.plain).foregroundColor(Theme.wandAccent).accessibilityLabel("清除筛选，保留搜索")
+                    }.font(.system(size: 11)).foregroundColor(Theme.textSecondary).padding(.horizontal, 14)
+                }
+                Text("\(conversationRows.count + sessionOnlyPeople.count) 个对话 · \(matchingEntries.count) 条关联会话")
+                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14)
+                if let taskGroupsError {
+                    Text("任务关联读取失败：" + taskGroupsError).font(.system(size: 11)).foregroundColor(Theme.danger)
+                        .lineLimit(2).padding(.horizontal, 14)
+                } else if !taskGroupsLoaded {
+                    Text("正在读取任务关联…").font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                }
             }
             if let error = store.section == .contacts ? store.contactsError : store.conversationsError {
                 Text(error).font(.system(size: 11)).foregroundColor(Theme.danger)
@@ -50,7 +84,7 @@ struct CommunicationsSidebar: View {
                 LazyVStack(spacing: 3) {
                     if store.section == .contacts {
                         ForEach(store.filteredContacts) { contact in
-                            Button { store.selectContact(contact) } label: {
+                            Button { if let onCreateSession { onCreateSession(contact) } else { onShowConversation(); store.selectContact(contact) } } label: {
                                 HStack(spacing: 9) {
                                     ContactAvatar(id: contact.id, avatar: contact.avatar ?? "", name: contact.name, provider: contact.candidates.first?.provider, size: 44)
                                     VStack(alignment: .leading, spacing: 3) {
@@ -80,8 +114,8 @@ struct CommunicationsSidebar: View {
                         if !otherConversationSessions.isEmpty {
                             otherConversationSection
                         }
-                        if conversationRows.isEmpty && otherConversationSessions.isEmpty && !store.indexLoading {
-                            Text(!store.query.isEmpty ? "没有匹配的对话" : store.activityOnly ? "现在没有符合筛选条件的活动对话。" : store.archiveFilter == .archived ? "还没有已归档的对话。" : store.archiveFilter == .unarchived ? "还没有未归档的对话。" : DesktopGroupChatPresentation.isVisible ? "从通讯录选择员工开始私聊，或在上方加号发起群聊。" : "从通讯录选择员工开始私聊。")
+                        if conversationRows.isEmpty && sessionOnlyPeople.isEmpty && otherConversationSessions.isEmpty && !store.indexLoading && taskGroupsLoaded && taskGroupsError == nil {
+                            Text(store.listFilters.hasFacets ? "没有符合筛选条件的对话。" : !store.query.isEmpty ? "没有匹配的对话" : store.activityOnly ? "现在没有符合筛选条件的活动对话。" : store.archiveFilter == .archived ? "还没有已归档的对话。" : store.archiveFilter == .unarchived ? "还没有未归档的对话。" : DesktopGroupChatPresentation.isVisible ? "从通讯录选择员工开始私聊，或在上方加号发起群聊。" : "从通讯录选择员工开始私聊。")
                                 .font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(16)
                         }
                     }
@@ -92,29 +126,40 @@ struct CommunicationsSidebar: View {
         }
     }
 
-    private var indexedSessions: [WorkspaceSessionSummary] {
-        if taskGroups.isEmpty { return sessions }
-        return taskGroups.flatMap { group in
-            group.tasks.flatMap(\.sessions) + group.standaloneSessions
+    private var indexedEntries: [ConversationSessionEntry] {
+        ConversationSessionEntry.index(groups: taskGroups, fallback: sessions)
+    }
+
+    private var matchingEntries: [ConversationSessionEntry] {
+        indexedEntries.filter { entry in
+            let parent = store.items.first { $0.kind == "dm" && $0.peerEmployeeId == entry.session.employeeId }
+            return entry.matches(store.listFilters, query: store.query, parentTitle: parent?.displayTitle, conversationArchived: parent?.isArchived == true)
         }
     }
 
-    private func sessions(for employeeId: String?) -> [WorkspaceSessionSummary] {
-        indexedSessions.filter { session in
-            session.employeeId == employeeId && session.teamChat == nil
-        }.sorted { ($0.startedAt ?? "") > ($1.startedAt ?? "") }
+    private var filterSummary: String {
+        let filters = store.listFilters
+        let workspace = ConversationSessionEntry.workspaceOptions(taskGroups).first { $0.id == filters.workspace }?.label ?? "工作区不可用"
+        return [filters.taskStage.label, workspace, filters.archive == .all ? "" : "对话" + filters.archive.label,
+                filters.activityOnly ? "仅活动" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    private var otherConversationSessions: [WorkspaceSessionSummary] {
-        indexedSessions.filter { $0.employeeId == nil && $0.teamChat == nil }
+    private func sessions(for employeeId: String?) -> [ConversationSessionEntry] {
+        guard let employeeId else { return [] }
+        return matchingEntries.filter { $0.session.employeeId == employeeId }
+    }
+
+    private var otherConversationSessions: [ConversationSessionEntry] {
+        matchingEntries.filter { ($0.session.employeeId ?? "").isEmpty }
     }
 
     private var sessionOnlyPeople: [(id: String, name: String, preview: String)] {
-        let owned = Set(conversationRows.compactMap { $0.kind == "dm" ? $0.peerEmployeeId : nil })
+        let owned = Set(store.items.compactMap { $0.kind == "dm" ? $0.peerEmployeeId : nil })
         var seen = Set<String>()
         var rows: [(String, String, String)] = []
-        for session in indexedSessions where session.teamChat == nil {
-            guard let employeeId = session.employeeId, !owned.contains(employeeId), seen.insert(employeeId).inserted else { continue }
+        for entry in matchingEntries {
+            let session = entry.session
+            guard let employeeId = session.employeeId, !employeeId.isEmpty, !owned.contains(employeeId), seen.insert(employeeId).inserted else { continue }
             rows.append((employeeId, session.employeeName ?? "员工", session.title ?? "有工作会话，尚未开始私聊"))
         }
         return rows
@@ -126,10 +171,10 @@ struct CommunicationsSidebar: View {
         let expanded = expandedPeople.contains(conversationId) || !store.query.isEmpty
         return VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Button { store.select(conversationId) } label: {
+                Button { onShowConversation(); store.select(conversationId) } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        Text(person.preview).font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                        Text("\(personSessions.count) 条匹配会话").font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }.buttonStyle(.plain).accessibilityLabel("打开\(person.name)的私聊")
                 Button {
@@ -148,14 +193,14 @@ struct CommunicationsSidebar: View {
         let expanded = expandedPeople.contains(conversation.id) || !store.query.isEmpty
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Button { store.select(conversation.id) } label: {
+                Button { onShowConversation(); store.select(conversation.id) } label: {
                     HStack(spacing: 9) {
                         if conversation.external != nil { Image(systemName: "person.3").frame(width: 36, height: 36).foregroundColor(Theme.textSecondary) }
                         else if conversation.isGroup { ContactGroupAvatar(profile: store.userProfile, members: conversation.members, contacts: store.contacts) }
                         else { ContactAvatar(id: conversation.peerEmployeeId ?? conversation.id, avatar: store.contact(conversation.peerEmployeeId)?.avatar ?? "", name: conversation.displayTitle, size: 36) }
                         VStack(alignment: .leading, spacing: 3) {
                             Text(conversation.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                            Text(personSessions.first?.title ?? conversation.preview ?? "私聊")
+                            Text(personSessions.isEmpty ? conversation.preview ?? "私聊" : "\(personSessions.count) 条匹配会话")
                                 .font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
@@ -173,7 +218,7 @@ struct CommunicationsSidebar: View {
                 }
             }
             .foregroundColor(Theme.textPrimary).padding(.horizontal, 9)
-            .background(store.selectedID == conversation.id ? Theme.wandAccent.opacity(0.12) : Color.clear)
+            .background(selectedSessionID == nil && store.selectedID == conversation.id ? Theme.wandAccent.opacity(0.12) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             if expanded {
                 ForEach(personSessions, id: \.id) { session in
@@ -200,15 +245,123 @@ struct CommunicationsSidebar: View {
         }.padding(.horizontal, 9).padding(.top, 8)
     }
 
-    private func conversationSessionRow(_ session: WorkspaceSessionSummary) -> some View {
-        Button { onOpenSession(session.id) } label: {
+    private func conversationSessionRow(_ entry: ConversationSessionEntry) -> some View {
+        let session = entry.session
+        return Button { onOpenSession(session.id) } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title ?? "会话").font(.system(size: 12, weight: .medium)).lineLimit(1)
-                Text([session.status, session.providerLabel].compactMap { $0 }.joined(separator: " · "))
+                Text(entry.caption).help(entry.caption)
                     .font(.system(size: 10)).foregroundColor(Theme.textSecondary).lineLimit(1)
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.leading, 28)
         }.buttonStyle(DesktopNavigationButtonStyle(active: selectedSessionID == session.id))
-            .accessibilityLabel("继续会话：\(session.title ?? "会话")")
+            .disabled(entry.isSystemCall)
+            .help(entry.isSystemCall ? "系统调用记录仅供查看，不可继续执行" : entry.caption)
+            .accessibilityLabel("\(session.title ?? "会话")，\(entry.caption)")
+    }
+}
+
+private struct ConversationFilterPanel: View {
+    @State var filters: ConversationListFilters
+    let groups: [TaskDirectoryGroup]
+    let close: () -> Void
+    let apply: (ConversationListFilters) -> Void
+    @State private var workspaceOpen = false
+    @FocusState private var workspaceFocused: Bool
+
+    private var options: [(id: String, label: String)] { ConversationSessionEntry.workspaceOptions(groups) }
+    private var workspaceLabel: String { options.first { $0.id == filters.workspace }?.label ?? "工作区不可用" }
+    private let columnWidth: CGFloat = 292 / 3
+
+    private func closeTopLayer() {
+        if workspaceOpen { workspaceOpen = false } else { close() }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ComposerPopoverHeader(title: "筛选对话", close: closeTopLayer)
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("状态")
+                    Picker("任务状态", selection: $filters.taskStage) {
+                        ForEach(ConversationTaskStage.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }.pickerStyle(.menu).labelsHidden()
+                        .help(filters.taskStage.label).accessibilityValue(filters.taskStage.label)
+                }.frame(width: columnWidth)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("工作区")
+                    Button { workspaceOpen = true } label: {
+                        HStack(spacing: 4) {
+                            Text(workspaceLabel).lineLimit(1).truncationMode(.tail)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.down").font(.system(size: 9))
+                        }.frame(maxWidth: .infinity)
+                    }.buttonStyle(.bordered).focused($workspaceFocused)
+                        .help(workspaceLabel).accessibilityLabel("工作区").accessibilityValue(workspaceLabel)
+                        .popover(isPresented: $workspaceOpen, arrowEdge: .bottom) {
+                            ConversationWorkspaceFilterPicker(options: options, selection: $filters.workspace) { workspaceOpen = false }
+                        }
+                        .onChange(of: workspaceOpen) { if !$0 { workspaceFocused = true } }
+                }.frame(width: columnWidth)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("归档")
+                    Picker("对话归档范围", selection: $filters.archive) {
+                        ForEach(ConversationArchiveFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }.pickerStyle(.menu).labelsHidden()
+                        .help("对话" + filters.archive.label).accessibilityValue(filters.archive.label)
+                }.frame(width: columnWidth)
+            }.font(.system(size: 12)).lineLimit(1)
+            Toggle("只看活动会话", isOn: $filters.activityOnly).toggleStyle(.checkbox).font(.system(size: 11))
+            Divider()
+            HStack {
+                Button("重置") { filters = ConversationListFilters() }
+                Spacer()
+                Button("取消", action: closeTopLayer)
+                Button("应用筛选") { apply(filters) }.keyboardShortcut(.defaultAction)
+            }
+            // Return in the child search field must not activate the parent's default action.
+            .disabled(workspaceOpen)
+        }.padding(16).frame(width: 340)
+    }
+}
+
+private struct ConversationWorkspaceFilterPicker: View {
+    var autofocus = true
+    let options: [(id: String, label: String)]
+    @Binding var selection: String
+    let close: () -> Void
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    private var matches: [(id: String, label: String)] {
+        options.filter { query.isEmpty || $0.label.localizedStandardContains(query) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ComposerPopoverHeader(title: "选择工作区", close: close)
+            TextField("搜索工作区…", text: $query).textFieldStyle(.roundedBorder)
+                .focused($searchFocused).accessibilityLabel("搜索工作区")
+            if !options.contains(where: { $0.id == selection }) {
+                Text("已选工作区不可用，可重选或清除。").font(.system(size: 11)).foregroundColor(Theme.warning)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(matches, id: \.id) { option in
+                        Button { selection = option.id; close() } label: {
+                            HStack(spacing: 6) {
+                                Text(option.label).lineLimit(1).truncationMode(.tail)
+                                Spacer(minLength: 0)
+                                if selection == option.id { Image(systemName: "checkmark") }
+                            }.padding(6).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        }.buttonStyle(DesktopNavigationButtonStyle(active: selection == option.id))
+                            .help(option.label).accessibilityLabel(option.label)
+                            .accessibilityAddTraits(selection == option.id ? .isSelected : [])
+                    }
+                    if matches.isEmpty { Text("没有匹配的工作区").foregroundColor(Theme.textSecondary).padding(6) }
+                }
+            }.frame(maxHeight: 220)
+        }.font(.system(size: 12)).padding(12).frame(width: 280)
+            .onAppear { searchFocused = autofocus }
     }
 }
 
@@ -272,7 +425,7 @@ struct CommunicationsContent: View {
             } else if let error = store.detailError {
                 VStack(spacing: 12) {
                     Text(error).foregroundColor(Theme.danger).multilineTextAlignment(.center)
-                    Button("重新读取") { store.refreshDetail() }.buttonStyle(WandSecondaryButtonStyle())
+                    Button("重新读取") { store.refreshDetail() }.buttonStyle(.bordered)
                 }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 communicationEmpty("和员工一起推进工作", detail: "打开已有对话，或从通讯录发起私聊。每份工作都链接到自己的原生执行会话。", symbol: "bubble.left.and.bubble.right")
@@ -451,7 +604,7 @@ struct ConversationPane: View {
                 HStack {
                     Text(error).font(.system(size: 11)).foregroundColor(Theme.warning).lineLimit(2)
                     Spacer()
-                    Button("重新读取") { store.refreshDetail() }.buttonStyle(WandSecondaryButtonStyle())
+                    Button("重新读取") { store.refreshDetail() }.buttonStyle(.bordered)
                 }.padding(12)
             }
             if let origin = conversation.external {
@@ -472,11 +625,11 @@ struct ConversationPane: View {
                     LazyVStack(alignment: .leading, spacing: 22) {
                         if conversation.history?.hasEarlier == true {
                             Button(store.detailLoading ? "加载中…" : "加载更早消息") { historyAnchor = displayed.first?.id; store.refreshDetail(older: true); messagesLimit += 40 }
-                                .buttonStyle(WandSecondaryButtonStyle()).disabled(store.detailLoading)
+                                .buttonStyle(.bordered).disabled(store.detailLoading)
                         }
                         if conversation.turns.count > messagesLimit {
                             Button("显示更早的消息（\(conversation.turns.count - messagesLimit) 条）") { messagesLimit += 80 }
-                                .buttonStyle(WandSecondaryButtonStyle())
+                                .buttonStyle(.bordered)
                         }
                         if !store.messageQuery.isEmpty && displayed.isEmpty {
                             Text("没有匹配的已加载消息").font(.system(size: 13)).foregroundColor(Theme.textSecondary)
@@ -553,7 +706,7 @@ struct ConversationPane: View {
                 }.font(.system(size: 12)).frame(maxWidth: 340, alignment: .leading)
                 Spacer(minLength: 4)
                 Button("邀请员工") { inviteOpen.toggle() }
-                    .buttonStyle(WandSecondaryButtonStyle()).disabled(conversation.sendBlockReason != nil)
+                    .buttonStyle(.bordered).disabled(conversation.sendBlockReason != nil)
                     .popover(isPresented: $inviteOpen, arrowEdge: .top) {
                         ConversationGroupEditor(store: store, invitation: conversation) { inviteOpen = false }
                     }
@@ -625,7 +778,7 @@ private struct CommunicationMessageRow: View {
                                 .font(.system(size: 14)).lineSpacing(4).lineLimit(previewExpanded ? nil : 4).textSelection(.enabled)
                         }
                         Button("打开对应执行会话") { onOpenSession(link.sessionId) }
-                            .buttonStyle(WandSecondaryButtonStyle()).disabled(turn.sessionPreview?.status == "unavailable")
+                            .buttonStyle(.bordered).disabled(turn.sessionPreview?.status == "unavailable")
                     }.frame(maxWidth: .infinity, alignment: .leading).wandMotion(value: previewExpanded, layout: true)
                 } else {
                     TurnView(turn: turn, baseURL: baseURL, showHeader: false, interactiveTools: false)
@@ -640,7 +793,7 @@ private struct CommunicationMessageRow: View {
                             Text(preview.text).font(.system(size: 13)).lineLimit(previewExpanded ? nil : 4).textSelection(.enabled)
                             if let runID = preview.runId {
                                 Button("选择这轮任务") { onSelectTarget(link.conversationId, ConversationTarget(taskId: link.taskId, runId: runID)) }
-                                    .buttonStyle(WandSecondaryButtonStyle())
+                                    .buttonStyle(.bordered)
                             }
                         }
                     }
@@ -666,6 +819,8 @@ struct ConversationComposerSurface: View {
     @State private var importFiles = false
     @State private var menuOpen = false
     @State private var settingsOpen = false
+    @State private var directoryOpen = false
+    @State private var directoryDraft = ""
     private var blockReason: String? { store.sendBlockReason(for: owner.scope) }
     private var failed: Bool {
         switch owner.phase { case .rejected, .acceptedWithFailure: return true; default: return false }
@@ -697,11 +852,9 @@ struct ConversationComposerSurface: View {
     }
     private var preferredThinking: String {
         guard let candidate, let effort = candidate.thinkingEffort else { return "未取得" }
-        if effort == "off" { return "自动（模型默认）" }
         return thinkingEffortOptions(provider: candidate.provider, selectedModel: candidate.model,
-            defaultModel: store.modelCatalog?.defaultModelId(for: candidate.provider),
-            models: store.modelCatalog?.models(for: candidate.provider) ?? []).first { $0.id == effort }?.label
-            ?? composerThinkingPreference(effort)
+            defaultModel: store.modelCatalog?.defaultModelId(for: candidate.provider), models: store.modelCatalog?.models(for: candidate.provider) ?? [])
+            .first { $0.id == effort }?.shortLabel ?? composerThinkingPreference(effort)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -710,7 +863,6 @@ struct ConversationComposerSurface: View {
                     .font(.system(size: 12)).foregroundColor(owner.unknownID != nil ? Theme.warning : failed ? Theme.danger : Theme.textSecondary)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 6)
             }
-            companion
             FocusComposerSurface(expanded: expanded, hasDraft: !owner.text.isEmpty || !owner.attachments.isEmpty,
                 summary: owner.attachments.isEmpty ? (owner.text.isEmpty ? "输入消息…" : "草稿 · \(owner.text.count) 字") : "草稿 · \(owner.attachments.count) 附件", onFocus: { focus.focus() },
                 editor: {
@@ -749,12 +901,29 @@ struct ConversationComposerSurface: View {
                         menuOpen = false
                         Task { if owner.unknownID != nil { await store.reconcile(owner.scope) } else { await store.send(owner.scope) } }
                     }
-                }, isFocused: focus.focused)
+                }, isFocused: focus.focused, runtime: AnyView(HStack(spacing: 4) {
+                    if let employee = store.contact(conversation.peerEmployeeId) {
+                        Button { focus.borrow("settings", open: expanded); settingsOpen = true } label: {
+                            WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 24)
+                        }.buttonStyle(.plain).frame(width: 32, height: 32).help(employee.name)
+                    }
+                    if editablePreference, let candidate {
+                        executionSelectors(candidate).disabled(owner.isSending || owner.unknownID != nil || blockReason != nil)
+                    } else {
+                        Text(preferredModel).lineLimit(1).truncationMode(.tail)
+                        Text(preferredThinking).fixedSize()
+                    }
+                }.font(.system(size: 12)).frame(maxWidth: 280)))
+            HStack(spacing: 8) { directorySelector; Spacer(minLength: 0) }
+                .font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(.top, 6)
         }
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
         .onChange(of: owner.isSending) { value in if value { focus.submit() } }
         .onChange(of: menuOpen) { if !$0 { focus.resume("menu") } }
         .onChange(of: settingsOpen) { if !$0 { focus.resume("settings") } }
+        .onChange(of: directoryOpen) { if !$0 { focus.resume("directory") } }
+        .onChange(of: conversation.id) { _ in directoryOpen = false }
+        .onChange(of: owner.isSending) { if $0 { directoryOpen = false } }
         .onChange(of: owner.phase) { value in
             if case .sent = value { focus.accepted(hasPendingContent: !owner.text.isEmpty || !owner.attachments.isEmpty || composing) }
             if case .rejected = value { focus.failed() }
@@ -797,6 +966,7 @@ struct ConversationComposerSurface: View {
             HStack(spacing: 8) {
                 if editablePreference, let candidate {
                     executionSelectors(candidate).disabled(owner.isSending || owner.unknownID != nil || blockReason != nil)
+                    directorySelector
                 } else {
                     Text(candidate?.toolLabel ?? "工具未就绪").lineLimit(1)
                     Text(preferredModel).lineLimit(1).truncationMode(.tail)
@@ -806,6 +976,35 @@ struct ConversationComposerSurface: View {
             }.font(.system(size: 12)).foregroundColor(Theme.textSecondary)
                 .help("首选模型：\(preferredModel)；思考：\(preferredThinking)。降级后以实际执行会话为准。")
         })
+    }
+
+    private var directorySelector: some View {
+        let cwd = owner.cwd.isEmpty ? store.defaultCwd : owner.cwd
+        return Button {
+            directoryDraft = cwd; focus.borrow("directory", open: expanded); directoryOpen.toggle()
+        } label: {
+            Label(cwd.isEmpty ? "选择目录" : (cwd as NSString).lastPathComponent, systemImage: "folder")
+                .lineLimit(1).truncationMode(.middle)
+        }
+        .buttonStyle(.plain).frame(maxWidth: 160)
+        .help(cwd.isEmpty ? "默认目录尚未读取" : cwd).accessibilityLabel("选择运行目录：\(cwd)")
+        .disabled(owner.isSending || owner.unknownID != nil || blockReason != nil)
+        .popover(isPresented: $directoryOpen, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                ComposerPopoverHeader(title: "本次消息运行目录") { directoryOpen = false }
+                TextField("输入服务端目录路径", text: $directoryDraft).textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("本次消息运行目录路径")
+                Text("只影响之后发送的新工作，不改变已有工作的目录。")
+                    .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
+                HStack {
+                    Button("使用默认目录") { owner.editCwd(store.defaultCwd); directoryOpen = false }
+                    Spacer()
+                    Button("使用此目录") {
+                        owner.editCwd(directoryDraft.trimmingCharacters(in: .whitespacesAndNewlines)); directoryOpen = false
+                    }.disabled(directoryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }.padding(16).frame(width: 340)
+        }
     }
 
     @ViewBuilder
@@ -821,7 +1020,7 @@ struct ConversationComposerSurface: View {
                 store.executionPreference = EmployeeExecutionCandidate(provider: "pi", engine: "sdk", model: "default",
                     kind: "structured", mode: nil, thinkingEffort: "off")
             }
-        } label: { Text(candidate.toolLabel).lineLimit(1) }
+        } label: { BrandLogo(provider: candidate.provider, color: Theme.textPrimary).frame(width: 16, height: 16) }
             .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("本页执行工具")
         Menu {
             Button("跟随服务端默认") { store.executionPreference = candidate.with(model: "default", thinking: "off") }
@@ -837,7 +1036,7 @@ struct ConversationComposerSurface: View {
                 models: store.modelCatalog?.models(for: candidate.provider) ?? []).filter { $0.id != "off" }) { effort in
                 Button(effort.label) { store.executionPreference = candidate.with(thinking: effort.id) }
             }
-        } label: { Text("思考：" + preferredThinking).lineLimit(1) }
+        } label: { Text(preferredThinking).lineLimit(1) }
             .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("本页思考深度")
     }
     private func setting(_ label: String, value: String, icon: String) -> some View {
@@ -862,13 +1061,13 @@ struct ConversationComposerSurface: View {
             } else { Text("钉钉群消息：仅文字；普通发言不派发内部任务。请在钉钉中原生 @已接入员工。")
                 .font(.system(size: 12)).foregroundColor(Theme.textSecondary) }
             Divider()
-            Button("添加附件") { focus.borrow("files", open: true); menuOpen = false; importFiles = true }.buttonStyle(WandSecondaryButtonStyle()).disabled(conversation.external != nil)
+            Button("添加附件") { focus.borrow("files", open: true); menuOpen = false; importFiles = true }.buttonStyle(.bordered).disabled(conversation.external != nil)
             if conversation.isGroup {
                 ForEach(conversation.members, id: \.id) { member in
                     Button("@\(member.name)") { owner.edit("@\(member.id) " + owner.text); menuOpen = false; focus.focus() }.buttonStyle(.plain)
                 }
             }
-            if conversation.external == nil { TextField("工作目录（可选）", text: Binding(get: { owner.cwd }, set: { owner.editCwd($0) })).textFieldStyle(.roundedBorder) }
+            if conversation.external == nil && conversation.isGroup { TextField("工作目录（可选）", text: Binding(get: { owner.cwd }, set: { owner.editCwd($0) })).textFieldStyle(.roundedBorder) }
             Button("清除当前草稿") { owner.discard(); menuOpen = false }.buttonStyle(.plain)
         }.padding(16).frame(width: 280)
     }
@@ -915,7 +1114,7 @@ private struct ConversationOperationButton: View {
                 Text(operation.unknownID != nil ? "核对请求" : operation.receipt?.state == "accepted" ? "已接受" : title)
                     .font(.system(size: 12))
             }.frame(width: 104, height: 26)
-        }.buttonStyle(WandSecondaryButtonStyle()).disabled(operation.busy).help(operation.feedback)
+        }.buttonStyle(.bordered).disabled(operation.busy).help(operation.feedback)
             .wandMotion(value: operation.busy)
     }
 }
@@ -977,7 +1176,7 @@ struct ConversationGroupEditor: View {
                     }
                 }
                 if let receipt = operation.receipt, receipt.state == "accepted" {
-                    Button("打开对话") { store.select(receipt.conversationId); close() }.buttonStyle(WandSecondaryButtonStyle())
+                    Button("打开对话") { store.select(receipt.conversationId); close() }.buttonStyle(.bordered)
                     Button(invitation == nil ? "再建一个群" : "再次邀请") {
                         operation.resetAcceptedOutcome(); draft = ConversationGroupDraft()
                         capturedInvitation = invitation == nil ? nil : store.detail
@@ -998,4 +1197,237 @@ private func communicationEmpty(_ title: String, detail: String, symbol: String)
         Text(title).font(.system(size: 21, weight: .semibold)).foregroundColor(Theme.textPrimary)
         Text(detail).font(.system(size: 14)).foregroundColor(Theme.textSecondary).multilineTextAlignment(.center).frame(maxWidth: 420)
     }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
+}
+
+
+/// The single desktop rail owns the same task/workspace facets as the flat list.
+struct DesktopSidebarCapsules: View {
+    @ObservedObject var store: CommunicationsStore
+    let groups: [TaskDirectoryGroup]
+    private enum PickerKind { case runtime, workspace }
+    @State private var expanded: PickerKind?
+    @State private var searchOpen = false
+    private var options: [(id: String, label: String)] { ConversationSessionEntry.workspaceOptions(groups) }
+    private let choices: [ConversationRuntimeFilter] = [.confirmation, .working, .all, .failed]
+    private func canonical(_ value: ConversationRuntimeFilter) -> ConversationRuntimeFilter {
+        switch value {
+        case .active, .running, .queued: return .working
+        case .attention, .approval, .waiting: return .confirmation
+        case .idle, .finished: return .all
+        default: return value
+        }
+    }
+    private var selectedRuntime: ConversationRuntimeFilter { canonical(store.runtimeFilter) }
+    private var favoriteRuntime: ConversationRuntimeFilter {
+        let value = selectedRuntime == .all ? canonical(store.lastCapsuleRuntime) : selectedRuntime
+        return value == .all ? .working : value
+    }
+    private var favoriteWorkspace: (id: String, label: String) {
+        let id = store.workspaceFilter == "all" ? store.lastCapsuleWorkspace : store.workspaceFilter
+        return options.first { $0.id == id && $0.id != "all" }
+            ?? options.first { $0.id != "all" && $0.id != "none" }
+            ?? ("none", "未分配工作区")
+    }
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("运行状态").font(.system(size: 10)).foregroundColor(Theme.textSecondary)
+            VStack(spacing: 4) {
+                runtimeButton(.all)
+                runtimeButton(favoriteRuntime)
+                if expanded == .runtime {
+                    ForEach(choices.filter { $0 != .all && $0 != favoriteRuntime }, id: \.self) { runtimeButton($0) }
+                }
+            }.modifier(CapsuleSurface())
+                .onHover { expanded = $0 ? .runtime : nil }
+                .onMoveCommand { if $0 == .down { expanded = .runtime } }
+                .onExitCommand { expanded = nil }
+            Text("工作区").font(.system(size: 10)).foregroundColor(Theme.textSecondary)
+            VStack(spacing: 4) {
+                workspaceButton(("all", "全部工作区"))
+                workspaceButton(favoriteWorkspace)
+                if expanded == .workspace || searchOpen {
+                    let rest = options.filter { $0.id != "all" && $0.id != favoriteWorkspace.id }
+                    ScrollView {
+                        VStack(spacing: 4) {
+                            ForEach(rest, id: \.id) { workspaceButton($0) }
+                            Button { searchOpen = true } label: { Image(systemName: "magnifyingglass").frame(width: 40, height: 40) }
+                                .buttonStyle(WandIconButtonStyle()).help("搜索工作区：按名称查找更多工作区").accessibilityLabel("搜索工作区")
+                                .popover(isPresented: $searchOpen, arrowEdge: .trailing) {
+                                    ConversationWorkspaceFilterPicker(options: options, selection: $store.workspaceFilter) { searchOpen = false; expanded = nil }
+                                }
+                        }
+                    }.frame(width: 40, height: min(CGFloat(rest.count + 1) * 44, 220))
+                }
+            }.modifier(CapsuleSurface())
+                .onHover { expanded = $0 ? .workspace : nil }
+                .onMoveCommand { if $0 == .down { expanded = .workspace } }
+                .onExitCommand { if !searchOpen { expanded = nil } }
+        }.padding(.top, 12).padding(.bottom, 8)
+    }
+    private struct CapsuleSurface: ViewModifier {
+        func body(content: Content) -> some View {
+            content.padding(4).background(Capsule().fill(Theme.surfaceElevated))
+                .overlay(Capsule().stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5))
+        }
+    }
+    private func runtimeButton(_ value: ConversationRuntimeFilter) -> some View {
+        let symbol = value == .confirmation ? "exclamationmark.bubble" : value == .working ? "waveform.path.ecg" : value == .failed ? "xmark.circle" : "square.3.layers.3d"
+        let hint = value == .confirmation ? "需要我确认：查看等待审批或补充输入的会话"
+            : value == .working ? "运行中 / 排队中：查看正在执行或等待执行的会话"
+            : value == .failed ? "运行失败：查看执行失败的会话，统一归入我需要关注" : "全部运行状态：保留工作区和其他筛选条件"
+        return Button { store.runtimeFilter = value; store.activityOnly = false; expanded = nil } label: {
+            Image(systemName: symbol).frame(width: 40, height: 40)
+        }.buttonStyle(DesktopNavigationButtonStyle(active: selectedRuntime == value))
+            .help(hint).accessibilityLabel("筛选运行状态：" + value.label)
+            .accessibilityAddTraits(selectedRuntime == value ? .isSelected : [])
+            .accessibilityAction(named: Text("展开其他运行状态")) { expanded = .runtime }
+    }
+    private func workspaceInitials(_ label: String) -> String {
+        let words = label.components(separatedBy: CharacterSet(charactersIn: " _-/")).filter { !$0.isEmpty }
+        return (words.count > 1 ? words.prefix(2).map { String($0.prefix(1)) }.joined() : String(label.prefix(2))).uppercased()
+    }
+    private func workspaceButton(_ option: (id: String, label: String)) -> some View {
+        Button { store.workspaceFilter = option.id; expanded = nil } label: {
+            Group {
+                if option.id == "all" {
+                    ZStack {
+                        Image(systemName: "folder").offset(x: -3, y: 3)
+                        Image(systemName: "folder.fill").foregroundColor(Theme.surfaceElevated).offset(x: 3, y: -3)
+                        Image(systemName: "folder").offset(x: 3, y: -3)
+                    }.font(.system(size: 17)).frame(width: 24, height: 24)
+                }
+                else if option.id == "none" { Image(systemName: "folder").font(.system(size: 20)) }
+                else {
+                    Image(systemName: "folder").font(.system(size: 20)).frame(width: 24, height: 24)
+                        .overlay(alignment: .bottomTrailing) {
+                            Text(workspaceInitials(option.label)).font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 2).background(Theme.surfaceElevated)
+                                .clipShape(RoundedRectangle(cornerRadius: 3)).offset(x: 4, y: 3)
+                        }
+                }
+            }.frame(width: 40, height: 40)
+        }.buttonStyle(DesktopNavigationButtonStyle(active: store.workspaceFilter == option.id))
+            .help(option.id == "all" ? "全部工作区：显示所有工作区的会话，保留运行状态筛选" : "只显示「\(option.label)」的会话，不切换当前会话")
+            .accessibilityLabel("筛选工作区：" + option.label)
+            .accessibilityAddTraits(store.workspaceFilter == option.id ? .isSelected : [])
+            .accessibilityAction(named: Text("展开其他工作区")) { expanded = .workspace }
+    }
+}
+
+struct DesktopUnifiedSessionList: View {
+    @ObservedObject var store: WorkspaceStore
+    @ObservedObject var communications: CommunicationsStore
+    let api: WandAPI
+    let selectedID: String?
+    let selectedConversationID: String?
+    let onOpen: (String) -> Void
+    let onOpenConversation: (NativeConversation) -> Void
+    let onDeleted: (String) -> Void
+    @State private var filtersOpen = false
+    @State private var deleteTarget: WorkspaceSessionSummary?
+    @State private var moveTarget: WorkspaceSessionSummary?
+    @State private var error: String?
+    @State private var busy = false
+    @State private var locateID: String?
+    private var entries: [ConversationSessionEntry] { ConversationSessionEntry.index(groups: store.conversationTaskGroups) }
+    private var rows: [ConversationSessionEntry] { entries.filter { $0.matches(communications.listFilters, query: communications.query) } }
+    private var attentionRows: [ConversationSessionEntry] { rows.filter { ConversationRuntimeFilter.attention($0.session) } }
+    private var otherRows: [ConversationSessionEntry] { rows.filter { !ConversationRuntimeFilter.attention($0.session) } }
+    private var legacyRows: [NativeConversation] {
+        let ids = Set(entries.map(\.id))
+        return communications.items.filter { item in
+            let id = item.communicationSessionId ?? item.sessionId
+            return id != nil && !ids.contains(id!) && communications.listFilters.runtime == .all && !communications.listFilters.hasFacets && !communications.activityOnly
+                && communications.archiveFilter.matches(item.isArchived)
+                && TaskListPresentation.searchMatches(communications.query, values: [item.displayTitle, item.preview])
+        }
+    }
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                TextField("搜索会话", text: $communications.query).textFieldStyle(.roundedBorder).accessibilityLabel("搜索会话")
+                if !communications.query.isEmpty { Button { communications.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
+                Button { filtersOpen = true } label: { Image(systemName: "line.3.horizontal.decrease").frame(width: 28, height: 28) }
+                    .buttonStyle(WandIconButtonStyle()).help("设置会话列表的任务阶段、工作区、归档及活动筛选，不影响当前会话").accessibilityLabel("筛选会话")
+                    .popover(isPresented: $filtersOpen) {
+                        ConversationFilterPanel(filters: communications.listFilters, groups: store.conversationTaskGroups,
+                            close: { filtersOpen = false }, apply: { communications.listFilters = $0; filtersOpen = false })
+                    }
+            }.padding(.horizontal, 12)
+            Text(communications.listFilters.runtime.label + (communications.taskStageFilter == .all ? "" : " · 任务阶段：" + communications.taskStageFilter.label) + " · " + (ConversationSessionEntry.workspaceOptions(store.conversationTaskGroups).first { $0.id == communications.workspaceFilter }?.label ?? "工作区不可用"))
+                .font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
+            Text("\(rows.count + legacyRows.count) 个会话").font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
+            if let selectedID, entries.contains(where: { $0.id == selectedID }), !rows.contains(where: { $0.id == selectedID }) {
+                VStack(alignment: .leading) {
+                    Text("当前会话不在筛选结果中").font(.system(size: 11))
+                    Button("定位当前会话") { communications.listFilters = ConversationListFilters(); communications.query = ""; locateID = selectedID }
+                }.padding(.horizontal, 12)
+            }
+            if let error = error ?? store.taskGroupsError { Text(error).font(.system(size: 11)).foregroundColor(Theme.danger).padding(.horizontal, 12) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        if !attentionRows.isEmpty {
+                            HStack { Text("我需要关注"); Spacer(); Text("\(attentionRows.count)") }
+                                .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary).padding(8)
+                            ForEach(attentionRows) { entry in sessionRow(entry).id(entry.id) }
+                            if !otherRows.isEmpty {
+                                HStack { Text("其他会话"); Spacer(); Text("\(otherRows.count)") }
+                                    .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary).padding(8)
+                            }
+                        }
+                        ForEach(otherRows) { entry in sessionRow(entry).id(entry.id) }
+                        ForEach(legacyRows) { item in
+                            Button { onOpenConversation(item) } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                    Text(item.preview ?? "历史会话").font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                                }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).padding(.horizontal, 8)
+                            }.buttonStyle(DesktopNavigationButtonStyle(active: selectedConversationID == item.id))
+                        }
+                        if rows.isEmpty && legacyRows.isEmpty && store.taskGroupsLoaded {
+                            Text("没有符合条件的会话").foregroundColor(Theme.textSecondary).padding(12)
+                            Button("清除筛选与搜索") { communications.listFilters = ConversationListFilters(); communications.query = "" }
+                        }
+                        if !store.taskGroupsLoaded { ProgressView().controlSize(.small).padding() }
+                    }.padding(.horizontal, 8).padding(.bottom, 12)
+                }.onChange(of: locateID) { id in if let id { proxy.scrollTo(id, anchor: .center); locateID = nil } }
+            }
+        }
+        .sheet(item: $moveTarget) { DesktopSessionMoveSheet(api: api, store: store, session: $0) }
+        .alert("删除会话？", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
+            Button("取消", role: .cancel) { deleteTarget = nil }
+            Button("删除", role: .destructive) {
+                guard let target = deleteTarget else { return }
+                deleteTarget = nil
+                Task { do { try await store.deleteSessions([target.id]); onDeleted(target.id) } catch { self.error = error.localizedDescription } }
+            }
+        } message: { Text("将删除这条会话的消息与执行记录，此操作无法撤销。") }
+    }
+    private func sessionRow(_ entry: ConversationSessionEntry) -> some View {
+        let session = entry.session
+        return Button { onOpen(session.id) } label: {
+            HStack(spacing: 8) {
+                BrandLogo(provider: session.provider ?? "terminal", color: Theme.textSecondary).frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.title ?? session.providerLabel).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text([session.employeeName ?? session.providerLabel, entry.workspaceLabel, ConversationRuntimeFilter.statusLabel(session)].compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if TaskListPresentation.isActive(session, selectedSessionId: nil) { Image(systemName: "circle.fill").font(.system(size: 6)).foregroundColor(Theme.success).accessibilityLabel("活动会话") }
+            }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).padding(.horizontal, 8)
+        }.buttonStyle(DesktopNavigationButtonStyle(active: selectedID == session.id))
+            .help((session.title ?? session.providerLabel) + " · " + entry.caption)
+            .contextMenu {
+                Button("打开会话") { onOpen(session.id) }
+                DesktopCopyWorkingDirectoryButton(cwd: session.cwd)
+                if !entry.archived { Button("移动到分区") { moveTarget = session } }
+                Button(entry.archived ? "恢复会话" : "归档会话") {
+                    Task { do { try await store.archiveSession(session.id, archived: !entry.archived) } catch { self.error = error.localizedDescription } }
+                }
+                Divider()
+                Button("删除会话…", role: .destructive) { deleteTarget = session }
+            }
+    }
 }

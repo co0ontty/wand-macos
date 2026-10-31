@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CF1100000000000000000001 /* ConversationListFiltersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF1100000000000000000002 /* ConversationListFiltersTests.swift */; };
 		F271A0000000000000000201 /* KnowledgeLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271A0000000000000000202 /* KnowledgeLibraryTests.swift */; };
 		F271A0000000000000000101 /* KnowledgeLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271A0000000000000000102 /* KnowledgeLibraryView.swift */; };
 		F271A0000000000000000001 /* KnowledgeLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = F271A0000000000000000002 /* KnowledgeLibrary.swift */; };
@@ -126,6 +127,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		CF1100000000000000000002 /* ConversationListFiltersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListFiltersTests.swift; sourceTree = "<group>"; };
 		F271A0000000000000000202 /* KnowledgeLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeLibraryTests.swift; sourceTree = "<group>"; };
 		F271A0000000000000000102 /* KnowledgeLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeLibraryView.swift; sourceTree = "<group>"; };
 		F271A0000000000000000002 /* KnowledgeLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeLibrary.swift; sourceTree = "<group>"; };
@@ -382,6 +384,7 @@
 				D7000000000000000000B104 /* GitStatusPresentationTests.swift */,
 				D7000000000000000000B105 /* ProviderCatalogTests.swift */,
 				F271A0000000000000000202 /* KnowledgeLibraryTests.swift */,
+				CF1100000000000000000002 /* ConversationListFiltersTests.swift */,
 				C9000000000000000000B101 /* CommunicationsTests.swift */,
 				C9000000000000000000B102 /* CommunicationsContractURLProtocol.swift */,
 				C9000000000000000000B103 /* CommunicationsVisualTests.swift */,
@@ -604,6 +607,7 @@
 				D7000000000000000000A104 /* GitStatusPresentationTests.swift in Sources */,
 				D7000000000000000000A105 /* ProviderCatalogTests.swift in Sources */,
 				F271A0000000000000000201 /* KnowledgeLibraryTests.swift in Sources */,
+				CF1100000000000000000001 /* ConversationListFiltersTests.swift in Sources */,
 				C9000000000000000000A101 /* CommunicationsTests.swift in Sources */,
 				C9000000000000000000A102 /* CommunicationsContractURLProtocol.swift in Sources */,
 				C9000000000000000000A103 /* CommunicationsVisualTests.swift in Sources */,

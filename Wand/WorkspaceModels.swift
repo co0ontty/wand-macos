@@ -365,6 +365,7 @@ func sessionIdentityCaption(
 
 struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
     var executionStatus: String? = nil
+    var ptyCommandRunning: Bool? = nil
     let id: String
     let provider: String?
     let sessionKind: String?
@@ -406,6 +407,7 @@ struct WorkspaceSessionSummary: Codable, Equatable, Identifiable {
         startedAt = snapshot.startedAt
         workspaceTaskId = snapshot.workspaceTaskId
         ptyBusy = snapshot.ptyBusy
+        ptyCommandRunning = snapshot.ptyCommandRunning
         providerCliActive = snapshot.providerCliActive
         inFlight = snapshot.structuredState?.inFlight
         executionStatus = snapshot.structuredState?.inFlight != true && snapshot.archived != true
@@ -487,15 +489,19 @@ struct WorkspaceTask: Codable, Equatable, Identifiable {
     let status: String
     let createdAt: String
     let lastOpenedAt: String?
+    var kind: String? = nil
 }
 
 /// GET /api/tasks 聚合行：任务 + 运行期派生字段；目录信息在 TaskDirectoryGroup 上。
 struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
+    var kind: String? = nil
     var executionStatus: String? = nil
     var queuedExecutionCount: Int? = nil
     var hasQueuedExecution: Bool { executionStatus == "queued" }
     var hasActiveExecution: Bool { executionStatus == "queued" || executionStatus == "running" }
     var parentWorkspaceTaskId: String? = nil
+    var boardTaskId: String? = nil
+    var boardTaskStatus: String? = nil
     let id: String
     let workspaceId: String
     let name: String
@@ -531,9 +537,15 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         archived: Bool? = nil,
         parentWorkspaceTaskId: String? = nil,
         executionStatus: String? = nil,
-        queuedExecutionCount: Int? = nil
+        queuedExecutionCount: Int? = nil,
+        boardTaskId: String? = nil,
+        boardTaskStatus: String? = nil,
+        kind: String? = nil
     ) {
         self.parentWorkspaceTaskId = parentWorkspaceTaskId
+        self.boardTaskId = boardTaskId
+        self.boardTaskStatus = boardTaskStatus
+        self.kind = kind
         self.id = id
         self.workspaceId = workspaceId
         self.name = name
@@ -561,7 +573,8 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
             layout: layout,
             status: status,
             createdAt: createdAt,
-            lastOpenedAt: lastOpenedAt
+            lastOpenedAt: lastOpenedAt,
+            kind: kind
         )
     }
 }
@@ -600,6 +613,40 @@ struct TaskGroupsPage: Equatable {
     let groups: [TaskDirectoryGroup]
     let revision: String?
     let unchanged: Bool
+
+    /// Reproduce the default GET /api/tasks archive scope from the complete, unbounded response.
+    /// Archived ancestors remain only when needed by an active descendant, as on the server.
+    static func activeGroups(from groups: [TaskDirectoryGroup]) -> [TaskDirectoryGroup] {
+        let tasks = groups.flatMap(\.tasks)
+        let parents = Dictionary(tasks.map { ($0.id, $0.parentWorkspaceTaskId) }, uniquingKeysWith: { first, _ in first })
+        var keep = Set(tasks.filter { $0.archived != true }.map(\.id))
+        for task in tasks where task.archived != true {
+            var parent = task.parentWorkspaceTaskId
+            var seen = Set<String>()
+            while let id = parent, seen.insert(id).inserted {
+                keep.insert(id)
+                parent = parents[id] ?? nil
+            }
+        }
+        return groups.compactMap { group in
+            let activeTasks = group.tasks.filter { keep.contains($0.id) }.map { task in
+                let sessions = task.sessions.filter { $0.archived != true }
+                guard sessions.count != task.sessions.count else { return task }
+                return WorkspaceTaskSummary(id: task.id, workspaceId: task.workspaceId, name: task.name,
+                    worktree: task.worktree, layout: task.layout, status: task.status, createdAt: task.createdAt,
+                    lastOpenedAt: task.lastOpenedAt, cwd: task.cwd, isolated: task.isolated, worktreeError: task.worktreeError,
+                    sessions: sessions, totalSessions: max(0, task.listedSessionCount - (task.sessions.count - sessions.count)),
+                    archived: task.archived, parentWorkspaceTaskId: task.parentWorkspaceTaskId,
+                    executionStatus: task.executionStatus, queuedExecutionCount: task.queuedExecutionCount,
+                    boardTaskId: task.boardTaskId, boardTaskStatus: task.boardTaskStatus, kind: task.kind)
+            }
+            let sessions = group.standaloneSessions.filter { $0.archived != true }
+            if activeTasks.isEmpty && sessions.isEmpty && (group.isSynthetic || group.isGlobal) { return nil }
+            return TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: activeTasks,
+                standaloneSessions: sessions, global: group.global)
+        }
+    }
 
     static func decode(from data: Data) throws -> TaskGroupsPage {
         let object = try JSONSerialization.jsonObject(with: data)
@@ -1026,5 +1073,166 @@ struct WorkspaceTaskDetail: Codable, Equatable, Identifiable {
             worktreeError: worktreeError,
             sessions: sessions ?? self.sessions
         )
+    }
+}
+
+enum ConversationRuntimeFilter: String, CaseIterable {
+    case all, active, running, attention, approval, waiting, queued, idle, failed, finished, confirmation, working
+    var label: String {
+        switch self {
+        case .all: return "全部"
+        case .confirmation: return "需要我确认"
+        case .working: return "运行中 / 排队中"
+        case .active: return "活动"
+        case .running: return "运行中"
+        case .attention: return "待处理"
+        case .approval: return "等待审批"
+        case .waiting: return "等待回答"
+        case .queued: return "排队中"
+        case .idle: return "空闲"
+        case .failed: return "运行失败"
+        case .finished: return "已结束"
+        }
+    }
+    static func running(_ session: WorkspaceSessionSummary) -> Bool {
+        session.archived != true && !attention(session) && !["exited", "stopped"].contains(session.status ?? "") && (session.inFlight == true || session.ptyBusy == true || session.status == "thinking"
+            || (session.sessionKind != "structured" && !isProviderCliSession(session.provider)
+                && session.status == "running" && session.ptyCommandRunning == true))
+    }
+    static func attention(_ session: WorkspaceSessionSummary) -> Bool {
+        ["permission-blocked", "permission", "waiting-input", "waiting_input", "failed", "reconnecting"].contains(session.status ?? "")
+    }
+    static func queued(_ session: WorkspaceSessionSummary) -> Bool {
+        !running(session) && !attention(session) && (session.executionStatus == "queued" || session.status == "queued")
+    }
+    func matches(_ session: WorkspaceSessionSummary) -> Bool {
+        if self == .all { return true }
+        if self == .failed { return session.status == "failed" }
+        if self == .finished { return ["exited", "stopped"].contains(session.status ?? "") }
+        guard session.archived != true else { return false }
+        switch self {
+        case .all: return true
+        case .confirmation: return ["permission-blocked", "permission", "waiting-input", "waiting_input"].contains(session.status ?? "")
+        case .working: return Self.running(session) || Self.queued(session)
+        case .active: return TaskListPresentation.isActive(session, selectedSessionId: nil)
+        case .running: return Self.running(session)
+        case .attention: return Self.attention(session)
+        case .approval: return ["permission-blocked", "permission"].contains(session.status ?? "")
+        case .waiting: return ["waiting-input", "waiting_input"].contains(session.status ?? "")
+        case .queued: return Self.queued(session)
+        case .failed: return session.status == "failed"
+        case .finished: return ["exited", "stopped"].contains(session.status ?? "")
+        case .idle: return !Self.running(session) && !Self.attention(session) && !Self.queued(session) && ["running", "idle"].contains(session.status ?? "")
+        }
+    }
+    static func statusLabel(_ session: WorkspaceSessionSummary) -> String {
+        for value in [Self.approval, .waiting, .failed, .running, .queued, .finished, .idle] where value.matches(session) { return value.label }
+        return session.archived == true ? "已归档" : "状态未知"
+    }
+}
+
+// Conversation list facets use board metadata, never workspace_tasks.status or cwd guesses.
+enum ConversationTaskStage: String, CaseIterable {
+    case all, backlog, todo, doing, review, ready, archived, none
+    var label: String {
+        switch self {
+        case .all: return "全部状态"
+        case .backlog: return "待立项"
+        case .todo: return "等待认领"
+        case .doing: return "执行中"
+        case .review: return "待验收"
+        case .ready: return "待归档"
+        case .archived: return "已归档"
+        case .none: return "未关联任务"
+        }
+    }
+}
+
+enum ConversationArchiveFilter: String, CaseIterable {
+    case all, unarchived, archived
+    var label: String {
+        switch self { case .all: return "全部"; case .unarchived: return "未归档"; case .archived: return "已归档" }
+    }
+    func matches(_ archived: Bool) -> Bool {
+        self == .all || (self == .archived ? archived : !archived)
+    }
+}
+
+struct ConversationListFilters: Equatable {
+    var runtime: ConversationRuntimeFilter = .all
+    var taskStage: ConversationTaskStage = .all
+    // Prefix real IDs so a workspace named "all" or "none" cannot collide with options.
+    var workspace = "all"
+    var archive: ConversationArchiveFilter = .all
+    var activityOnly = false
+    var hasFacets: Bool { taskStage != .all || workspace != "all" }
+    var count: Int { (taskStage == .all ? 0 : 1) + (workspace == "all" ? 0 : 1) + (archive == .all ? 0 : 1) + (activityOnly || runtime != .all ? 1 : 0) }
+}
+
+struct ConversationSessionEntry: Identifiable {
+    let session: WorkspaceSessionSummary
+    let group: TaskDirectoryGroup?
+    let task: WorkspaceTaskSummary?
+    var id: String { session.id }
+    var isSystemCall: Bool { group?.workspaceId.hasPrefix("system-calls:") == true }
+    var taskStage: ConversationTaskStage? {
+        if let task {
+            guard let status = task.boardTaskStatus else { return nil }
+            if status == "done" { return .review }
+            guard let stage = ConversationTaskStage(rawValue: status), stage != .all, stage != .none else { return nil }
+            return stage
+        }
+        guard group != nil, (session.workspaceTaskId ?? "").isEmpty else { return nil }
+        return ConversationTaskStage.none
+    }
+    var workspace: String? {
+        guard let group, !isSystemCall else { return nil }
+        return group.isSynthetic || group.isGlobal || group.workspaceId == "wand-global" ? "none" : "id:" + group.workspaceId
+    }
+    var workspaceLabel: String {
+        guard let workspace else { return "工作区未知" }
+        return workspace == "none" ? "未分配工作区" : group?.workspaceName ?? "工作区未知"
+    }
+    var caption: String { (taskStage?.label ?? "任务状态未知") + " · " + workspaceLabel }
+    var archived: Bool { session.archived == true || task?.archived == true }
+
+    func matches(_ filters: ConversationListFilters, query: String, parentTitle: String? = nil, conversationArchived: Bool = false) -> Bool {
+        (!archived || [ConversationRuntimeFilter.all, .failed, .finished].contains(filters.runtime)) && filters.runtime.matches(session) && (filters.taskStage == .all || taskStage == filters.taskStage)
+            && (filters.workspace == "all" || workspace == filters.workspace)
+            && filters.archive.matches(archived || conversationArchived)
+            && (!filters.activityOnly || (!archived && !conversationArchived && TaskListPresentation.isActive(session, selectedSessionId: nil)))
+            && TaskListPresentation.searchMatches(query, values: [parentTitle, session.employeeName, session.title,
+                session.providerLabel, task?.name, group?.workspaceName, session.cwd])
+    }
+
+    static func index(groups: [TaskDirectoryGroup], fallback: [WorkspaceSessionSummary] = []) -> [Self] {
+        var entries: [Self] = []
+        // Container ownership wins over stale duplicate standalone rows.
+        for group in groups {
+            for task in group.tasks { entries += task.sessions.map { Self(session: $0, group: group, task: task) } }
+        }
+        for group in groups { entries += group.standaloneSessions.map { Self(session: $0, group: group, task: nil) } }
+        entries += fallback.map { Self(session: $0, group: nil, task: nil) }
+        var seen = Set<String>()
+        return entries.filter { $0.session.teamChat == nil && seen.insert($0.id).inserted }
+            .sorted { ($0.session.startedAt ?? "") == ($1.session.startedAt ?? "") ? $0.id < $1.id : ($0.session.startedAt ?? "") > ($1.session.startedAt ?? "") }
+    }
+
+    static func matchesConversation(_ item: NativeConversation, entries: [Self], filters: ConversationListFilters, query: String) -> Bool {
+        guard item.kind == "dm", let employeeId = item.peerEmployeeId else { return false }
+        let owned = entries.filter { $0.session.employeeId == employeeId }
+        if owned.contains(where: { $0.matches(filters, query: query, parentTitle: item.displayTitle, conversationArchived: item.isArchived) }) { return true }
+        // An empty DM has no evidence for either facet, even if the task request failed.
+        return owned.isEmpty && !filters.hasFacets && !filters.activityOnly && filters.archive.matches(item.isArchived)
+            && TaskListPresentation.searchMatches(query, values: [item.displayTitle, item.preview])
+    }
+
+    static func workspaceOptions(_ groups: [TaskDirectoryGroup]) -> [(id: String, label: String)] {
+        var seen = Set<String>()
+        return [("all", "全部工作区"), ("none", "未分配工作区")] + groups.compactMap { group in
+            guard !group.isSynthetic, !group.isGlobal, group.workspaceId != "wand-global",
+                  !group.workspaceId.hasPrefix("system-calls:"), seen.insert(group.workspaceId).inserted else { return nil }
+            return ("id:" + group.workspaceId, group.workspaceName)
+        }
     }
 }

@@ -249,7 +249,6 @@ struct WandBoardCreateView: View {
                         } label: { Image(systemName: "gearshape").frame(width: 28, height: 32) }
                             .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("新工作设置")
                     }.font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Theme.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     if let parent = owner.tasks.first(where: { $0.id == owner.draft.parentTaskId }) {
                         DisclosureGroup("主目标 \(parent.identifier) · \(parent.title)") { Text(parent.description).textSelection(.enabled) }
                             .font(.system(size: 12)).padding(12)
@@ -262,10 +261,11 @@ struct WandBoardCreateView: View {
                         .frame(height: max(48, min(220, composerHeight)))
                         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
                         .accessibilityIdentifier("new-work-description")
+                    ComposerToolbarDivider().padding(.horizontal, 12).padding(.bottom, 8)
                     footer(compact: width < 600)
-                        .padding(.horizontal, 12).padding(.bottom, 12)
+                        .padding(.horizontal, 12).padding(.bottom, 8)
                 }
-                .wandInputSurface(focused: composerFocused, cornerRadius: 24)
+                .wandInputSurface(focused: composerFocused, cornerRadius: FocusComposerMetrics.surfaceRadius)
                 .disabled(owner.loading || owner.creating || owner.createdTask != nil || owner.unconfirmed)
                 if owner.loading { ProgressView("正在读取工作配置…").controlSize(.small) }
             }
@@ -448,11 +448,7 @@ struct WandBoardCreateView: View {
 
     @ViewBuilder
     private func footer(compact: Bool) -> some View {
-        if compact {
-            VStack(alignment: .leading, spacing: 10) { keyboardAction; submissionButtons }
-        } else {
-            HStack(spacing: 10) { keyboardAction; Spacer(minLength: 0); submissionButtons }
-        }
+        HStack(spacing: 10) { keyboardAction; Spacer(minLength: 0); submissionButtons }
     }
 
     private var keyboardAction: some View {
@@ -462,15 +458,16 @@ struct WandBoardCreateView: View {
     }
 
     private var submissionButtons: some View {
-        HStack(spacing: 8) {
-            Button(owner.creating ? "创建中…" : "仅创建任务") { submit(execute: false) }
-                .buttonStyle(WandSecondaryButtonStyle())
-                .disabled(composing || !owner.canSubmit(text: text, title: title, execute: false))
-            Button("创建并开始执行") { submit(execute: true) }
-                .buttonStyle(WandPrimaryButtonStyle())
-                .disabled(composing || !owner.canSubmit(text: text, title: title, execute: true))
-                .help(owner.draft.status == WandBoardStatus.backlog.rawValue ? "待立项只保存；请先将任务状态改为等待认领或处理中。" : "创建任务并使用当前执行对象开始工作")
-        }
+        Button { submit(execute: owner.draft.saveAndDispatch) } label: {
+            ZStack {
+                Image(systemName: "arrow.up").opacity(owner.creating ? 0 : 1)
+                ProgressView().controlSize(.small).opacity(owner.creating ? 1 : 0)
+            }.frame(width: 32, height: 32).foregroundColor(.white)
+                .background(RoundedRectangle(cornerRadius: FocusComposerMetrics.controlRadius).fill(Theme.brand))
+        }.buttonStyle(.plain)
+            .disabled(composing || !owner.canSubmit(text: text, title: title, execute: owner.draft.saveAndDispatch))
+            .accessibilityLabel(owner.draft.saveAndDispatch ? "创建并开始执行" : "仅创建任务")
+            .help(owner.draft.saveAndDispatch ? "创建任务并开始执行" : "仅创建任务")
     }
 
     private func submit(execute: Bool) {

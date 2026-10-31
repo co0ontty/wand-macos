@@ -17,8 +17,14 @@ struct WandBoardListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                ForEach(WandBoardStatus.columns) { status in
-                    group(status)
+                ForEach(WandBoardStatus.columns) { status in group(status) }
+                WandBoardArchiveFolder(count: (grouped["archived"] ?? []).count, open: archiveOpen, onToggle: onToggleArchive) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(grouped["archived"] ?? []) { task in
+                            row(task)
+                            WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: 1260, alignment: .leading)
@@ -30,11 +36,7 @@ struct WandBoardListView: View {
 
     private func group(_ status: WandBoardStatus) -> some View {
         let items = grouped[status.rawValue] ?? []
-        let archived = status == .done ? (grouped[WandBoardStatus.archived.rawValue] ?? []) : []
-        // 展开归档目录时，「等你确认」组保持打开，否则目录会被折在折叠区里看不见。
-        let isCollapsed = status == .done && archiveOpen && !archived.isEmpty
-            ? false
-            : collapsed.contains(status.rawValue)
+        let isCollapsed = collapsed.contains(status.rawValue)
         return VStack(alignment: .leading, spacing: 4) {
             Button {
                 onToggle(status.rawValue)
@@ -64,7 +66,7 @@ struct WandBoardListView: View {
             .accessibilityLabel("\(status.label)，\(items.count) 个，\(isCollapsed ? "已收起" : "已展开")")
 
             if !isCollapsed {
-                if items.isEmpty && !(status == .done && !archived.isEmpty) {
+                if items.isEmpty {
                     Text(status.empty)
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textTertiary)
@@ -74,18 +76,6 @@ struct WandBoardListView: View {
                 ForEach(items) { task in
                     row(task)
                     WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
-                }
-                if status == .done {
-                    WandBoardArchiveFolder(count: archived.count, open: archiveOpen, onToggle: onToggleArchive) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(archived) { task in
-                                row(task)
-                    WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 2)
                 }
             }
         }
@@ -105,7 +95,7 @@ struct WandBoardListView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
-                    Text(task.acceptance?.acceptedAt != nil ? "验收通过 · 已完成" : "未验收").font(.caption).foregroundColor(Theme.textSecondary)
+                    Text(wandBoardTaskProcessingLabel(task)).font(.caption).foregroundColor(wandBoardHasCurrentHumanAcceptance(task) ? Theme.success : Theme.textSecondary)
                     let parent = wandBoardParent(of: task, in: allTasks)
                     let children = wandBoardChildren(of: task, in: allTasks)
                     if parent != nil || !children.isEmpty {
@@ -167,9 +157,10 @@ struct WandBoardDashboardView: View {
         let stats = wandBoardStats(tasks: tasks)
         let series = wandBoardProgressSeries(tasks: tasks)
         let dueSoon = tasks
-            .filter { $0.dueDate?.isEmpty == false && $0.status != WandBoardStatus.done.rawValue }
+            .filter { $0.dueDate?.isEmpty == false && $0.status != WandBoardStatus.ready.rawValue && $0.status != WandBoardStatus.archived.rawValue }
             .sorted { ($0.dueDate ?? "") < ($1.dueDate ?? "") }
             .prefix(6)
+        let humanQueue = tasks.filter { $0.status == WandBoardStatus.ready.rawValue && wandBoardHasCurrentAIVerification($0) }.prefix(6)
         let priorityRows = WandBoardPriority.allCases.compactMap { priority -> (WandBoardPriority, Int)? in
             let count = tasks.filter { $0.priority == priority.rawValue }.count
             return count > 0 ? (priority, count) : nil
@@ -196,10 +187,10 @@ struct WandBoardDashboardView: View {
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(stats.remaining)")
+                        Text("\(stats.total > 0 ? Int((Double(stats.accepted) / Double(stats.total) * 100).rounded()) : 0)%")
                             .font(.system(size: 40, weight: .semibold, design: .rounded))
                             .foregroundColor(Theme.wandAccent)
-                        Text("待处理")
+                        Text("人工确认完成度")
                             .font(.system(size: 13))
                             .foregroundColor(Theme.textSecondary)
                     }
@@ -217,11 +208,10 @@ struct WandBoardDashboardView: View {
 
                 HStack(alignment: .top, spacing: 12) {
                     metric("待立项", stats.backlog, WandBoardStatus.backlog.color, stats.total)
-                    metric("处理中", stats.doing, WandBoardStatus.doing.color, stats.total)
-                    metric("已验收", stats.accepted, WandBoardStatus.done.color, stats.total)
                     metric("等待认领", stats.todo, WandBoardStatus.todo.color, stats.total)
-                    metric("已逾期", stats.overdue, Theme.wandAccent, stats.total)
-                    metric("高优先级", stats.high, Theme.warning, stats.total)
+                    metric("执行中", stats.doing, WandBoardStatus.doing.color, stats.total)
+                    metric("待验收", stats.review, WandBoardStatus.review.color, stats.total)
+                    metric("待归档", stats.ready, WandBoardStatus.ready.color, stats.total)
                 }
 
                 progressPanel(stats: stats, series: series)
@@ -230,6 +220,23 @@ struct WandBoardDashboardView: View {
                     columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)],
                     spacing: 16
                 ) {
+                    panel("人工确认队列") {
+                        if humanQueue.isEmpty {
+                            emptyPanelText("暂无 AI 已通过、待人工确认的任务")
+                        } else {
+                            ForEach(humanQueue) { task in
+                                dashboardRow(
+                                    action: { onOpenTask(task.id) },
+                                    glyph: { WandBoardStatusGlyph(status: .ready) },
+                                    title: task.title
+                                ) {
+                                    Text("待确认")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(Theme.textSecondary)
+                                }
+                            }
+                        }
+                    }
                     panel("即将到期") {
                         if dueSoon.isEmpty {
                             emptyPanelText("没有设置截止日期的任务")
@@ -350,8 +357,8 @@ struct WandBoardDashboardView: View {
                     .foregroundColor(Theme.textPrimary)
                 Spacer(minLength: 0)
                 legend("范围", stats.total, WandBoardStatus.todo.color)
-                legend("已开始", stats.doing + stats.done, WandBoardStatus.doing.color)
-                legend("已验收", stats.accepted, WandBoardStatus.done.color)
+                legend("已开始", stats.doing + stats.review + stats.ready, WandBoardStatus.doing.color)
+                legend("已归档", stats.accepted, WandBoardStatus.ready.color)
             }
             ZStack {
                 Canvas { context, size in
@@ -375,7 +382,7 @@ struct WandBoardDashboardView: View {
                     }
                     line(\.scope, color: WandBoardStatus.todo.color.opacity(0.7))
                     line(\.started, color: WandBoardStatus.doing.color)
-                    line(\.completed, color: WandBoardStatus.done.color)
+                    line(\.completed, color: WandBoardStatus.ready.color)
                 }
                 .frame(height: 160)
             }
@@ -506,7 +513,7 @@ struct WandBoardGanttView: View {
         let statuses = WandBoardStatus.columns + [.archived]
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
-                Toggle("隐藏「\(WandBoardStatus.done.label)」", isOn: Binding(get: { hideCompleted }, set: onHideCompleted))
+                Toggle("隐藏已归档",  isOn: Binding(get: { hideCompleted }, set: onHideCompleted))
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
@@ -524,7 +531,7 @@ struct WandBoardGanttView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     headRow(range: range)
                     ForEach(statuses) { status in
-                        let items = (grouped[status.rawValue] ?? []).filter { !hideCompleted || ($0.status != "done" && $0.status != "archived") || wandBoardHasOpenDescendant($0, in: allTasks) }
+                        let items = (grouped[status.rawValue] ?? []).filter { !hideCompleted || $0.status != "archived" || wandBoardHasOpenDescendant($0, in: allTasks) }
                         if !items.isEmpty { group(status, items: items, range: range) }
                     }
                 }
@@ -593,10 +600,13 @@ struct WandBoardGanttView: View {
                             RoundedRectangle(cornerRadius: 3, style: .continuous)
                                 .fill(status.color.opacity(0.12))
                                 .frame(width: trackWidth, height: 8)
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(status.color)
-                                .frame(width: cell * CGFloat(span.length), height: 8)
-                                .offset(x: cell * CGFloat(span.offset))
+                            if span.length > 0 {
+                                Circle().fill(status.color).frame(width: 10, height: 10)
+                                    .offset(x: cell * (CGFloat(span.offset) + 0.5) - 5)
+                            } else {
+                                Text(task.dueDate?.isEmpty == false ? "截止日期不在当前范围" : "待排期 · 未设置截止日期")
+                                    .font(.caption).foregroundColor(Theme.textSecondary)
+                            }
                         }
                     }
                     .frame(height: rowHeight)

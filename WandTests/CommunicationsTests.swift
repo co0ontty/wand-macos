@@ -142,6 +142,26 @@ final class CommunicationsTests: XCTestCase {
         XCTAssertFalse(restored.activityOnly)
     }
 
+    func testConversationFilterApplyAndClearPreserveSearchSelectionAndComposer() async throws {
+        let api = CommunicationsStub()
+        api.items = [try conversation("dm_e_first")]
+        let store = CommunicationsStore(api: api, serverURL: URL(string: "https://fixture.example.test")!, defaults: defaults())
+        await store.refreshIndex()
+        store.select("dm_e_first"); await store.waitForDetailForTesting()
+        let owner = store.composer(for: scope())
+        owner.edit("筛选期间保留草稿")
+        store.query = "保留搜索"
+        store.listFilters = ConversationListFilters(taskStage: .review, workspace: "id:workspace", archive: .archived, activityOnly: true)
+        XCTAssertEqual(store.listFilters.count, 4)
+        store.listFilters = ConversationListFilters()
+        XCTAssertEqual(store.listFilters.count, 0)
+        XCTAssertEqual(store.query, "保留搜索")
+        XCTAssertEqual(store.selectedID, "dm_e_first")
+        XCTAssertTrue(owner === store.composer(for: scope()))
+        XCTAssertEqual(owner.text, "筛选期间保留草稿")
+        XCTAssertTrue(api.posts.isEmpty)
+    }
+
     func testGroupAndRunKeepTheirOwnLeaderModelPreferences() throws {
         let json = #"{"id":"g1","kind":"group","team":{"members":[{"id":"m1","name":"负责人","isLeader":true,"agent":{"provider":"pi","model":"openai/gpt-5.4-mini","thinkingEffort":"pi:xhigh"}}]},"tasks":[{"task":{"id":"t1","title":"任务"},"runs":[{"id":"r1","taskId":"t1","status":"idle","team":{"members":[{"id":"m2","name":"旧负责人","isLeader":true,"agent":{"provider":"pi","model":"anthropic/claude-opus-4-6","thinkingEffort":"deep"}}]}}]}]}"#
         let detail = try JSONDecoder().decode(NativeConversation.self, from: Data(json.utf8))

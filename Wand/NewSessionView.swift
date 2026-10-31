@@ -572,15 +572,6 @@ struct NewSessionView: View {
 
     private var creationForm: some View {
         VStack(spacing: 0) {
-            if draft.context.taskId == nil || draft.planningMode {
-                Picker("新建工作方式", selection: $draft.planningMode) {
-                    Text("开始工作").tag(false)
-                    Text("创建任务").tag(true)
-                }
-                .pickerStyle(.segmented).frame(maxWidth: 260).padding(.top, 16)
-                .disabled(draft.creating || draft.creationUnconfirmed || draft.taskPlanning.creating
-                    || draft.taskPlanning.unconfirmed || draft.taskPlanning.createdTask != nil)
-            }
             if draft.planningMode {
                 WandBoardCreateView(api: api, owner: draft.taskPlanning, text: $draft.firstMessage,
                     title: $draft.taskName, kind: $draft.sessionType, composerFocused: $composerFocused) { task in onTaskCreated?(task) }
@@ -648,16 +639,6 @@ struct NewSessionView: View {
                 .padding(.bottom, draft.errorMessage == nil ? 0 : 12)
             VStack(spacing: 0) {
                 submissionReadiness
-                HStack(spacing: 4) {
-                    directoryButton
-                    Spacer(minLength: 4)
-                    if draft.sessionType == .structured { employeeButton }
-                    runSettingsButton
-                }
-                .padding(.horizontal, 8).padding(.bottom, 8)
-                .background(Theme.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .padding(.horizontal, 12)
-                .disabled(draft.creating || draft.creationUnconfirmed)
                 VStack(alignment: .leading, spacing: 0) {
                 firstMessageCard
                 if draft.loading {
@@ -672,12 +653,20 @@ struct NewSessionView: View {
                             .buttonStyle(WandSecondaryButtonStyle())
                     }.padding(14)
                 } else {
+                    ComposerToolbarDivider().padding(.horizontal, 12).padding(.bottom, 8)
                     composerOptions(compact: width < 700)
-                        .padding(.horizontal, 12).padding(.bottom, 12)
+                        .padding(.horizontal, 12).padding(.bottom, 8)
                         .disabled(draft.creating)
                 }
                 }
-                .wandInputSurface(focused: composerFocused, cornerRadius: 24)
+                .wandInputSurface(focused: composerFocused, cornerRadius: FocusComposerMetrics.surfaceRadius)
+                HStack(spacing: 8) {
+                    directoryButton
+                    runSettingsButton
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 6).padding(.horizontal, 2)
+                .disabled(draft.creating || draft.creationUnconfirmed)
             }
             .frame(maxWidth: 760)
             if let error = draft.taskError {
@@ -701,13 +690,11 @@ struct NewSessionView: View {
                     HStack(spacing: 8) {
                         if let employee = draft.employees.first(where: { $0.id == draft.employeeId }) {
                             WorkingAvatar(id: employee.id, name: employee.name, avatar: employee.avatar ?? "", size: 24)
-                            Text(employee.name).lineLimit(1).truncationMode(.tail)
                         } else { Text("选择员工") }
-                        Image(systemName: "chevron.down").font(.system(size: 10))
                     }
                 }.buttonStyle(DesktopNavigationButtonStyle())
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
-                    .frame(maxWidth: 160).frame(height: 32).accessibilityLabel("新工作员工")
+                    .frame(width: 32, height: 32).accessibilityLabel("新工作员工")
                     .popover(isPresented: $showEmployeePicker, arrowEdge: .bottom) {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 8) {
@@ -746,23 +733,17 @@ struct NewSessionView: View {
 
     @ViewBuilder
     private func composerOptions(compact: Bool) -> some View {
-        if compact {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) { taskButton; permissionButton; Spacer(minLength: 4) }
-                HStack(spacing: 4) { if draft.sessionType != .shell { providerButton; modelMenuButton; thinkingButton }; Spacer(minLength: 4); startButton }
+        HStack(spacing: 4) {
+            taskButton
+            if !compact { permissionButton }
+            Spacer(minLength: 4)
+            if draft.sessionType == .structured { employeeButton.fixedSize() }
+            if draft.sessionType != .shell {
+                if !compact { providerButton }
+                modelMenuButton.layoutPriority(-1)
+                thinkingButton.fixedSize()
             }
-        } else {
-            HStack(spacing: 4) {
-                taskButton
-                permissionButton
-                Spacer(minLength: 4)
-                if draft.sessionType != .shell {
-                    providerButton
-                    modelMenuButton
-                    thinkingButton
-                }
-                startButton
-            }
+            startButton.fixedSize()
         }
     }
 
@@ -778,7 +759,7 @@ struct NewSessionView: View {
 
     private func chipLabel(_ text: String, symbol: String, width: CGFloat = 130) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: symbol).font(.system(size: 12))
+            if !symbol.isEmpty { Image(systemName: symbol).font(.system(size: 12)) }
             Text(text).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
             Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
         }
@@ -795,7 +776,7 @@ struct NewSessionView: View {
                     draft.rememberExecutionPreference()
                 }
             }
-        } label: { chipLabel("思考：" + composerThinkingPreference(draft.thinkingEffort), symbol: "brain", width: 130) }
+        } label: { chipLabel(thinkingLevels.first { $0.id == draft.thinkingEffort }?.shortLabel ?? composerThinkingPreference(draft.thinkingEffort), symbol: "", width: 64) }
             .menuStyle(.borderlessButton).accessibilityLabel("本页思考深度")
     }
 
@@ -915,7 +896,8 @@ struct NewSessionView: View {
                 ProgressView().controlSize(.small).tint(.white).opacity(draft.creating ? 1 : 0)
             }.frame(width: 34, height: 34)
         }
-        .buttonStyle(WandSendButtonStyle(isBusy: draft.creating)).disabled(!canCreate)
+        .buttonStyle(.plain).foregroundColor(canCreate ? Color.white : Theme.textSecondary)
+        .background(RoundedRectangle(cornerRadius: FocusComposerMetrics.controlRadius).fill(canCreate ? Theme.brand : Theme.surfaceSoft)).disabled(!canCreate)
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityLabel(draft.submissionPhase.label)
         .help(draft.submissionBlockReason ?? (draft.submissionPhase.label + (sendWithCommandEnter ? " · ⌘↵" : " · ↵")))

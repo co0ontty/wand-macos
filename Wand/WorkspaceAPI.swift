@@ -53,24 +53,17 @@ func workspaceTaskWindowRequest(
     return WorkspaceTaskWindowRequest(path: "/api/sessions", body: body)
 }
 
-/// Worktree 合并 Agent 的托管会话请求：mode=managed + initialInput 任务书，
+/// Worktree 合并 Agent 的托管会话请求：由系统运维员工「勤劳的初二」执行，
 /// 会话只绑定项目、不绑定任务（对齐 web 端 startWorktreeMergeAgent）。
 func worktreeMergeAgentRequest(
     workspace: Workspace,
-    provider: WandProvider,
+    provider: WandProvider? = nil,
     prompt: String
 ) -> WorkspaceTaskWindowRequest {
     WorkspaceTaskWindowRequest(
-        path: "/api/sessions",
+        path: "/api/workspaces/\(workspace.id)/worktree-merge-agent",
         body: [
-            "kind": .string("pty"),
-            "command": .string(provider == .qoder ? "qodercli" : provider.rawValue),
-            "provider": .string(provider.rawValue),
-            "cwd": .string(workspace.cwd),
-            "mode": .string("managed"),
-            "initialInput": .string(prompt),
-            "sessionSource": .string("interactive"),
-            "workspaceId": .string(workspace.id),
+            "prompt": .string(prompt),
         ]
     )
 }
@@ -113,7 +106,8 @@ func createWorkspaceTaskRequest(
     name: String,
     baseRef: String?,
     worktree: Bool? = nil,
-    cwd: String? = nil
+    cwd: String? = nil,
+    parentTaskId: String? = nil
 ) -> WorkspaceTaskWindowRequest {
     var body: [String: WorkspaceRequestValue] = ["name": .string(name)]
     if let baseRef, !baseRef.isEmpty {
@@ -121,6 +115,9 @@ func createWorkspaceTaskRequest(
     }
     if let cwd, !cwd.isEmpty {
         body["cwd"] = .string(cwd)
+    }
+    if let parentTaskId, !parentTaskId.isEmpty {
+        body["parentTaskId"] = .string(parentTaskId)
     }
     // 服务端仅在显式 true 时创建隔离工作树；开启和关闭都必须透传。
     if let worktree {
@@ -135,11 +132,15 @@ func createWorkspaceTaskRequest(
 func createStandaloneTaskRequest(
     name: String,
     cwd: String? = nil,
-    worktree: Bool? = nil
+    worktree: Bool? = nil,
+    parentTaskId: String? = nil
 ) -> WorkspaceTaskWindowRequest {
     var body: [String: WorkspaceRequestValue] = ["name": .string(name)]
     if let cwd, !cwd.isEmpty {
         body["cwd"] = .string(cwd)
+    }
+    if let parentTaskId, !parentTaskId.isEmpty {
+        body["parentTaskId"] = .string(parentTaskId)
     }
     if worktree == false {
         body["worktree"] = .bool(false)
@@ -154,6 +155,21 @@ private struct WorkspaceLayoutResponse: Decodable {
 }
 
 extension WandAPI {
+    func moveWorkspaceSession(taskId: String, sessionId: String) async throws {
+        _ = try await requestData(method: "POST", path: "/api/workspace-tasks/\(percentEncodePathComponent(taskId))/sessions", body: ["sessionId": sessionId])
+    }
+
+    func createWorkspaceSection(name: String, cwd: String, workspaceId: String? = nil, sessionId: String? = nil) async throws -> WorkspaceTask {
+        var body: [String: Any] = ["name": name, "cwd": cwd]
+        if let workspaceId { body["workspaceId"] = workspaceId }
+        if let sessionId { body["sessionId"] = sessionId }
+        return try await request(WorkspaceTask.self, method: "POST", path: "/api/workspace-sections", body: body)
+    }
+
+    func unassignWorkspaceSession(sessionId: String) async throws {
+        _ = try await requestData(method: "POST", path: "/api/workspace-sections/unassign", body: ["sessionId": sessionId])
+    }
+
     func listWorkspaces() async throws -> [Workspace] {
         let workspaces = try await request([Workspace].self, method: "GET", path: "/api/workspaces")
         return workspaces.sorted { lhs, rhs in
@@ -338,14 +354,16 @@ extension WandAPI {
         name: String,
         baseRef: String? = nil,
         worktree: Bool? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        parentTaskId: String? = nil
     ) async throws -> WorkspaceTaskCreation {
         let requestSpec = createWorkspaceTaskRequest(
             workspaceId: workspaceId,
             name: name,
             baseRef: baseRef,
             worktree: worktree,
-            cwd: cwd
+            cwd: cwd,
+            parentTaskId: parentTaskId
         )
         return try await request(
             WorkspaceTaskCreation.self,
@@ -358,9 +376,10 @@ extension WandAPI {
     func createStandaloneTask(
         name: String,
         cwd: String? = nil,
-        worktree: Bool? = nil
+        worktree: Bool? = nil,
+        parentTaskId: String? = nil
     ) async throws -> WorkspaceTaskCreation {
-        let requestSpec = createStandaloneTaskRequest(name: name, cwd: cwd, worktree: worktree)
+        let requestSpec = createStandaloneTaskRequest(name: name, cwd: cwd, worktree: worktree, parentTaskId: parentTaskId)
         return try await request(
             WorkspaceTaskCreation.self,
             method: "POST",
@@ -372,13 +391,13 @@ extension WandAPI {
     /// 跨目录任务聚合列表（GET /api/tasks）：目录组一级容器，
     /// 未绑定任务的会话归入 standaloneSessions。
     func listTaskGroups() async throws -> [TaskDirectoryGroup] {
-        try await listTaskGroupsPage(revision: nil).groups
+        TaskGroupsPage.activeGroups(from: try await listTaskGroupsPage(revision: nil).groups)
     }
 
     func listTaskGroupsPage(revision: String?) async throws -> TaskGroupsPage {
-        var path = "/api/tasks"
+        var path = "/api/tasks?includeArchived=1"
         if let revision, !revision.isEmpty {
-            path += "?revision=\(percentEncodePathComponent(revision))"
+            path += "&revision=\(percentEncodePathComponent(revision))"
         }
         let data = try await requestData(method: "GET", path: path)
         return try TaskGroupsPage.decode(from: data)
@@ -395,12 +414,10 @@ extension WandAPI {
 
     func startWorktreeMergeAgent(
         workspace: Workspace,
-        provider: WandProvider,
         prompt: String
     ) async throws -> SessionSnapshot {
         let requestSpec = worktreeMergeAgentRequest(
             workspace: workspace,
-            provider: provider,
             prompt: prompt
         )
         return try await request(
@@ -409,6 +426,14 @@ extension WandAPI {
             path: requestSpec.path,
             body: requestSpec.foundationBody
         )
+    }
+
+    func startWorktreeMergeAgent(
+        workspace: Workspace,
+        provider: WandProvider,
+        prompt: String
+    ) async throws -> SessionSnapshot {
+        try await startWorktreeMergeAgent(workspace: workspace, prompt: prompt)
     }
 
     func workspacePathSuggestions(query: String) async throws -> [WorkspacePathSuggestion] {

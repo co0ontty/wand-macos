@@ -203,6 +203,9 @@ final class ChatPresentationTests: XCTestCase {
         let legacy = try decode(StructuredSessionState.self, #"{"inFlight":true}"#)
         XCTAssertNil(legacy.phase)
         XCTAssertNil(legacy.lastActivityAt)
+        XCTAssertNil(legacy.inputMode)
+        let steering = try decode(StructuredSessionState.self, #"{"engine":"cli","inFlight":true,"inputMode":"steer"}"#)
+        XCTAssertEqual(steering.inputMode, "steer")
         let oldInit = StructuredSessionState(runner: nil, engine: nil, model: nil, lastError: nil,
                                             inFlight: true, activeRequestId: nil, turnStartedAt: nil)
         XCTAssertNil(oldInit.phase)

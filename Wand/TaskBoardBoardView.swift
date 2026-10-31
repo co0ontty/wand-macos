@@ -19,7 +19,6 @@ struct WandBoardBoardView: View {
     let onOpenTask: (String) -> Void
     var onOpenComments: (String) -> Void = { _ in }
     let onOpenSession: (String) -> Void
-    let onCompleteTask: (WandBoardTask) -> Void
     let onPatchStatus: (WandBoardTask, String) -> Void
     let onDispatchTask: (WandBoardTask) -> Void
     let onArchiveTask: (WandBoardTask) -> Void
@@ -50,6 +49,7 @@ struct WandBoardBoardView: View {
             let naturalWidth = CGFloat(mainColumns.count) * columnWidth
                 + (mainColumns.isEmpty || otherColumns.isEmpty ? 0 : 24)
                 + sideWidth + 56
+            VStack(alignment: .leading, spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 24) {
                     ForEach(mainColumns) { status in
@@ -71,6 +71,9 @@ struct WandBoardBoardView: View {
             }
             .frame(maxWidth: contentWidth, maxHeight: .infinity, alignment: .topLeading)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            archiveZone(archived: grouped[WandBoardStatus.archived.rawValue] ?? [])
+                .padding(.horizontal, 28)
+            }
         }
     }
 
@@ -78,7 +81,6 @@ struct WandBoardBoardView: View {
 
     private func column(_ status: WandBoardStatus) -> some View {
         let items = grouped[status.rawValue] ?? []
-        let archived = status == .done ? (grouped[WandBoardStatus.archived.rawValue] ?? []) : []
         let isDropTarget = dropStatus == status.rawValue
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -87,15 +89,17 @@ struct WandBoardBoardView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Theme.textSecondary)
                 Spacer(minLength: 0)
-                Button {
-                    onCreateInColumn(status.rawValue)
-                } label: {
-                    Image(systemName: "plus")
+                if status != .review && status != .ready {
+                    Button {
+                        onCreateInColumn(status.rawValue)
+                    } label: {
+                        Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(WandIconButtonStyle())
-                .help("在\(status.label)中新建任务")
-                .accessibilityLabel("在\(status.label)中新建任务")
+                    .help("在「\(status.label)」中新建任务")
+                    .accessibilityLabel("在「\(status.label)」中新建任务")
+                }
             }
             .padding(.horizontal, 4)
             .frame(height: 36)
@@ -112,7 +116,7 @@ struct WandBoardBoardView: View {
                         WandBoardSkeletonCard()
                         WandBoardSkeletonCard()
                     }
-                    if !loading && items.isEmpty && !(status == .done && !archived.isEmpty) {
+                    if !loading && items.isEmpty {
                         Text(status.empty)
                             .font(.system(size: 12))
                             .foregroundColor(Theme.textTertiary)
@@ -128,9 +132,6 @@ struct WandBoardBoardView: View {
                     }
                     ForEach(items) { task in
                         card(task)
-                    }
-                    if status == .done {
-                        archiveZone(archived: archived)
                     }
                 }
                 .padding(.top, 4)
@@ -185,7 +186,6 @@ struct WandBoardBoardView: View {
             onOpen: { onOpenTask(task.id) },
             onOpenComments: { onOpenComments(task.id) },
             onOpenSession: onOpenSession,
-            onComplete: { onCompleteTask(task) },
             onPatchStatus: { onPatchStatus(task, $0) },
             onDispatch: { onDispatchTask(task) },
             onArchive: { onArchiveTask(task) },
@@ -209,13 +209,11 @@ struct WandBoardBoardView: View {
     private func archiveZone(archived: [WandBoardTask]) -> some View {
         return VStack(alignment: .leading, spacing: 8) {
             WandBoardArchiveFolder(count: archived.count, open: archiveOpen, onToggle: onToggleArchive) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(archived) { task in
-                        card(task)
-                    }
-                }
+                ScrollView { LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(archived) { task in card(task) }
+                } }.frame(maxHeight: 280)
             }
-            Text(archiveDrop ? "松开鼠标，归档此任务" : "拖到这里归档：侧栏隐藏，终端与记录保留")
+            Text("归档独立收纳；请先查看 AI 验收证据，再由人工确认并归档。")
                 .font(.system(size: 11))
                 .foregroundColor(archiveDrop ? Theme.wandAccent : Theme.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)

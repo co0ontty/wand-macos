@@ -73,7 +73,7 @@ struct TaskBoardView: View {
             "filters": DesktopPageLink.json(["statuses": filters.statuses.sorted(), "priorities": filters.priorities.sorted(), "labels": filters.labels.sorted()]),
             "display": DesktopPageLink.json(["body": display.body, "mainStatuses": display.mainStatuses.sorted()]),
             "zoom": ganttZoom.rawValue, "hideCompleted": String(hideCompleted), "queue": String(executionQueue),
-            "boardCollapsed": DesktopPageLink.json(Dictionary(uniqueKeysWithValues: ["backlog", "todo", "doing", "done", "archived"].map { ($0, collapsedList.contains($0)) }))
+            "boardCollapsed": DesktopPageLink.json(Dictionary(uniqueKeysWithValues: ["backlog", "todo", "doing", "review", "ready", "archived"].map { ($0, collapsedList.contains($0)) }))
         ])
     }
 
@@ -340,6 +340,7 @@ struct TaskBoardView: View {
                 busy: busyId == task.id,
                 composeToken: composeRequest?.id == task.id ? composeRequest?.token : nil,
                 onPatch: { body in await patchTask(task, body) },
+                onWorkflow: { body in await applyWorkflow(task, body) },
                 onRemember: rememberAgent,
                 onCreateChild: { openCreate(WandBoardStatus.todo.rawValue, parent: task) },
                 employees: employees,
@@ -411,7 +412,6 @@ struct TaskBoardView: View {
                     onOpenTask: { selectedId = $0 },
                     onOpenComments: { selectedId = $0; commentToRevealTaskId = $0 },
                     onOpenSession: onOpenSession,
-                    onCompleteTask: { task in Task { await completeTask(task) } },
                     onPatchStatus: { task, status in
                         Task { await patchTask(task, ["status": status]) }
                     },
@@ -578,7 +578,7 @@ struct TaskBoardView: View {
     private func openCreate(_ status: String, parent: WandBoardTask? = nil) {
         onRequestCreation(WandTaskPlanningContext(
             workspaceId: parent?.workspaceId ?? (workspaceFilter.isEmpty ? (linkedWorkspaceId ?? "") : workspaceFilter),
-            status: status, parentTaskId: parent?.id))
+            status: ["backlog", "todo", "doing"].contains(status) ? status : "backlog", parentTaskId: parent?.id))
     }
 
     private func toggleArchive() {
@@ -592,33 +592,40 @@ struct TaskBoardView: View {
     // MARK: - 写操作
 
     /// 串行化写操作：同一时刻只允许一个任务在写，避免连点造成状态错乱。
-    private func runFor(_ id: String, _ work: () async throws -> Void) async {
+    private func runFor(_ id: String, reportError: Bool = true, _ work: () async throws -> Void) async {
         guard busyId.isEmpty else { return }
         busyId = id
         errorMessage = nil
         do {
             try await work()
         } catch {
-            errorMessage = error.localizedDescription
+            if reportError { errorMessage = error.localizedDescription }
         }
         busyId = ""
     }
 
+    private func applyWorkflow(_ task: WandBoardTask, _ body: [String: Any]) async -> Bool {
+        var accepted = false
+        await runFor(task.id, reportError: false) {
+            let updated = try await api.updateBoardTask(id: task.id, body: body)
+            if let index = tasks.firstIndex(where: { $0.id == task.id }) { tasks[index] = updated }
+            accepted = true
+            await reload(showProgress: false)
+        }
+        return accepted
+    }
+
     private func patchTask(_ task: WandBoardTask, _ body: [String: Any]) async {
+        if let status = body["status"] as? String, status == WandBoardStatus.review.rawValue || status == WandBoardStatus.ready.rawValue || status == WandBoardStatus.done.rawValue {
+            errorMessage = "验收阶段只能通过详情中的提交 / AI 验收 / 人工确认流程变更。"
+            return
+        }
         await runFor(task.id) {
             _ = try await api.updateBoardTask(id: task.id, body: body)
             if let status = body["status"] as? String, status == WandBoardStatus.archived.rawValue {
                 collapsedList.remove(WandBoardStatus.archived.rawValue)
                 showNotice("已归档「\(task.title)」，拖回任意列或右键「恢复到等待认领」即可恢复。")
             }
-            await reload(showProgress: false)
-        }
-    }
-
-    private func completeTask(_ task: WandBoardTask) async {
-        await runFor(task.id) {
-            _ = try await api.updateBoardTask(id: task.id, body: ["status": WandBoardStatus.done.rawValue])
-            showNotice("「\(task.title)」已移入「等你确认」。")
             await reload(showProgress: false)
         }
     }
@@ -655,18 +662,19 @@ struct TaskBoardView: View {
 
     private func archiveCard(_ task: WandBoardTask) async {
         guard task.status != WandBoardStatus.archived.rawValue else { return }
-        await runFor(task.id) {
-            _ = try await api.updateBoardTask(id: task.id, body: ["status": WandBoardStatus.archived.rawValue])
-            // 归档目录默认折叠，不展开的话卡片只是从看板上消失，用户看不出落在哪里。
-            collapsedList.remove(WandBoardStatus.archived.rawValue)
-            showNotice("已归档「\(task.title)」，拖回任意列或右键「恢复到等待认领」即可恢复。")
-            await reload(showProgress: false)
-        }
+        acceptanceToRevealTaskId = task.id
+        selectedId = task.id
+        showNotice("请查看当前交付证据，并在交付与验收中明确确认后归档。")
     }
 
     /// 拖拽换列：换到「处理中」且这条任务还没派发过时，先确认再派发。
     private func dropTask(status: String, taskId: String) async {
         guard let moving = tasks.first(where: { $0.id == taskId }), moving.status != status else { return }
+        if ["review", "ready", "archived"].contains(status) {
+            acceptanceToRevealTaskId = moving.id; selectedId = moving.id
+            showNotice("验收与归档需要证据及明确回执，不能只靠拖拽换列。")
+            return
+        }
         guard wandBoardDropDispatches(status: status, sessionCount: moving.sessions.count) else {
             // 已有会话的卡片只换列，避免拖一次多开一个会话。
             await applyDrop(status: status, taskId: taskId, dispatch: false)

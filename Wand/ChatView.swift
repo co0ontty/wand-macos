@@ -417,14 +417,12 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !sessionSubtasks.isEmpty || (!store.loading && store.loadError == nil && hasGitChanges) {
+            if !store.loading && store.loadError == nil && hasGitChanges {
                 sessionActionBar
             }
             if showingFind { conversationFindBar }
             if !store.connected && !store.loading { reconnectBanner }
             GeometryReader { geometry in
-                let split = geometry.size.width > 960
-                let detailWidth = split ? geometry.size.width * 0.38 : geometry.size.width
                 ZStack(alignment: .trailing) {
                     conversationSurface
                         .safeAreaInset(edge: .bottom) { bottomBar }
@@ -433,19 +431,9 @@ struct ChatView: View {
                             selectedSubtaskID = id
                             showSubtasks = true
                         })
-                        .frame(width: showSubtasks && split ? geometry.size.width - detailWidth : geometry.size.width)
+                        .frame(width: geometry.size.width)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .opacity(showSubtasks && !split ? 0 : 1)
-                        .allowsHitTesting(!(showSubtasks && !split))
-                        .accessibilityHidden(showSubtasks && !split)
-                    NativeChatSubtaskPanel(tasks: sessionSubtasks, selectedID: $selectedSubtaskID,
-                        baseURL: api.baseURL, running: store.isResponding, onClose: closeSubtasks)
-                        .frame(width: detailWidth)
-                        .background(Theme.workspaceBackground)
-                        .offset(x: showSubtasks ? 0 : detailWidth)
-                        .opacity(showSubtasks ? 1 : 0)
-                        .allowsHitTesting(showSubtasks)
-                        .accessibilityHidden(!showSubtasks)
+
                 }
                 .clipped()
                 .wandMotion(value: showSubtasks, layout: true)
@@ -1100,41 +1088,36 @@ struct ChatView: View {
     }
 
     private var composerProgress: AnyView? {
-        guard !visibleTodos.isEmpty || !store.queuedMessages.isEmpty || store.removedQueueText != nil else { return nil }
-        return AnyView(HStack(spacing: 8) {
-            if !visibleTodos.isEmpty { TodoProgressBar(todos: visibleTodos, expanded: $showTodoProgress, context: store.todoProgress?.context ?? .recent).frame(maxWidth: .infinity) }
+        guard !visibleTodos.isEmpty || !sessionSubtasks.isEmpty || !store.queuedMessages.isEmpty || store.removedQueueText != nil else { return nil }
+        return AnyView(HStack(spacing: 6) {
+            if !visibleTodos.isEmpty { TodoProgressBar(todos: visibleTodos, expanded: $showTodoProgress, context: store.todoProgress?.context ?? .recent).frame(maxWidth: 240) }
+            if !sessionSubtasks.isEmpty {
+                NativeWorkSummary(title: "Agent", count: String(sessionSubtasks.count), preview: nativeChatSubtaskSummary(sessionSubtasks, running: store.isResponding), icon: "person.2", expanded: showSubtasks) {
+                    showSubtasks.toggle(); showTodoProgress = false; showQueuedMessages = false
+                }.frame(maxWidth: 240)
+                .popover(isPresented: $showSubtasks, arrowEdge: .bottom) {
+                    NativeChatSubtaskPanel(tasks: sessionSubtasks, selectedID: $selectedSubtaskID,
+                        baseURL: api.baseURL, running: store.isResponding, onClose: closeSubtasks)
+                        .frame(width: 520, height: 560).background(Theme.workspaceBackground)
+                }
+            }
             if !store.queuedMessages.isEmpty || store.removedQueueText != nil {
                 ComposerQueue(store: store, expanded: $showQueuedMessages,
                     canRetrieve: !composerIsComposing && !attachments.isUploading)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: 240)
             }
-        })
+        }.frame(maxWidth: .infinity, alignment: .center))
     }
 
     private var inputBar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ComposerIdentityHeader(hasPortrait: store.snapshot?.employeeId != nil,
-                progress: composerProgress, portrait: {
-                ComposerCompanion(focus: { composerFocus.focus(); inputFocused = true }) {
-                    WorkingAvatar(id: store.snapshot?.employeeId ?? sessionId, name: store.displayEmployeeName, avatar: store.displayEmployeeAvatar,
-                        activity: avatarFileActivity(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked),
-                        thinking: avatarIsThinking(messages: store.messages, executing: store.isResponding && store.status == "running" && !store.permissionBlocked),
-                        size: FocusComposerMetrics.normalCompanionSize)
-                }
-            }, identity: { Text(store.displayEmployeeName + "：").foregroundColor(Theme.textPrimary) }, runtime: {
-                HStack(spacing: 6) {
-                    modelThinkingChip(inMenu: false)
-                    Text("·").accessibilityHidden(true)
-                    thinkingChip(inMenu: false).fixedSize(horizontal: true, vertical: false)
-                }
-            })
+            if let composerProgress { composerProgress.padding(.bottom, 8) }
             FocusComposerSurface(expanded: composerFocus.editing || composerFocus.recovery || store.sending || attachments.isUploading,
                 hasDraft: !draft.isEmpty || !attachments.attachments.isEmpty,
                 summary: attachments.attachments.isEmpty ? (draft.isEmpty ? (store.isResponding ? "回复中，可继续输入" : "输入消息…") : "草稿 · \(draft.split(separator: "\n").first.map(String.init) ?? draft)") : "草稿 · \(attachments.attachments.count) 附件",
                 onFocus: { composerFocus.focus(); inputFocused = true }, editor: { composerInputContent },
                 add: { composerActionsMenu }, send: { trailingButtons },
-                isFocused: inputFocused, showsAdvancedSettings: store.snapshot?.provider == "pi", sendWidth: 100,
-                onCollapse: { composerFocus.collapse(); inputFocused = false },
+                isFocused: inputFocused, showsAdvancedSettings: store.snapshot?.provider == "pi", sendWidth: 32,
                 accessory: store.unconfirmedInputs.isEmpty
                     && draftCache.queueRecovery(serverURL: api.baseURL, sessionID: sessionId) == nil ? nil : AnyView(VStack(alignment: .leading, spacing: 4) {
                     QueueRecoveryNotice(serverURL: api.baseURL, sessionID: sessionId)
@@ -1147,12 +1130,21 @@ struct ChatView: View {
                                 .buttonStyle(.borderless).disabled(store.sending)
                         }
                     }
+                }), runtime: AnyView(HStack(spacing: 4) {
+                    if let employeeId = store.snapshot?.employeeId {
+                        Button { composerFocus.borrow("actions", open: true); showComposerActions = true } label: {
+                            WorkingAvatar(id: employeeId, name: store.displayEmployeeName, avatar: store.displayEmployeeAvatar, size: 24)
+                        }.buttonStyle(.plain).frame(width: 32, height: 32).help(store.displayEmployeeName)
+                    }
+                    BrandLogo(provider: store.snapshot?.provider ?? "", color: Theme.textPrimary).frame(width: 16, height: 16)
+                    modelThinkingChip(inMenu: false).frame(maxWidth: 200)
+                    thinkingChip(inMenu: false).fixedSize()
                 }))
         }
         .padding(.horizontal, ChatLayoutMetrics.horizontalInset).padding(.top, 8).padding(.bottom, 8)
         .onChange(of: store.queuedMessages.isEmpty) { if $0 && store.removedQueueText == nil { showQueuedMessages = false } }
-        .onChange(of: showQueuedMessages) { if $0 { showTodoProgress = false } }
-        .onChange(of: showTodoProgress) { if $0 { showQueuedMessages = false } }
+        .onChange(of: showQueuedMessages) { if $0 { showTodoProgress = false; showSubtasks = false } }
+        .onChange(of: showTodoProgress) { if $0 { showQueuedMessages = false; showSubtasks = false } }
         .onChange(of: store.todoProgress?.context.sourceKey) { _ in showTodoProgress = false }
         .onChange(of: pageActive) { if !$0 { showQueuedMessages = false; showTodoProgress = false } }
         .onChange(of: showComposerActions) {
@@ -1219,7 +1211,7 @@ struct ChatView: View {
     private var trailingButtons: some View {
         NativeComposerActionButton(phase: sendPresentationPhase, turnRunning: store.isResponding,
             canSubmit: canSend,
-            onSend: sendDraft, onStop: { showStopConfirm = true }, showLabel: true)
+            onSend: sendDraft, onStop: { showStopConfirm = true })
     }
 
     private func modelThinkingChip(inMenu: Bool) -> some View {
@@ -1242,7 +1234,7 @@ struct ChatView: View {
 
     private func thinkingChip(inMenu: Bool) -> some View {
         Button { composerFocus.borrow("thinking", open: composerFocus.editing); inputFocused = false; showThinkingPanel = true } label: {
-            ComposerSettingLabel(title: "思考：" + thinkingShortLabel(store.thinkingEffort))
+            ComposerSettingLabel(title: thinkingShortLabel(store.thinkingEffort))
         }.buttonStyle(.plain).help("思考深度：" + thinkingShortLabel(store.thinkingEffort))
             .popover(isPresented: Binding(get: { showThinkingPanel && showComposerActions == inMenu }, set: { showThinkingPanel = $0 }), arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -5897,8 +5889,8 @@ private struct NativeWorkSummary: View {
                         Image(systemName: "chevron.down").font(.system(size: 10)).rotationEffect(.degrees(expanded ? 180 : 0))
                     }
                 }.font(.system(size: 12)).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            }.padding(.horizontal, 10).frame(height: 36).background(Theme.surface)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(expanded ? Theme.brand : Theme.border))
+            }.padding(.horizontal, 10).frame(height: 32).background(Theme.surfaceSoft, in: Capsule())
+                .overlay(Capsule().stroke(expanded ? Theme.brand : Theme.border, lineWidth: 1))
         }.buttonStyle(.plain).help(preview).accessibilityLabel("\(title)，\(count)").accessibilityValue(expanded ? "已展开" : "已收起")
             .wandMotion(value: expanded, layout: true)
     }
@@ -5956,7 +5948,7 @@ struct ComposerQueue: View {
                     Button("清空") { confirmation = store.queuedMessages; promoteIndex = nil }
                         .buttonStyle(.borderless).disabled(store.queuedMessages.isEmpty || store.removedQueueText != nil)
                 }
-                Text(store.snapshot?.provider == "pi" && store.snapshot?.structuredState?.engine == "core" ? "下一安全边界追加" : "当前回复结束后，按顺序发送")
+                Text(store.snapshot?.structuredState?.inputMode == "steer" || (store.snapshot?.provider == "pi" && store.snapshot?.structuredState?.engine == "core") ? "下一安全边界追加" : "当前回复结束后，按顺序发送")
                     .font(.caption).foregroundColor(Theme.textSecondary)
             }.padding(.horizontal, 12).padding(.vertical, 10)
             Divider()

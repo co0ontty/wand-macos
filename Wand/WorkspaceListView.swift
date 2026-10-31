@@ -40,6 +40,7 @@ struct NewTaskSheetRequest: Identifiable, Equatable {
     let cwd: String
     let projectHint: String?
     var workspaceId: String? = nil
+    var parentTaskId: String? = nil
 }
 
 /// 共享滚动侧栏的工作空间分区：项目、任务及任务内会话。
@@ -82,6 +83,8 @@ struct WorkspaceListView: View {
     @State private var deleteSessionTarget: WorkspaceSessionSummary?
     @State private var deleteSessionBusy = false
     @State private var toastMessage: String?
+    @State private var sectionCreateTarget: TaskDirectoryGroup?
+    @State private var moveSessionTarget: WorkspaceSessionSummary?
     @State private var newTaskRequest: NewTaskSheetRequest?
     @State private var isSelecting = false
     @State private var selectedTaskIds = Set<String>()
@@ -160,6 +163,12 @@ struct WorkspaceListView: View {
         .wandMotion(value: recentOnly)
         .wandMotion(value: activeOnly)
         .wandMotion(value: collapsedRecentGroups, layout: true)
+        .sheet(item: $sectionCreateTarget) { group in
+            DesktopWorkspaceSectionSheet(api: api, group: group) { await store.loadTaskGroups(force: true) }
+        }
+        .sheet(item: $moveSessionTarget) { session in
+            DesktopSessionMoveSheet(api: api, store: store, session: session)
+        }
         .sheet(item: $newTaskRequest) { request in
             newTaskSheet(request)
         }
@@ -208,7 +217,7 @@ struct WorkspaceListView: View {
             .disabled(deleteBusy)
             Button("取消", role: .cancel) {}
         } message: { target in
-            Text("任务「\(target.name)」及其会话和独立 worktree 将被删除，此操作无法撤销。")
+            Text(target.kind == "section" ? "删除分区「\(target.name)」，会话移回工作区并继续保留。" : "任务「\(target.name)」及其会话和独立 worktree 将被删除，此操作无法撤销。")
         }
         .alert("操作未完成", isPresented: deletionErrorPresented) {
             Button("好", role: .cancel) {
@@ -442,8 +451,8 @@ struct WorkspaceListView: View {
             )
             if expanded {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(group.tasks.filter { task in task.parentWorkspaceTaskId == nil || !group.tasks.contains { $0.id == task.parentWorkspaceTaskId } }) { summary in
-                        hierarchyTaskRow(summary, group: group, ancestors: [])
+                    ForEach(group.tasks) { summary in
+                        taskSummaryRow(summary, group: group)
                     }
                     if !group.standaloneSessions.isEmpty {
                         standaloneGroup(group)
@@ -557,6 +566,7 @@ struct WorkspaceListView: View {
             .padding(.vertical, 5)
             .sidebarSelectionChrome(isSelected: false, isHovered: hovering)
             .contextMenu {
+                Button { sectionCreateTarget = group } label: { Label("新建分区", systemImage: "folder.badge.plus") }
                 DesktopCopyWorkingDirectoryButton(cwd: group.isGlobal ? nil : group.workspaceCwd)
                 Menu {
                     if lastOrganizationGroupId == group.id && organizationAction.hasState {
@@ -867,7 +877,7 @@ struct WorkspaceListView: View {
                     collapsedTaskIds.remove(summary.id)
                     onOpenTask(workspace, task)
                 } label: {
-                    Label("打开任务", systemImage: "arrow.forward")
+                    Label(summary.kind == "section" ? "打开分区" : "打开任务", systemImage: "arrow.forward")
                 }
                 Button {
                     collapsedTaskIds.remove(summary.id)
@@ -875,6 +885,16 @@ struct WorkspaceListView: View {
                 } label: {
                     Label("新建会话", systemImage: "plus")
                 }
+                Button {
+                    requestNewTask(NewTaskSheetRequest(
+                        cwd: summary.worktree?.path.isEmpty == false ? (summary.worktree?.path ?? "") : summary.cwd,
+                        projectHint: summary.name,
+                        workspaceId: group.workspaceId,
+                        parentTaskId: summary.boardTaskId ?? summary.id
+                    ))
+                } label: {
+                    Label("创建目录", systemImage: "folder.badge.plus")
+                }.disabled(summary.kind == "section")
                 Button {
                     renameDraft = summary.name
                     renameError = nil
@@ -1020,6 +1040,9 @@ struct WorkspaceListView: View {
             .padding(.leading, TreeIndent.session)
         }
         .contextMenu {
+            if session.archived != true {
+                Button { moveSessionTarget = session } label: { Label("移动到分区", systemImage: "folder") }
+            }
             DesktopCopyWorkingDirectoryButton(cwd: session.cwd)
             Button {
                 Task { await toggleArchive(session) }
@@ -1133,42 +1156,11 @@ struct WorkspaceListView: View {
     }
 
     private func standaloneGroup(_ group: TaskDirectoryGroup) -> some View {
-        let expanded = isFiltering || activeOnly || expandedStandaloneGroups.contains(group.id)
-        return VStack(alignment: .leading, spacing: 1) {
-            Button {
-                if isSelecting {
-                    let ids = Set(group.standaloneSessions.map(\.id))
-                    if ids.isSubset(of: selectedSessionIds) { selectedSessionIds.subtract(ids) }
-                    else { selectedSessionIds.formUnion(ids) }
-                } else if !isFiltering && !activeOnly {
-                    if expanded { expandedStandaloneGroups.remove(group.id) }
-                    else { expandedStandaloneGroups.insert(group.id) }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    treeDisclosureCaret(expanded: expanded)
-                    Text("\(group.workspaceName) - 未分组任务")
-                        .font(.system(size: 12, weight: .medium)).foregroundColor(Theme.textPrimary).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Text("\(group.standaloneSessions.count)")
-                        .font(.system(size: 10)).foregroundColor(Theme.textMuted)
-                }
-                .padding(.leading, TreeIndent.task).padding(.trailing, 8).padding(.vertical, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("sidebar-default-task-\(group.id)")
-            .sidebarPresence("sidebar-default-task-\(group.id)")
-            .accessibilityLabel("\(group.workspaceName) - 未分组任务，\(group.standaloneSessions.count) 个会话")
-            .help("\(group.workspaceName) - 未分组任务")
-            if expanded {
-                ForEach(group.standaloneSessions) { session in
-                    recentSessionRow(TaskListPresentation.RecentEntry(group: group, task: nil, session: session), inDirectory: true)
-                        .padding(.leading, TreeIndent.task)
-                }
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(group.standaloneSessions) { session in
+                recentSessionRow(TaskListPresentation.RecentEntry(group: group, task: nil, session: session), inDirectory: true)
             }
         }
-        .wandMotion(value: expanded, layout: true)
     }
 
     private func recentSessionRow(_ entry: TaskListPresentation.RecentEntry, inDirectory: Bool = false) -> some View {
@@ -1223,6 +1215,9 @@ struct WorkspaceListView: View {
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .help(session.title ?? session.providerLabel)
         }.contextMenu {
+            if session.archived != true {
+                Button { moveSessionTarget = session } label: { Label("移动到分区", systemImage: "folder") }
+            }
             DesktopCopyWorkingDirectoryButton(cwd: session.cwd)
             Button { Task { await toggleArchive(session) } } label: {
                 Label("归档会话", systemImage: "archivebox")
@@ -1948,5 +1943,116 @@ private struct WorkspaceRenameSheet: View {
             .padding(.vertical, 16)
         }
         .frame(width: 380)
+    }
+}
+
+struct DesktopWorkspaceSectionSheet: View {
+    let api: WandAPI
+    let group: TaskDirectoryGroup
+    var sessionId: String? = nil
+    var onCreated: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(sessionId == nil ? "新建分区" : "新建分区并移入").font(.headline)
+            Text("在 \(group.workspaceName) 中整理会话，不创建任务卡。").foregroundStyle(.secondary)
+            TextField("分区名称", text: $name).textFieldStyle(.roundedBorder).disabled(busy)
+            if let error { Text(error).foregroundStyle(Theme.danger) }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }.disabled(busy).keyboardShortcut(.cancelAction)
+                Button(busy ? "创建中…" : "创建") {
+                    guard !busy else { return }
+                    busy = true
+                    Task {
+                        do {
+                            _ = try await api.createWorkspaceSection(name: name.trimmingCharacters(in: .whitespacesAndNewlines), cwd: group.workspaceCwd,
+                                workspaceId: group.isSynthetic || group.isGlobal ? nil : group.workspaceId, sessionId: sessionId)
+                            await onCreated()
+                            dismiss()
+                        } catch { self.error = error.localizedDescription }
+                        busy = false
+                    }
+                }.keyboardShortcut(.defaultAction).disabled(busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.padding(24).frame(width: 420).interactiveDismissDisabled(busy)
+    }
+}
+
+struct DesktopSessionMoveSheet: View {
+    let api: WandAPI
+    @ObservedObject var store: WorkspaceStore
+    let session: WorkspaceSessionSummary
+    @Environment(\.dismiss) private var dismiss
+    @State private var groups: [TaskDirectoryGroup] = []
+    @State private var loading = true
+    @State private var busy = false
+    @State private var error: String?
+    @State private var query = ""
+    @State private var selectedId: String?
+    @State private var creating = false
+    private var source: TaskDirectoryGroup? {
+        groups.first { $0.standaloneSessions.contains { $0.id == session.id }
+            || $0.tasks.contains { $0.sessions.contains { $0.id == session.id } } }
+    }
+    private var currentId: String? {
+        groups.flatMap(\.tasks).first { $0.sessions.contains { $0.id == session.id } }?.id
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("移动会话到分区").font(.headline)
+            Text("只改变归属，保留运行目录、历史和正在执行的会话。").foregroundStyle(.secondary)
+            TextField("搜索分区或工作区", text: $query).textFieldStyle(.roundedBorder).disabled(busy)
+            if loading { ProgressView() }
+            if let error { Text(error).foregroundStyle(Theme.danger) }
+            if source != nil { Button("新建分区并移入") { creating = true }.disabled(busy) }
+            List(selection: $selectedId) {
+                if currentId != nil { Text("移回工作区（不分区）").tag("ungrouped") }
+                ForEach(groups) { group in
+                    ForEach(group.tasks.filter { $0.id != currentId && (query.isEmpty || (group.workspaceName + " " + $0.name).localizedCaseInsensitiveContains(query)) }) { target in
+                        Text("\(group.workspaceName) / \(target.name)").tag(target.id)
+                    }
+                }
+            }.frame(height: 260).disabled(busy)
+            HStack {
+                Button("重新加载") { Task { await load() } }.disabled(busy || loading)
+                Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
+                Button(busy ? "移动中…" : "移动") { Task { await move() } }
+                    .keyboardShortcut(.defaultAction).disabled(busy || loading || selectedId == nil)
+            }
+        }.padding(24).frame(width: 500).interactiveDismissDisabled(busy)
+        .task { await load() }
+        .sheet(isPresented: $creating) {
+            if let source {
+                DesktopWorkspaceSectionSheet(api: api, group: source, sessionId: session.id) {
+                    await store.loadTaskGroups(force: true)
+                    dismiss()
+                }
+            }
+        }
+    }
+    private func load() async {
+        loading = true
+        error = nil
+        do { groups = try await api.listTaskGroups() }
+        catch { self.error = error.localizedDescription }
+        loading = false
+    }
+    private func move() async {
+        guard let selectedId, !busy else { return }
+        busy = true
+        error = nil
+        do {
+            if selectedId == "ungrouped" { try await api.unassignWorkspaceSession(sessionId: session.id) }
+            else { try await api.moveWorkspaceSession(taskId: selectedId, sessionId: session.id) }
+            await store.loadTaskGroups(force: true)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+        busy = false
     }
 }

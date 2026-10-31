@@ -387,6 +387,38 @@ final class DesktopConversationTests: XCTestCase {
         XCTAssertEqual(receipt.queuedMessages, ["remaining"])
     }
 
+    @MainActor
+    func testStructuredInputCarriesOneKeyInTheEncodedRequest() async throws {
+        let server = URL(string: "https://structured-input.test")!
+        CommunicationsContractURLProtocol.register(host: server.host!) { request in
+            XCTAssertEqual(request.url?.path, "/api/sessions/A/input")
+            var body = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    body.append(buffer, count: count)
+                }
+            }
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(json["input"] as? String, "hello")
+            XCTAssertEqual(json["respondImmediately"] as? Bool, true)
+            XCTAssertNotNil(UUID(uuidString: json["idempotencyKey"] as? String ?? ""))
+            return Data(#"{"id":"A","queuedMessages":[],"inputReceipt":{"accepted":true}}"#.utf8)
+        }
+        defer { CommunicationsContractURLProtocol.unregister(host: server.host!) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CommunicationsContractURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let receipt = try await WandAPI(baseURL: server, token: nil, session: session)
+            .sendInput(id: "A", input: "hello", respondImmediately: true)
+        XCTAssertEqual(receipt.id, "A")
+    }
+
     private func queueReceipt(id: String, queue: [String]) throws -> SessionSnapshot {
         let data = try JSONSerialization.data(withJSONObject: ["id": id, "queuedMessages": queue])
         return try JSONDecoder().decode(SessionSnapshot.self, from: data)

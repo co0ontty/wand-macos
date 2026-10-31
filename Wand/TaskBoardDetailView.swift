@@ -24,6 +24,7 @@ struct WandBoardDetailView: View {
     /// 非空时打开空的指派框。右键「派发」用它，避免把任务描述预填进去。
     let composeToken: UUID?
     let onPatch: ([String: Any]) async -> Void
+    let onWorkflow: ([String: Any]) async -> Bool
     let onRemember: (WandBoardTaskAgent) -> Void
     let onCreateChild: () -> Void
     let employees: [EmployeeContact]
@@ -65,6 +66,7 @@ struct WandBoardDetailView: View {
         busy: Bool,
         composeToken: UUID? = nil,
         onPatch: @escaping ([String: Any]) async -> Void,
+        onWorkflow: @escaping ([String: Any]) async -> Bool = { _ in false },
         onRemember: @escaping (WandBoardTaskAgent) -> Void,
         onCreateChild: @escaping () -> Void = {},
         employees: [EmployeeContact] = [],
@@ -93,6 +95,7 @@ struct WandBoardDetailView: View {
         self.busy = busy
         self.composeToken = composeToken
         self.onPatch = onPatch
+        self.onWorkflow = onWorkflow
         self.onRemember = onRemember
         self.onCreateChild = onCreateChild
         self.employees = employees
@@ -163,7 +166,7 @@ struct WandBoardDetailView: View {
                     task: task,
                     children: wandBoardChildren(of: task, in: allTasks),
                     busy: busy,
-                    onPatch: onPatch
+                    onWorkflow: onWorkflow
                 )
                 .id(task.id)
             }
@@ -199,6 +202,7 @@ struct WandBoardDetailView: View {
                 TaskCommentComposer(
                     api: api,
                     taskId: task.id,
+                    dispatchPurpose: task.status == "review" ? "review" : "execution",
                     employees: employees.filter { !$0.isArchived }.map { (id: $0.id, name: $0.name) },
                     sourceCommentId: $replyCommentId
                 ) {
@@ -308,7 +312,7 @@ struct WandBoardDetailView: View {
                 if let parent { relatedTaskRow(parent, caption: "父任务") }
                 if task.parentTaskId == nil && task.status != "archived" { Button("添加子任务", action: onCreateChild) }
                 if !children.isEmpty {
-                    Text("\(children.count) 项 · \(children.filter { $0.status == "done" && $0.acceptance?.acceptedAt == nil }.count) 项等待验收 · \(children.filter { $0.acceptance?.acceptedAt != nil }.count) 项验收通过")
+                    Text("\(children.count) 项 · \(children.filter { !wandBoardHasCurrentHumanAcceptance($0) }.count) 项待人工确认 · \(children.filter { wandBoardHasCurrentHumanAcceptance($0) }.count) 项已归档")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Theme.textSecondary)
                     ForEach(children) { child in relatedTaskRow(child, caption: "子任务") }
@@ -533,7 +537,7 @@ struct WandBoardDetailView: View {
                     get: { task.status },
                     set: { value in Task { await onPatch(["status": value]) } }
                 )) {
-                    ForEach(WandBoardStatus.allCases) { item in
+                    ForEach(WandBoardStatus.allCases.filter { ["backlog", "todo", "doing", task.status].contains($0.rawValue) }) { item in
                         Text(item.label).tag(item.rawValue)
                     }
                 }

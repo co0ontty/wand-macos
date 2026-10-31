@@ -10,6 +10,7 @@ private enum TaskCommentDraftCache {
 struct TaskCommentComposer: View {
     let api: WandAPI
     let taskId: String
+    var dispatchPurpose: String = "execution"
     let employees: [(id: String, name: String)]
     @Binding var sourceCommentId: String?
     let onSaved: () async -> Void
@@ -138,11 +139,11 @@ struct TaskCommentComposer: View {
         let source = sourceCommentId, version = revision
         guard !text.isEmpty else { return }
         busy = true; mentionDismissed = mentionKey; message = ""
-        let identity = TaskCommentRequestIdentity(taskId: taskId, body: text, employeeId: employee, sourceCommentId: source)
+        let identity = TaskCommentRequestIdentity(taskId: taskId, body: text, employeeId: employee, sourceCommentId: source, purpose: employee.isEmpty ? "execution" : dispatchPurpose)
         Task {
             do {
                 let comment = try await api.postBoardTaskComment(id: taskId, requestId: identity.requestId, body: text,
-                    employeeId: employee.isEmpty ? nil : employee, sourceCommentId: source)
+                    employeeId: employee.isEmpty ? nil : employee, sourceCommentId: source, purpose: employee.isEmpty ? nil : identity.purpose)
                 identity.settle(comment)
                 let rejected = comment.dispatch?.state == "failed"
                 if active && revision == version && !rejected {

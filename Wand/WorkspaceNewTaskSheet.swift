@@ -159,7 +159,8 @@ struct NewTaskSheetBody: View {
                 name: trimmed,
                 directory: directory,
                 worktree: directory.isEmpty ? false : worktreeEnabled,
-                workspaceId: request.workspaceId
+                workspaceId: request.workspaceId,
+                parentTaskId: request.parentTaskId
             )
             dismiss()
             onCreated(workspace, creation)

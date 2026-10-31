@@ -155,11 +155,16 @@ final class WandAPI {
         }
     }
 
-    func postBoardTaskComment(id: String, requestId: String, body: String, employeeId: String?, sourceCommentId: String?) async throws -> WandTaskComment {
+    func postBoardTaskComment(id: String, requestId: String, body: String, employeeId: String?, sourceCommentId: String?, purpose: String? = nil) async throws -> WandTaskComment {
+        if purpose == "review", employeeId != nil {
+            let task = try await getBoardTask(id: id)
+            guard task.id == id && task.workflowVersion == 1 else { throw APIError.server(status: 409, message: "服务端尚不支持验收派发；草稿与原请求标识已保留，请更新服务并核对，不会改用普通执行。") }
+        }
         struct Response: Decodable { let comment: WandTaskComment }
         var payload: [String: Any] = ["requestId": requestId, "body": body]
         if let employeeId { payload["employeeId"] = employeeId }
         if let sourceCommentId { payload["sourceCommentId"] = sourceCommentId }
+        if employeeId != nil, let purpose { payload["purpose"] = purpose }
         return try await request(Response.self, method: "POST", path: "/api/wand-tasks/\(percentEncodePathComponent(id))/comments", body: payload).comment
     }
 
@@ -433,7 +438,10 @@ final class WandAPI {
         var body: [String: Any] = ["input": input]
         if let view { body["view"] = view }
         if let shortcutKey { body["shortcutKey"] = shortcutKey }
-        if respondImmediately { body["respondImmediately"] = true }
+        if respondImmediately {
+            body["respondImmediately"] = true
+            body["idempotencyKey"] = UUID().uuidString
+        }
         return try await request(SessionSnapshot.self, method: "POST", path: "/api/sessions/\(id)/input", body: body)
     }
 
@@ -671,6 +679,12 @@ final class WandAPI {
                           path: "/api/sessions/\(percentEncodePathComponent(id))/quick-terminal", body: [:])
     }
 
+    func mergeWorktrees(sessionId: String, branch: String, head: String) async throws -> WorktreeBatchResult {
+        try await request(WorktreeBatchResult.self, method: "POST",
+            path: "/api/sessions/\(sessionId)/git/merge-worktrees",
+            body: ["expectedBranch": branch, "expectedHead": head], timeout: 180)
+    }
+
     // MARK: - Git 快速提交
 
     func gitStatus(sessionId: String) async throws -> GitStatusResult {
@@ -856,12 +870,14 @@ final class WandAPI {
     }
 
     func updateBoardTask(id: String, body: [String: Any]) async throws -> WandBoardTask {
-        try await request(
+        let task = try await request(
             WandBoardTask.self,
             method: "PATCH",
             path: "/api/wand-tasks/\(percentEncodePathComponent(id))",
             body: body
         )
+        if body["workflow"] != nil && (task.workflowVersion != 1 || task.id != id) { throw APIError.server(status: 409, message: "服务端不支持两级验收或回执不匹配当前任务；请更新服务并核对，不能将此响应当作验收通过。") }
+        return task
     }
 
     func deleteBoardTask(id: String) async throws {

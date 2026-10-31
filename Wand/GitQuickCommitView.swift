@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// 快速提交面板：常用操作保持线性，额外的组合操作收在菜单和可选磁吸 dock 中。
+/// 快速 Git 面板：与 iOS 共用磁吸气泡操作语义。
 ///
-/// message 留空（或带 Tag 动作时 Tag 留空）就点提交：客户端先让服务端根据 staged diff
-/// 生成说明与版本号并回填，用户确认后再点一次才真正提交 —— 不会在用户没看到说明的
-/// 情况下产生 commit。「AI」按钮是同一个预生成的快捷入口。
+/// message 或 Tag 留空时由服务端生成并提交；AI 按钮用于提前生成和编辑。
 /// 提交未推送时结果面板提供 Push & Close。
 struct GitQuickCommitView: View {
     let sessionId: String
@@ -33,15 +31,14 @@ struct GitQuickCommitView: View {
 
     // AI 预生成
     @State private var generating = false
-    /// 上一句「说明为空，先生成」的提示；确认或重新生成前一直可见。
-    @State private var prefillNotice: String?
 
     // 提交
-    @State private var archiveRelatedTasks = false
     @State private var committing = false
     @State private var submoduleIntent = false
+    @State private var mergingWorktrees = false
     @State private var errorMessage: String?
-    @State private var showMagneticComposer = false
+    @State private var worktreeFeedback: String?
+    @State private var worktreeSummary: String?
 
     // 结果
     @State private var outcome: CommitOutcome?
@@ -266,133 +263,28 @@ struct GitQuickCommitView: View {
                 .foregroundColor(Theme.danger)
         }
 
-        if let prefillNotice {
-            Text(prefillNotice)
-                .font(.system(size: 11))
-                .foregroundColor(Theme.textSecondary)
-        }
+        MagneticDockView(
+            hasChanges: hasChanges,
+            hasSubmodule: status?.hasSubmodule == true,
+            hasWorktrees: (status?.worktreeCount ?? 0) > 0,
+            ahead: status?.ahead ?? 0,
+            busy: committing || mergingWorktrees || generating || pushing,
+            feedback: committing ? busyLabel : pushing ? "推送中…" : worktreeFeedback,
+            onAction: { action, sub in submit(action: action, includeSubmodule: sub) },
+            onWorktree: mergeWorktrees,
+            onPush: pushCommitsOnly
+        )
+        .frame(height: 200)
 
-        // 常规路径保持线性可预测；磁吸组合降为可选的效率工具。
-        if committing {
-            HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
-                Text(busyLabel)
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.textSecondary)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 64)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.lg).fill(Theme.surface))
-        } else {
-            Toggle(isOn: $archiveRelatedTasks) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("归档当前任务")
-                        .font(.system(size: 13, weight: .medium))
-                    Text("提交成功后把这个会话的任务移出列表。其它进行中的任务不动。")
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.textSecondary)
-                }
-            }
-            .disabled(!hasChanges || committing)
-            .tint(Theme.brand)
-
-            standardCommitActions
-
-            DisclosureGroup(isExpanded: $showMagneticComposer) {
-                MagneticDockView(
-                    hasChanges: hasChanges,
-                    hasSubmodule: status?.hasSubmodule == true,
-                    onAction: { action, sub in submit(action: action, includeSubmodule: sub) }
-                )
-                .frame(height: 170)
-                .padding(.top, 8)
-
-                Text("拖动组合后丢进提交区；单击气泡可直接执行对应动作。")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.textSecondary.opacity(0.8))
-            } label: {
-                Label("磁吸组合（可选）", systemImage: "circle.grid.cross")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Theme.textSecondary)
-            }
-            .tint(Theme.textSecondary)
-            .wandMotion(value: showMagneticComposer, layout: true)
-        }
-
-        // 工作区干净但本地领先远端：dock 无事可做，给一个「仅推送」直达按钮。
-        if !hasChanges, let ahead = status?.ahead, ahead > 0, !committing {
-            Button(action: pushCommitsOnly) {
-                HStack(spacing: 8) {
-                    if pushing { ProgressView().controlSize(.small) }
-                    Text(pushing ? "推送中…" : "推送 \(ahead) 个待推 commit")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(WandPrimaryButtonStyle())
-            .disabled(pushing)
-            if let pushError {
-                Text(pushError).font(.footnote).foregroundColor(Theme.danger)
-            }
-        }
+        Text(worktreeFeedback == "已完成"
+            ? worktreeSummary ?? "已合并并推送"
+            : "点按气泡执行，拖动气泡组合后丢进提交区。Worktree：合并全部工作树到当前分支并推送。")
+            .font(.system(size: 11))
+            .foregroundColor(Theme.textSecondary)
     }
 
     private var busyLabel: String {
         "执行中…" + (submoduleIntent ? "（含 submodule）" : "")
-    }
-
-    /// 提交动作旁边的小字：说清这一次点击到底会发生什么。
-    private var commitActionHint: String {
-        guard hasChanges else { return "工作区干净" }
-        if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "说明为空：点提交先生成说明，确认后再提交"
-        }
-        return "执行前会使用上方提交信息"
-    }
-
-    private var standardCommitActions: some View {
-        HStack(spacing: 10) {
-            Button {
-                submit(action: "commit", includeSubmodule: false)
-            } label: {
-                Label("提交", systemImage: "arrow.up.circle.fill")
-                    .frame(minWidth: 92)
-            }
-            .buttonStyle(WandPrimaryButtonStyle())
-            .disabled(!hasChanges || committing)
-
-            Menu {
-                Button("提交并创建 Tag") {
-                    submit(action: "commit-tag", includeSubmodule: false)
-                }
-                Button("提交并推送") {
-                    submit(action: "commit-push", includeSubmodule: false)
-                }
-                Button("提交、创建 Tag 并推送") {
-                    submit(action: "commit-tag-push", includeSubmodule: false)
-                }
-                if status?.hasSubmodule == true {
-                    Divider()
-                    Button("包含 Submodule 并提交") {
-                        submit(action: "commit", includeSubmodule: true)
-                    }
-                    Button("包含 Submodule、Tag 并推送") {
-                        submit(action: "commit-tag-push", includeSubmodule: true)
-                    }
-                }
-            } label: {
-                Label("更多提交方式", systemImage: "chevron.down.circle")
-            }
-            .menuStyle(.borderlessButton)
-            .disabled(!hasChanges || committing)
-
-            Spacer()
-            Text(commitActionHint)
-                .font(.system(size: 11))
-                .foregroundColor(Theme.textMuted)
-        }
-        .padding(.vertical, 4)
     }
 
     private var oldCommitLine: String {
@@ -580,35 +472,16 @@ struct GitQuickCommitView: View {
     /// action ∈ {commit, commit-tag, commit-push, commit-tag-push}，与网页一致；
     /// includeSubmodule 是正交 scope flag。
     private func submit(action: String, includeSubmodule: Bool) {
-        guard !committing, hasChanges else { return }
+        guard !committing, !mergingWorktrees, !generating, hasChanges else { return }
         let withTag = action == "commit-tag" || action == "commit-tag-push"
         let userTag = withTag ? tagName.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let msg = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        prefillNotice = nil
-        guard !msg.isEmpty, !(withTag && userTag.isEmpty) else {
-            // 说明（或 Tag）还空着：先生成并回填，让用户看清将要写进 git 的内容再决定是否提交。
-            Task { await prefillBeforeCommit(withTag: withTag) }
-            return
-        }
         performCommit(action: action, includeSubmodule: includeSubmodule, message: msg, tag: userTag)
-    }
-
-    /// 生成并回填说明与 Tag，不产生提交；生成失败时明确告知用户仍需手填。
-    private func prefillBeforeCommit(withTag: Bool) async {
-        await generateAI()
-        // 已有一轮生成正在跑（用户连点两次）时不要下结论：等那轮自己反馈。
-        guard !generating else { return }
-        let ready = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !(withTag && tagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        prefillNotice = ready
-            ? "已生成提交前的内容，确认无误后再点一次提交。"
-            : "没能自动生成提交内容，请手动填写后再提交。"
     }
 
     private func performCommit(action: String, includeSubmodule: Bool, message msg: String, tag userTag: String) {
         let push = action == "commit-push" || action == "commit-tag-push"
         let before = status
-        let archiveIntent = archiveRelatedTasks
 
         committing = true
         onRunning()
@@ -619,17 +492,15 @@ struct GitQuickCommitView: View {
             do {
                 let r = try await api.quickCommit(
                     sessionId: sessionId,
-                    customMessage: msg,
+                    customMessage: msg.isEmpty ? nil : msg,
                     tag: userTag.isEmpty ? nil : userTag,
-                    autoTag: false,
+                    autoTag: (action == "commit-tag" || action == "commit-tag-push") && userTag.isEmpty,
                     push: push,
-                    submodule: includeSubmodule,
-                    archiveRelatedTasks: archiveIntent
+                    submodule: includeSubmodule
                 )
                 if !(r.archivedTaskIds ?? []).isEmpty {
                     NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
                 }
-                let archiveNote = archiveResultNote(requested: archiveIntent, result: r)
                 let o = CommitOutcome(
                     includeSubmodule: includeSubmodule,
                     pushed: r.pushed == true,
@@ -643,12 +514,12 @@ struct GitQuickCommitView: View {
                     submoduleCount: r.submoduleCommits?.count ?? 0
                 )
                 if o.pushError == nil {
-                    onCompleted(summaryText(o) + (push ? "，已推送" : "") + archiveNote)
+                    onCompleted(summaryText(o) + (push ? "，已推送" : ""))
                     // 请求继续在后台收尾；用户无需停在模态层等待网络往返。
                     dismiss()
                 } else {
                     outcome = o
-                    onFailed("推送失败：\(o.pushError ?? "未知错误")" + archiveNote)
+                    onFailed("推送失败：\(o.pushError ?? "未知错误")")
                     await loadStatus(force: true)
                 }
             } catch {
@@ -656,6 +527,35 @@ struct GitQuickCommitView: View {
                 onFailed(error.localizedDescription)
             }
             committing = false
+        }
+    }
+
+    private func mergeWorktrees() {
+        guard !mergingWorktrees, !committing, !pushing,
+              let branch = status?.branch, let head = status?.head else { return }
+        mergingWorktrees = true
+        worktreeFeedback = "合并并推送中…"
+        errorMessage = nil
+        onRunning()
+        Task {
+            do {
+                let result = try await api.mergeWorktrees(sessionId: sessionId, branch: branch, head: head)
+                if result.ok && result.pushed {
+                    worktreeFeedback = "已完成"
+                    worktreeSummary = "已合并 \(result.mergedBranches.count) 个 Worktree 到 \(result.targetBranch) 并推送"
+                    onCompleted("已合并 \(result.mergedBranches.count) 个 Worktree 到 \(result.targetBranch) 并推送")
+                } else {
+                    worktreeFeedback = "操作失败"
+                    errorMessage = result.error ?? "合并或推送未完成"
+                    onFailed(errorMessage ?? "合并失败")
+                }
+            } catch {
+                worktreeFeedback = "操作失败"
+                errorMessage = error.localizedDescription
+                onFailed(error.localizedDescription)
+            }
+            await loadStatus(force: true)
+            mergingWorktrees = false
         }
     }
 
@@ -691,7 +591,7 @@ struct GitQuickCommitView: View {
 
     /// 工作区干净但 ahead > 0 时的「仅推送 commits」。
     private func pushCommitsOnly() {
-        guard !pushing else { return }
+        guard !pushing, !committing, !mergingWorktrees, !generating else { return }
         pushing = true
         onRunning()
         pushError = nil
@@ -719,13 +619,6 @@ struct GitQuickCommitView: View {
         }
     }
 
-    private func archiveResultNote(requested: Bool, result: QuickCommitResult) -> String {
-        guard requested else { return "" }
-        if let error = result.archiveError, !error.isEmpty { return "，归档失败：\(error)" }
-        let count = result.archivedTaskIds?.count ?? 0
-        return count > 0 ? "，已归档 \(count) 个关联任务" : "，没有可归档的关联任务"
-    }
-
     private func summaryText(_ outcome: CommitOutcome) -> String {
         let subPrefix = outcome.submoduleCount > 0 ? "已先提交 \(outcome.submoduleCount) 个 submodule，" : ""
         return subPrefix + "已提交"
@@ -742,21 +635,31 @@ struct GitQuickCommitView: View {
 private struct MagneticDockView: View {
     let hasChanges: Bool
     let hasSubmodule: Bool
+    let hasWorktrees: Bool
+    let ahead: Int
+    let busy: Bool
+    let feedback: String?
     let onAction: (String, Bool) -> Void
-
+    let onWorktree: () -> Void
+    let onPush: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let actionOrder = ["commit", "tag", "push"]
-    private var allIds: [String] { hasSubmodule ? Self.actionOrder + ["sub"] : Self.actionOrder }
+    private var allIds: [String] { Self.actionOrder + (hasSubmodule ? ["sub"] : []) + ["worktree"] }
+
+    private func isEnabled(_ id: String) -> Bool {
+        !busy && (id == "worktree" ? hasWorktrees : id == "push" ? hasChanges || ahead > 0 : hasChanges)
+    }
 
     private static let chipColors: [String: Color] = [
         "commit": Theme.brand,
         "tag": Theme.info,
         "push": Theme.success,
         "sub": Theme.textSecondary,
+        "worktree": Theme.info,
     ]
     private static let chipLabels: [String: String] = [
-        "commit": "Commit", "tag": "Tag", "push": "Push", "sub": "Sub",
+        "commit": "Commit", "tag": "Tag", "push": "Push", "sub": "Sub", "worktree": "Worktree",
     ]
 
     @State private var fieldSize: CGSize = .zero
@@ -783,9 +686,13 @@ private struct MagneticDockView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            field
-            launchPad
+        GeometryReader { geo in
+            HStack(spacing: 8) {
+                field
+                    .frame(width: max(0, geo.size.width - 84))
+                launchPad
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
         }
     }
 
@@ -795,9 +702,9 @@ private struct MagneticDockView: View {
         ZStack(alignment: .topLeading) {
             // 队伍光环（多球抱团时的描边框）
             if let box = clusterBox {
-                RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(launchTone.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg).stroke(launchTone.opacity(0.4), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(launchTone.opacity(0.4), lineWidth: 1))
                     .frame(width: box.width, height: box.height)
                     .offset(x: box.minX, y: box.minY)
             }
@@ -807,9 +714,9 @@ private struct MagneticDockView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+            RoundedRectangle(cornerRadius: 14)
                 .fill(Theme.surface)
-                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg).stroke(Theme.border, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, lineWidth: 1))
         )
         .coordinateSpace(name: "qcdock")
         .background(
@@ -851,10 +758,20 @@ private struct MagneticDockView: View {
                 Color.clear.preference(key: ChipSizeKey.self, value: [id: geo.size])
             }
         )
-        .opacity(!placed ? 0 : (hasChanges ? 1 : 0.45))
+        .opacity(!placed ? 0 : (isEnabled(id) ? 1 : 0.45))
+        .scaleEffect(active && !reduceMotion ? 1.06 : 1)
         .offset(x: pos.x, y: pos.y)
         .zIndex(active ? 3 : 2)
-        .allowsHitTesting(hasChanges)
+        .allowsHitTesting(isEnabled(id))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(id == "worktree" ? "合并全部 Worktree 到当前分支并推送" : (Self.chipLabels[id] ?? id))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            guard isEnabled(id) else { return }
+            if id == "worktree" { onWorktree() }
+            else if id == "push" && !hasChanges { onPush() }
+            else { let intent = Self.tapIntent(id); onAction(intent.0, intent.1) }
+        }
         .highPriorityGesture(dragGesture(id))
     }
 
@@ -865,23 +782,23 @@ private struct MagneticDockView: View {
             Image(systemName: "arrow.right")
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundColor(launchTone)
-            Text(hot ? "松手执行" : "提交")
+            Text(feedback ?? (hot ? "松手执行" : "提交"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(hot ? launchTone : Theme.textSecondary)
         }
         .frame(width: 76)
         .frame(maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+            RoundedRectangle(cornerRadius: 14)
                 .fill(hot ? launchTone.opacity(0.14) : Theme.surface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                    RoundedRectangle(cornerRadius: 14)
                         .stroke(launchTone.opacity(hot ? 0.85 : 0.3), lineWidth: 1.5)
                 )
         )
-        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
+        .contentShape(RoundedRectangle(cornerRadius: 14))
         .onTapGesture {
-            if hasChanges && dragAnchor == nil { onAction("commit", false) }
+            if hasChanges && !busy && dragAnchor == nil { onAction("commit", false) }
         }
     }
 
@@ -893,29 +810,18 @@ private struct MagneticDockView: View {
     /// 原位布局：无 Sub 时 ∧ 三角（Commit 顶中 / Tag 左下 / Push 右下），
     /// 有 Sub 时 2×2 网格 —— 对齐网页窄屏 homePositions()。
     private func homePositions() -> [String: CGPoint] {
-        let fw = fieldSize.width
-        let fh = fieldSize.height
-        guard fw > 0, fh > 0 else { return [:] }
-        let h = chipH
-        let m: CGFloat = 8
-        var pos: [String: CGPoint] = [:]
-        if hasSubmodule {
-            let topY = max(m, fh * 0.20 - h / 2)
-            let botY = min(fh - h - m, fh * 0.70 - h / 2)
-            func colL(_ wd: CGFloat) -> CGFloat { max(m, fw * 0.27 - wd / 2) }
-            func colR(_ wd: CGFloat) -> CGFloat { min(fw - wd - m, fw * 0.73 - wd / 2) }
-            pos["commit"] = CGPoint(x: colL(w("commit")), y: topY)
-            pos["tag"] = CGPoint(x: colR(w("tag")), y: topY)
-            pos["push"] = CGPoint(x: colL(w("push")), y: botY)
-            pos["sub"] = CGPoint(x: colR(w("sub")), y: botY)
-        } else {
-            let topY = max(m, fh * 0.18 - h / 2)
-            let botY = min(fh - h - m, fh * 0.72 - h / 2)
-            pos["commit"] = CGPoint(x: max(m, (fw - w("commit")) / 2), y: topY)
-            pos["tag"] = CGPoint(x: max(m, fw * 0.24 - w("tag") / 2), y: botY)
-            pos["push"] = CGPoint(x: min(fw - w("push") - m, fw * 0.76 - w("push") / 2), y: botY)
+        guard fieldSize.width > 0, fieldSize.height > 0 else { return [:] }
+        let rows = CGFloat((allIds.count + 1) / 2)
+        var positions: [String: CGPoint] = [:]
+        for (index, id) in allIds.enumerated() {
+            let row = CGFloat(index / 2)
+            let column = CGFloat(index % 2)
+            let centerX = fieldSize.width * (column == 0 ? 0.27 : 0.73)
+            positions[id] = CGPoint(
+                x: max(4, min(fieldSize.width - w(id) - 4, centerX - w(id) / 2)),
+                y: max(4, (row + 0.5) * fieldSize.height / rows - chipH / 2))
         }
-        return pos
+        return positions
     }
 
     private func placeHome(animated: Bool) {
@@ -951,7 +857,7 @@ private struct MagneticDockView: View {
                 // 磁吸拾取：只吸主动作球 —— Sub 永不被「路过吸附」（默认不纳入），
                 // 但可作为锚点被显式抓起、反向吸附动作球。
                 let homes = homePositions()
-                for cand in Self.actionOrder where !members.contains(cand) {
+                for cand in Self.actionOrder where id != "worktree" && hasChanges && !members.contains(cand) {
                     guard let hp = homes[cand] else { continue }
                     let center = CGPoint(x: hp.x + w(cand) / 2, y: hp.y + chipH / 2)
                     if hypot(loc.x - center.x, loc.y - center.y) < 58 {
@@ -978,6 +884,8 @@ private struct MagneticDockView: View {
 
                 // 拖出场地右缘 → 悬在发射区上方（hot）。
                 let nowHot = loc.x > fieldSize.width + 4
+                if nowHot && !hot {
+                }
                 hot = nowHot
             }
             .onEnded { _ in
@@ -994,11 +902,14 @@ private struct MagneticDockView: View {
 
                 if !moved {
                     // 原地单击 → 直接执行该气泡自己的动作。
-                    let intent = Self.tapIntent(id)
-                    onAction(intent.0, intent.1)
+                    if id == "worktree" { onWorktree() }
+                    else if id == "push" && !hasChanges { onPush() }
+                    else { let intent = Self.tapIntent(id); onAction(intent.0, intent.1) }
                 } else if endHot {
                     // 丢进发射区 → 执行组合动作（commit 永远隐含）。
-                    onAction(Self.compose(members), members.contains("sub"))
+                    if id == "worktree" { onWorktree() }
+                    else if id == "push" && !hasChanges { onPush() }
+                    else { onAction(Self.compose(members), members.contains("sub")) }
                 }
                 // 松手在别处：placeHome 已让全员弹回，不执行任何动作。
             }

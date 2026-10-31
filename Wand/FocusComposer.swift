@@ -5,7 +5,7 @@ import SwiftUI
 /// iOS-compatible presentation only; draft and delivery stay with their current owner.
 @MainActor final class ComposerFocusController: ObservableObject {
     @Published var focused = false
-    @Published var editing = false
+    @Published var editing = true
     private(set) var borrowers = Set<String>()
     private var restore = false
     private(set) var awaitingAck = false
@@ -17,11 +17,10 @@ import SwiftUI
     }
     func submit() { awaitingAck = true; editing = true }
     func accepted(hasPendingContent: Bool) {
-        if awaitingAck && !hasPendingContent { focused = false; editing = false }
         awaitingAck = false; recovery = false
     }
     func failed() { awaitingAck = false; recovery = true; editing = true }
-    func resetPresentation() { awaitingAck = false; recovery = false; restore = false; borrowers = []; focused = false; editing = false }
+    func resetPresentation() { awaitingAck = false; recovery = false; restore = false; borrowers = []; focused = false; editing = true }
     func collapseFromContent() { if borrowers.isEmpty { focused = false } }
     func borrow(_ owner: String, open: Bool = false) {
         restore = restore || focused || open
@@ -40,7 +39,8 @@ enum FocusComposerMetrics {
     // Web --composer-control-height / --control-radius, at desktop pointer density.
     static let touch: CGFloat = 32
     static let controlRadius: CGFloat = 8
-    static let maximumTextHeight: CGFloat = 112
+    static let surfaceRadius: CGFloat = 14
+    static let maximumTextHeight: CGFloat = 220
     static let normalCompanionSize: CGFloat = 72
 }
 
@@ -56,8 +56,8 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
     var isFocused = false
     var showsAdvancedSettings = false
     var sendWidth: CGFloat = 32
-    var onCollapse: (() -> Void)? = nil
     var accessory: AnyView? = nil
+    var runtime: AnyView? = nil
     @Environment(\.accessibilityReduceMotion) private var reduced
     var body: some View {
         VStack(spacing: 4) {
@@ -66,6 +66,7 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
             editor()
                 .frame(height: expanded ? nil : 0).clipped().opacity(expanded ? 1 : 0)
                 .allowsHitTesting(expanded).accessibilityHidden(!expanded)
+            if expanded { ComposerToolbarDivider().padding(.vertical, 4) }
             HStack(spacing: 6) {
                 add().frame(width: FocusComposerMetrics.touch, height: FocusComposerMetrics.touch)
                 if showsAdvancedSettings, expanded {
@@ -82,25 +83,31 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
                 }
                 .buttonStyle(.plain).opacity(expanded ? 0 : 1)
                 .allowsHitTesting(!expanded).accessibilityHidden(expanded)
-                if let onCollapse { Button(action: onCollapse) { Image(systemName: "chevron.down") }.buttonStyle(.plain).frame(width: 32, height: 32).opacity(expanded ? 1 : 0).allowsHitTesting(expanded).accessibilityHidden(!expanded).help("收起输入框") }
+                if let runtime { runtime.layoutPriority(1) }
                 send().frame(width: sendWidth, height: FocusComposerMetrics.touch)
                     .opacity(primaryVisible ? 1 : 0).allowsHitTesting(primaryVisible).accessibilityHidden(!primaryVisible)
                     .animation(reduced ? nil : Theme.Motion.feedback, value: primaryVisible)
                     .padding(.leading, 2)
             }
         }
-        .padding(.top, 11)
+        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 8)
         .frame(maxWidth: .infinity)
         .foregroundColor(Theme.textSecondary)
-        .overlay(alignment: .top) {
-            Rectangle().fill(isFocused ? Theme.brand : Theme.border)
-                .frame(height: isFocused ? 2 : 1).allowsHitTesting(false)
-        }
+        .wandInputSurface(focused: isFocused, cornerRadius: FocusComposerMetrics.surfaceRadius)
         .animation(reduced ? nil : Theme.Motion.structure, value: expanded)
     }
 }
 
-/// Mirrors Web's floating identity/runtime anchors relative to the top divider.
+struct ComposerToolbarDivider: View {
+    var body: some View {
+        Canvas { context, size in
+            var path = Path(); path.move(to: .zero); path.addLine(to: CGPoint(x: size.width, y: 0))
+            context.stroke(path, with: .color(Theme.border), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+        }.frame(height: 1).allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+/// Shared identity/runtime context; editor and controls have separate normal-flow owners.
 enum ComposerHeaderKind { case task, conversation }
 
 struct ComposerIdentityHeader<Portrait: View, Identity: View, Runtime: View>: View {
@@ -308,7 +315,7 @@ struct NativeComposerActionButton: View {
 /// Stored preferences are not proof of a fallback model's actual execution.
 func composerThinkingPreference(_ value: String) -> String {
     let native = value.split(separator: ":", maxSplits: 1).last.map(String.init) ?? value
-    if !value.contains(":"), let stored = ["off": "自动（模型默认）", "standard": "标准", "deep": "深入", "max": "最大"][value] { return stored }
+    if !value.contains(":"), let stored = ["off": "自动", "standard": "中", "deep": "高", "max": "极高"][value] { return stored }
     return ["auto": "自动", "off": "关闭", "none": "关闭", "minimal": "最低", "low": "低", "medium": "中",
         "high": "高", "xhigh": "超高", "max": "极高", "ultra": "极限", "ultracode": "极限代码"][native] ?? native
 }

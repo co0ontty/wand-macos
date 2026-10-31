@@ -37,6 +37,8 @@ struct WandTaskComment: Decodable, Identifiable, Equatable {
     let createdAt: String
     var sourceCommentId: String? = nil
     var dispatch: WandTaskCommentDispatch? = nil
+    var purpose: String? = nil
+    var reviewWritebackPending: Bool? = nil
 }
 
 struct WandTaskCommentResultBlock: Decodable, Hashable {
@@ -171,17 +173,20 @@ struct WandTaskCommentResultResponse: Decodable {
 struct TaskCommentRequestIdentity {
     let key: String
     let requestId: String
+    let purpose: String
     private let defaults: UserDefaults
-    init(taskId: String, body: String, employeeId: String, sourceCommentId: String?, defaults: UserDefaults = .standard) {
+    init(taskId: String, body: String, employeeId: String, sourceCommentId: String?, purpose: String = "execution", defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let data = (try? JSONEncoder().encode([body.trimmingCharacters(in: .whitespacesAndNewlines), employeeId, sourceCommentId ?? ""])) ?? Data()
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         key = "wand.task-comment-request." + taskId + "." + digest
-        requestId = defaults.string(forKey: key) ?? UUID().uuidString
-        defaults.set(requestId, forKey: key)
+        let saved = defaults.string(forKey: key)
+        requestId = saved ?? UUID().uuidString
+        self.purpose = defaults.string(forKey: key + ".purpose") ?? (saved == nil ? purpose : "execution")
+        defaults.set(requestId, forKey: key); defaults.set(self.purpose, forKey: key + ".purpose")
     }
     func settle(_ comment: WandTaskComment) {
-        if comment.dispatch?.deliveryUncertain != true { defaults.removeObject(forKey: key) }
+        if comment.dispatch?.deliveryUncertain != true { defaults.removeObject(forKey: key); defaults.removeObject(forKey: key + ".purpose") }
     }
 }
 
@@ -189,17 +194,19 @@ struct WandTaskCommentStatus: Decodable {
     let id: String
     let dispatch: WandTaskCommentDispatch?
     let includesDispatch: Bool
+    var reviewWritebackPending: Bool? = nil
 
     init(id: String, dispatch: WandTaskCommentDispatch?, includesDispatch: Bool = true) {
         self.id = id; self.dispatch = dispatch; self.includesDispatch = includesDispatch
     }
 
-    private enum CodingKeys: String, CodingKey { case id, dispatch }
+    private enum CodingKeys: String, CodingKey { case id, dispatch, reviewWritebackPending }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         includesDispatch = container.contains(.dispatch)
         dispatch = try? container.decodeIfPresent(WandTaskCommentDispatch.self, forKey: .dispatch)
+        reviewWritebackPending = try? container.decodeIfPresent(Bool.self, forKey: .reviewWritebackPending)
     }
 }
 
@@ -298,7 +305,7 @@ final class TaskCommentsStore: ObservableObject {
             comments = comments.map { comment in
                 guard comment.taskId == taskId, let status = statuses[comment.id], status.includesDispatch else { return comment }
                 return WandTaskComment(id: comment.id, taskId: comment.taskId, authorName: comment.authorName, body: comment.body,
-                    createdAt: comment.createdAt, sourceCommentId: comment.sourceCommentId, dispatch: status.dispatch)
+                    createdAt: comment.createdAt, sourceCommentId: comment.sourceCommentId, dispatch: status.dispatch, purpose: comment.purpose, reviewWritebackPending: status.reviewWritebackPending ?? comment.reviewWritebackPending)
             }
         } catch {
             // Status is a supplemental projection; a failed refresh must not erase loaded comments.
@@ -357,6 +364,7 @@ struct TaskCommentItemRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(comment.authorName).font(.system(size: 12, weight: .medium))
+                if comment.reviewWritebackPending == true { Text("验收结论待回填").font(.caption).foregroundColor(Theme.warning) }
                 Text(comment.createdAt).font(.system(size: 11)).foregroundColor(Theme.textTertiary)
                 Spacer()
                 if let dispatch = comment.dispatch {

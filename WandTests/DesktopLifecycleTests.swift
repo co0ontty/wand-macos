@@ -79,8 +79,11 @@ final class DesktopLifecycleTests: XCTestCase {
     func testCreationEntrySelectsHomeTaskOrExplicitUnassignedDestination() {
         let home = SessionCreationDraft()
         XCTAssertEqual(home.destination, "none")
+        XCTAssertFalse(home.planningMode, "New conversation starts a session without a task-planning choice")
+        XCTAssertEqual(SessionCreationToolbarTitle.title(for: home), "新建会话")
         let namedTask = SessionCreationDraft(context: .init(startsNewTask: true))
         XCTAssertEqual(namedTask.destination, "new")
+        XCTAssertEqual(SessionCreationToolbarTitle.title(for: namedTask), "新建任务")
 
         let unassigned = SessionCreationDraft(context: SessionCreationContext(startsNewTask: false))
         XCTAssertEqual(unassigned.destination, "none")

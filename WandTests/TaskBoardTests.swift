@@ -33,15 +33,24 @@ final class TaskBoardTests: XCTestCase {
     }
 
     func testWorkSubmissionAndUserAcceptanceRemainIndependent() throws {
-        let json = #"[{"id":"submitted","status":"done","acceptance":{"evidence":"report","blocker":"设备验收待核对","acceptedAt":null}},{"id":"accepted","status":"done","acceptance":{"evidence":"report","blocker":"","acceptedAt":"2026-01-01"}},{"id":"archived","status":"archived"},{"id":"working","status":"doing","sessions":[{"id":"idle","status":"idle"}]}]"#
+        let json = #"[{"id":"submitted","status":"done","acceptance":{"evidence":"report","blocker":"设备验收待核对","acceptedAt":null}},{"id":"accepted","status":"done","deliveryRevision":0,"acceptance":{"evidence":"report","blocker":"","acceptedAt":"2026-01-01","confirmedRevision":0}},{"id":"archived","status":"archived"},{"id":"working","status":"doing","sessions":[{"id":"idle","status":"idle"}]}]"#
         let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(json.utf8))
-        XCTAssertEqual(wandBoardTaskWorkLabel(tasks[0]), "已完成")
+        XCTAssertEqual(wandBoardTaskWorkLabel(tasks[0]), "交付待 AI 验收")
         XCTAssertEqual(wandBoardTaskReviewLabel(tasks[0]), "等待你验收")
         XCTAssertEqual(wandBoardTaskReviewLabel(tasks[1]), "已通过")
         XCTAssertEqual(wandBoardTaskWorkLabel(tasks[2]), "未确认")
         XCTAssertEqual(wandBoardTaskReviewLabel(tasks[2]), "未验收")
         XCTAssertEqual(wandBoardTaskWorkLabel(tasks[3]), "处理中")
         XCTAssertEqual(wandBoardTaskReviewLabel(tasks[3]), "未验收")
+    }
+
+    func testCurrentAcceptanceRequiresMatchingDeliveryRevision() throws {
+        let stale = try JSONDecoder().decode(WandBoardTask.self, from: Data(#"{"id":"stale","status":"ready","deliveryRevision":2,"verification":{"verdict":"passed","evidence":"report","blocker":"","reviewedAt":"2026-01-01","revision":1,"sourceSessionId":null,"reviewerId":null},"acceptance":{"evidence":"report","blocker":"","acceptedAt":"2026-01-01","confirmedRevision":1}}"#.utf8))
+        XCTAssertFalse(wandBoardHasCurrentAIVerification(stale))
+        XCTAssertFalse(wandBoardHasCurrentHumanAcceptance(stale))
+        let current = try JSONDecoder().decode(WandBoardTask.self, from: Data(#"{"id":"current","status":"ready","deliveryRevision":2,"verification":{"verdict":"passed","evidence":"report","blocker":"","reviewedAt":"2026-01-01","revision":2,"sourceSessionId":null,"reviewerId":null},"acceptance":{"evidence":"report","blocker":"","acceptedAt":"2026-01-01","confirmedRevision":2}}"#.utf8))
+        XCTAssertTrue(wandBoardHasCurrentAIVerification(current))
+        XCTAssertTrue(wandBoardHasCurrentHumanAcceptance(current))
     }
 
     func testParallelDeliveryAndExplicitAcceptanceAreIndependent() throws {

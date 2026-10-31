@@ -466,16 +466,31 @@ struct WandBoardDispatchResult: Decodable {
     }
 }
 
+struct WandTaskVerification: Codable, Equatable {
+    let verdict: String
+    let evidence: String
+    let blocker: String
+    let reviewedAt: String
+    let revision: Int
+    let sourceSessionId: String?
+    let reviewerId: String?
+}
+
 struct WandBoardTask: Decodable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case assignedExecutor
-        case executionSubject, acceptance, id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
+        case executionSubject, acceptance, deliveryRevision, verification, legacyReview, workflowVersion, id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
         case labels, dueDate, milestoneId, milestone, sortOrder, agent, createdAt, updatedAt
         case sessionIds, sessions, workspace, commentCount, queuedCommentCount, executionStatus, queuedExecutionCount
     }
 
     let executionSubject: WandTaskExecutionSubject?
     let acceptance: WandTaskAcceptance?
+    let deliveryRevision: Int
+    let workflowVersion: Int?
+    let verification: WandTaskVerification?
+    /// Legacy `done` is projected to review without rewriting storage.
+    let legacyReview: Bool
     let id: String
     let workspaceId: String?
     /// 关联的侧栏工作任务 id；拖拽会话入卡与「移动到其它任务」用它。
@@ -518,6 +533,11 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         executionSubject = try? container.decodeIfPresent(WandTaskExecutionSubject.self, forKey: .executionSubject)
         acceptance = try? container.decodeIfPresent(WandTaskAcceptance.self, forKey: .acceptance)
+        deliveryRevision = max(0, (try? container.decode(Int.self, forKey: .deliveryRevision)) ?? 0)
+        workflowVersion = try? container.decodeIfPresent(Int.self, forKey: .workflowVersion)
+        verification = try? container.decodeIfPresent(WandTaskVerification.self, forKey: .verification)
+        let rawStatus = (try? container.decode(String.self, forKey: .status)) ?? "todo"
+        legacyReview = (try? container.decode(Bool.self, forKey: .legacyReview)) ?? (rawStatus == "done")
         id = try container.decode(String.self, forKey: .id)
         workspaceId = try? container.decodeIfPresent(String.self, forKey: .workspaceId)
         workspaceTaskId = try? container.decodeIfPresent(String.self, forKey: .workspaceTaskId)
@@ -527,7 +547,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         title = (try? container.decode(String.self, forKey: .title)) ?? "任务"
         titleSource = (try? container.decode(String.self, forKey: .titleSource)) ?? "user"
         description = (try? container.decode(String.self, forKey: .description)) ?? ""
-        status = (try? container.decode(String.self, forKey: .status)) ?? "todo"
+        status = rawStatus == "done" ? WandBoardStatus.review.rawValue : rawStatus
         priority = (try? container.decode(String.self, forKey: .priority)) ?? "none"
         labels = (try? container.decode([String].self, forKey: .labels)) ?? []
         dueDate = try? container.decodeIfPresent(String.self, forKey: .dueDate)
@@ -567,13 +587,13 @@ func wandBoardChildren(of task: WandBoardTask, in tasks: [WandBoardTask]) -> [Wa
  * 与 Web `ISSUE_COLUMNS` + `ISSUE_ARCHIVE_COLUMN` 一致。
  */
 enum WandBoardStatus: String, CaseIterable, Identifiable {
-    case backlog, todo, doing, done, archived
+    case backlog, todo, doing, review, ready, done, archived
 
     var id: String { rawValue }
 
-    /// 看板主列：归档只作为目录出现，不占一列。
-    static let columns: [WandBoardStatus] = [.backlog, .todo, .doing, .done]
-    static let activeColumns: [WandBoardStatus] = [.todo, .doing, .done]
+    /// 看板主列：归档只作为目录出现，不占一列；review/ready 是独立验收阶段。
+    static let columns: [WandBoardStatus] = [.backlog, .todo, .doing, .review, .ready]
+    static let activeColumns: [WandBoardStatus] = [.backlog, .todo, .doing]
 
     var isColumn: Bool { self != .archived }
 
@@ -581,8 +601,10 @@ enum WandBoardStatus: String, CaseIterable, Identifiable {
         switch self {
         case .backlog: return "待立项"
         case .todo: return "等待认领"
-        case .doing: return "处理中"
-        case .done: return "等待验收"
+        case .doing: return "执行中"
+        case .review: return "待验收"
+        case .done: return "待验收"
+        case .ready: return "待归档"
         case .archived: return "归档任务"
         }
     }
@@ -592,12 +614,14 @@ enum WandBoardStatus: String, CaseIterable, Identifiable {
         case .backlog: return "还没有待立项的任务"
         case .todo: return "还没有等待认领的任务"
         case .doing: return "暂无处理中的任务"
+        case .review: return "还没有待 AI 验收的任务"
         case .done: return "还没有等待验收的任务"
+        case .ready: return "还没有待人工确认的任务"
         case .archived: return "还没有归档的任务"
         }
     }
 
-    var isClosed: Bool { self == .done || self == .archived }
+    var isClosed: Bool { self == .archived }
 
     /// 列头 / 状态图标的强调色，取自 Web `--tb-column-*`。
     var color: Color {
@@ -605,7 +629,8 @@ enum WandBoardStatus: String, CaseIterable, Identifiable {
         case .backlog: return Theme.textMuted
         case .todo: return Color(red: 176 / 255, green: 122 / 255, blue: 58 / 255)
         case .doing: return Color(red: 197 / 255, green: 101 / 255, blue: 61 / 255)
-        case .done: return Color(red: 93 / 255, green: 106 / 255, blue: 88 / 255)
+        case .review, .done: return Color(red: 93 / 255, green: 106 / 255, blue: 88 / 255)
+        case .ready: return Color(red: 74 / 255, green: 111 / 255, blue: 165 / 255)
         case .archived: return Theme.textMuted
         }
     }
@@ -693,7 +718,7 @@ struct WandBoardFilters: Equatable {
 /// 显示设置：卡片正文与「主列」划分（非主列的状态落入「其他任务」侧栏）。
 struct WandBoardDisplay: Equatable {
     var body = false
-    var mainStatuses: Set<String> = Set(WandBoardStatus.activeColumns.map(\.rawValue))
+    var mainStatuses: Set<String> = Set(WandBoardStatus.columns.map(\.rawValue))
 
     static let `default` = WandBoardDisplay()
 }
@@ -809,10 +834,21 @@ func wandBoardSessionStatusLabel(_ status: String) -> String {
     }
 }
 
+func wandBoardHasCurrentAIVerification(_ task: WandBoardTask) -> Bool {
+    task.verification?.verdict == "passed" && task.verification?.revision == task.deliveryRevision && task.verification?.evidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && task.verification?.blocker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+}
+
+func wandBoardHasCurrentHumanAcceptance(_ task: WandBoardTask) -> Bool {
+    guard let acceptance = task.acceptance, let acceptedAt = acceptance.acceptedAt, !acceptedAt.isEmpty else { return false }
+    return acceptance.confirmedRevision == task.deliveryRevision && !acceptance.evidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && acceptance.blocker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
 func wandBoardTaskWorkLabel(_ task: WandBoardTask) -> String {
-    if task.acceptance?.acceptedAt != nil || task.status == "done" { return "已完成" }
+    if wandBoardHasCurrentHumanAcceptance(task) { return "已归档" }
+    if task.status == "ready" { return "AI 已通过 · 待人工确认" }
+    if task.status == "review" { return "交付待 AI 验收" }
     switch task.status {
-    case "doing": return "处理中"
+    case "doing": return "执行中"
     case "backlog": return "待立项"
     case "todo": return "未开始"
     default: return "未确认"
@@ -820,13 +856,16 @@ func wandBoardTaskWorkLabel(_ task: WandBoardTask) -> String {
 }
 
 func wandBoardTaskReviewLabel(_ task: WandBoardTask) -> String {
-    if task.acceptance?.acceptedAt != nil { return "已通过" }
-    if task.status == "done" { return "等待你验收" }
+    if wandBoardHasCurrentHumanAcceptance(task) { return "已确认并归档" }
+    if task.status == "ready" && wandBoardHasCurrentAIVerification(task) { return "AI 已通过 · 待人工确认" }
+    if task.status == "review" { return "待 AI 验收" }
     return task.acceptance?.blocker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "有待处理项" : "未验收"
 }
 
 func wandBoardTaskProcessingLabel(_ task: WandBoardTask) -> String {
-    if task.acceptance?.acceptedAt != nil { return "验收通过 · 已完成" }
+    if wandBoardHasCurrentHumanAcceptance(task) { return "已确认并归档" }
+    if task.status == "ready" && wandBoardHasCurrentAIVerification(task) { return "AI 已通过 · 待人工确认" }
+    if task.status == "review" { return "待 AI 验收" }
     if let blocker = task.acceptance?.blocker, !blocker.isEmpty { return "待处理：\(blocker)" }
     let summary = WandBoardSessionActivitySummary(sessions: task.sessions)
     if task.executionStatus == "running" || summary.running > 0 { return "正在处理…" }
@@ -1017,18 +1056,22 @@ struct WandBoardStats {
     let backlog: Int
     let todo: Int
     let doing: Int
-    let done: Int
+    let review: Int
+    let ready: Int
     let accepted: Int
     let overdue: Int
     let high: Int
-    var remaining: Int { todo + doing }
+    var remaining: Int { todo + doing + review + ready }
+    /// Legacy test/API projection; current DTOs use review.
+    var done: Int { review }
 }
 
 func wandBoardStats(tasks: [WandBoardTask]) -> WandBoardStats {
     let today = Date()
     var todo = 0
     var doing = 0
-    var done = 0
+    var review = 0
+    var ready = 0
     var overdue = 0
     var high = 0
     var backlog = 0
@@ -1037,7 +1080,8 @@ func wandBoardStats(tasks: [WandBoardTask]) -> WandBoardStats {
         case WandBoardStatus.backlog.rawValue: backlog += 1
         case WandBoardStatus.todo.rawValue: todo += 1
         case WandBoardStatus.doing.rawValue: doing += 1
-        case WandBoardStatus.done.rawValue: done += 1
+        case WandBoardStatus.review.rawValue: review += 1
+        case WandBoardStatus.ready.rawValue: ready += 1
         default: break
         }
         if wandBoardIsOverdue(task.dueDate, status: task.status, today: today) { overdue += 1 }
@@ -1045,7 +1089,7 @@ func wandBoardStats(tasks: [WandBoardTask]) -> WandBoardStats {
             high += 1
         }
     }
-    return WandBoardStats(total: tasks.count, backlog: backlog, todo: todo, doing: doing, done: done, accepted: tasks.filter { $0.acceptance?.acceptedAt != nil }.count, overdue: overdue, high: high)
+    return WandBoardStats(total: tasks.count, backlog: backlog, todo: todo, doing: doing, review: review, ready: ready, accepted: tasks.filter(wandBoardHasCurrentHumanAcceptance).count, overdue: overdue, high: high)
 }
 
 struct WandBoardProgressPoint: Identifiable {
@@ -1072,7 +1116,7 @@ func wandBoardProgressSeries(tasks: [WandBoardTask], now: Date = Date()) -> [Wan
             return max(createdAt, updatedAt) <= timestamp
         }.count
         let completed = tasks.filter { task in
-            guard let acceptedAt = task.acceptance?.acceptedAt else { return false }
+            guard wandBoardHasCurrentHumanAcceptance(task), let acceptedAt = task.acceptance?.acceptedAt else { return false }
             return (wandBoardDate(from: acceptedAt)?.timeIntervalSince1970 ?? .greatestFiniteMagnitude) <= timestamp
         }.count
         return WandBoardProgressPoint(id: index, scope: scope, started: started, completed: completed)
@@ -1097,27 +1141,11 @@ func wandBoardGanttRange(zoom: WandBoardGanttZoom, today: Date = Date()) -> Wand
     return WandBoardGanttRange(start: start, days: span, columns: columns)
 }
 
-/// 任务在甘特轨道上的位置：起点取创建日，终点取截止日期（没有截止日期时按已确认 / 3 天兜底）。
+/// 只有真实截止日期才展示一个里程碑，不从创建时间虚构任务持续时长。
 func wandBoardGanttSpan(task: WandBoardTask, range: WandBoardGanttRange) -> (offset: Int, length: Int) {
-    let startBase = wandBoardDay(fromDueDate: range.start) ?? Date()
-    let createdDay = wandBoardDate(from: task.createdAt).map(wandBoardIsoDate) ?? wandBoardIsoDate(Date())
-    var finishDay = wandBoardIsoDate(Date())
-    if let dueDate = task.dueDate, !dueDate.isEmpty {
-        finishDay = dueDate
-    } else if let status = WandBoardStatus(rawValue: task.status), status.isClosed {
-        finishDay = wandBoardDate(from: task.updatedAt).map(wandBoardIsoDate) ?? createdDay
-    } else {
-        finishDay = wandBoardIsoDate(
-            Calendar.current.date(byAdding: .day, value: 3, to: wandBoardDay(fromDueDate: createdDay) ?? Date()) ?? Date()
-        )
-    }
-    let startMs = startBase.timeIntervalSince1970
-    let createdMs = (wandBoardDay(fromDueDate: createdDay) ?? startBase).timeIntervalSince1970
-    let finishMs = (wandBoardDay(fromDueDate: finishDay) ?? startBase).timeIntervalSince1970
-    let offset = max(0, Int(((createdMs - startMs) / 86_400).rounded()))
-    let end = min(range.days, max(offset + 1, Int(((finishMs - startMs) / 86_400).rounded()) + 1))
-    let clampedOffset = min(offset, range.days - 1)
-    return (clampedOffset, max(1, end - clampedOffset))
+    guard let due = task.dueDate, let dueDay = wandBoardDay(fromDueDate: due), let start = wandBoardDay(fromDueDate: range.start) else { return (0, 0) }
+    let offset = Int((dueDay.timeIntervalSince(start) / 86_400).rounded())
+    return offset >= 0 && offset < range.days ? (offset, 1) : (0, 0)
 }
 
 // MARK: - 筛选与搜索
@@ -1213,8 +1241,11 @@ func wandBoardReadDisplay(defaults: UserDefaults = .standard) -> WandBoardDispla
     display.body = (raw["body"] as? Bool) ?? false
     if let statuses = raw["mainStatuses"] as? [String] {
         let allowed = Set(WandBoardStatus.columns.map(\.rawValue))
-        let filtered = statuses.filter { allowed.contains($0) }
-        if !filtered.isEmpty { display.mainStatuses = Set(filtered) }
+        let legacy = Set(statuses)
+        let wasDefault = legacy == Set(["todo", "doing", "done"]) || legacy == Set(["backlog", "todo", "doing", "done"])
+        let filtered = statuses.map { $0 == "done" ? "review" : $0 }.filter { allowed.contains($0) }
+        if (raw["version"] as? Int ?? 1) < 3 && wasDefault { display.mainStatuses = Set(WandBoardStatus.columns.map(\.rawValue)) }
+        else if !filtered.isEmpty { display.mainStatuses = Set(filtered) }
     }
     if (raw["version"] as? Int ?? 1) < 2 {
         display.mainStatuses.insert(WandBoardStatus.backlog.rawValue)
@@ -1223,7 +1254,7 @@ func wandBoardReadDisplay(defaults: UserDefaults = .standard) -> WandBoardDispla
 }
 
 func wandBoardWriteDisplay(_ display: WandBoardDisplay, defaults: UserDefaults = .standard) {
-    let raw: [String: Any] = ["version": 2, "body": display.body, "mainStatuses": Array(display.mainStatuses)]
+    let raw: [String: Any] = ["version": 3, "body": display.body, "mainStatuses": Array(display.mainStatuses)]
     guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return }
     defaults.set(data, forKey: wandBoardDisplayKey)
 }
@@ -1250,6 +1281,7 @@ struct WandTaskAcceptance: Codable, Equatable {
     let evidence: String
     let blocker: String
     let acceptedAt: String?
+    let confirmedRevision: Int?
 }
 
 struct WandTaskExecutionSubject: Codable, Equatable { let type: String; let id: String; var agentOverride: WandBoardTaskAgent? = nil }
@@ -1261,7 +1293,7 @@ func wandBoardHasOpenDescendant(_ task: WandBoardTask, in tasks: [WandBoardTask]
     while let child = pending.popLast() {
         if seen.contains(child.id) { continue }
         seen.insert(child.id)
-        if child.status != "done" && child.status != "archived" { return true }
+        if child.status != "archived" { return true }
         pending.append(contentsOf: wandBoardChildren(of: child, in: tasks))
     }
     return false

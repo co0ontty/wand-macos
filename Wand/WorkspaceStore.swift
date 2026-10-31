@@ -31,12 +31,14 @@ protocol WorkspaceServing: AnyObject {
         name: String,
         baseRef: String?,
         worktree: Bool?,
-        cwd: String?
+        cwd: String?,
+        parentTaskId: String?
     ) async throws -> WorkspaceTaskCreation
     func createStandaloneTask(
         name: String,
         cwd: String?,
-        worktree: Bool?
+        worktree: Bool?,
+        parentTaskId: String?
     ) async throws -> WorkspaceTaskCreation
     func listTaskGroups() async throws -> [TaskDirectoryGroup]
     func listTaskGroupsPage(revision: String?) async throws -> TaskGroupsPage
@@ -47,12 +49,43 @@ protocol WorkspaceServing: AnyObject {
     func workspaceWorktreeOverview(workspaceId: String) async throws -> WorkspaceWorktreeOverview
     func startWorktreeMergeAgent(
         workspace: Workspace,
-        provider: WandProvider,
         prompt: String
     ) async throws -> SessionSnapshot
 }
 
 extension WandAPI: WorkspaceServing {}
+
+extension WorkspaceServing {
+    func createWorkspaceTask(
+        workspaceId: String,
+        name: String,
+        baseRef: String? = nil,
+        worktree: Bool? = nil,
+        cwd: String? = nil
+    ) async throws -> WorkspaceTaskCreation {
+        try await createWorkspaceTask(
+            workspaceId: workspaceId,
+            name: name,
+            baseRef: baseRef,
+            worktree: worktree,
+            cwd: cwd,
+            parentTaskId: nil
+        )
+    }
+
+    func createStandaloneTask(
+        name: String,
+        cwd: String? = nil,
+        worktree: Bool? = nil
+    ) async throws -> WorkspaceTaskCreation {
+        try await createStandaloneTask(
+            name: name,
+            cwd: cwd,
+            worktree: worktree,
+            parentTaskId: nil
+        )
+    }
+}
 
 enum WorkspaceIndexState: Equatable {
     case idle
@@ -85,8 +118,12 @@ final class WorkspaceStore: ObservableObject {
     /// 项目直属会话（未绑定任务的会话），按项目缓存，展开项目行时加载。
     @Published private(set) var standaloneSessions: [String: [WorkspaceSessionSummary]] = [:]
     @Published private(set) var standaloneSessionErrors: [String: String] = [:]
-    /// 跨目录任务聚合（GET /api/tasks）；加载失败时置空并回退到逐项目拉取。
+    /// 旧工作区/首页的活跃任务投影；加载失败时保留最后成功快照。
     @Published private(set) var taskGroups: [TaskDirectoryGroup] = []
+    /// Complete shared response for conversations; legacy workspace surfaces receive only the active projection.
+    @Published private(set) var conversationTaskGroups: [TaskDirectoryGroup] = [] {
+        didSet { taskGroups = TaskGroupsPage.activeGroups(from: conversationTaskGroups) }
+    }
     @Published private(set) var taskGroupsError: String?
     @Published private(set) var taskGroupsLoaded = false
     private var taskGroupsRefreshTask: Task<Void, Never>?
@@ -218,7 +255,7 @@ final class WorkspaceStore: ObservableObject {
         // Commit the accepted deletion to the sidebar projection before any refresh.
         // In-flight pre-deletion reads must not resurrect these rows.
         invalidateTaskGroupsAfterReceipt()
-        taskGroups = taskGroups.filter { $0.workspaceId != workspaceId }.map { group in
+        conversationTaskGroups = conversationTaskGroups.filter { $0.workspaceId != workspaceId }.map { group in
             TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
                 tasks: group.tasks.filter { $0.workspaceId != workspaceId },
@@ -294,11 +331,11 @@ final class WorkspaceStore: ObservableObject {
         var tasks = tasksByWorkspace[creation.workspaceId] ?? []
         if !tasks.contains(where: { $0.id == creation.id }) { tasks.insert(summary.asTask(), at: 0) }
         tasksByWorkspace[creation.workspaceId] = tasks
-        let index = taskGroups.firstIndex { group in
+        let index = conversationTaskGroups.firstIndex { group in
             group.tasks.contains { $0.id == creation.id } || (workspace != nil && group.id == workspace?.id)
                 || group.workspaceCwd == creation.cwd
         }
-        let group = index.map { taskGroups[$0] } ?? TaskDirectoryGroup(
+        let group = index.map { conversationTaskGroups[$0] } ?? TaskDirectoryGroup(
             workspaceId: workspace?.id ?? "cwd:\(creation.cwd)",
             workspaceName: workspace?.name ?? (creation.cwd as NSString).lastPathComponent,
             workspaceCwd: workspace?.cwd ?? creation.cwd, synthetic: workspace == nil,
@@ -306,16 +343,16 @@ final class WorkspaceStore: ObservableObject {
         let updated = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
             workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
             tasks: [summary] + group.tasks.filter { $0.id != creation.id }, standaloneSessions: group.standaloneSessions, global: group.global)
-        if let index { taskGroups[index] = updated } else { taskGroups.insert(updated, at: 0) }
+        if let index { conversationTaskGroups[index] = updated } else { conversationTaskGroups.insert(updated, at: 0) }
         invalidateTaskGroupsAfterReceipt()
     }
 
     func recordCreatedSession(_ snapshot: SessionSnapshot) {
         let session = WorkspaceSessionSummary(snapshot: snapshot)
-        if let groupIndex = taskGroups.firstIndex(where: { group in
+        if let groupIndex = conversationTaskGroups.firstIndex(where: { group in
             group.tasks.contains { $0.id == snapshot.workspaceTaskId }
-        }), let taskIndex = taskGroups[groupIndex].tasks.firstIndex(where: { $0.id == snapshot.workspaceTaskId }) {
-            let group = taskGroups[groupIndex], task = group.tasks[taskIndex]
+        }), let taskIndex = conversationTaskGroups[groupIndex].tasks.firstIndex(where: { $0.id == snapshot.workspaceTaskId }) {
+            let group = conversationTaskGroups[groupIndex], task = group.tasks[taskIndex]
             let isNew = !task.sessions.contains { $0.id == snapshot.id }
             var tasks = group.tasks
             tasks[taskIndex] = WorkspaceTaskSummary(id: task.id, workspaceId: task.workspaceId, name: task.name,
@@ -324,8 +361,9 @@ final class WorkspaceStore: ObservableObject {
                 sessions: [session] + task.sessions.filter { $0.id != snapshot.id },
                 totalSessions: task.listedSessionCount + (isNew ? 1 : 0), archived: task.archived,
                 parentWorkspaceTaskId: task.parentWorkspaceTaskId, executionStatus: task.executionStatus,
-                queuedExecutionCount: task.queuedExecutionCount)
-            taskGroups[groupIndex] = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
+                queuedExecutionCount: task.queuedExecutionCount,
+                boardTaskId: task.boardTaskId, boardTaskStatus: task.boardTaskStatus)
+            conversationTaskGroups[groupIndex] = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: tasks, standaloneSessions: group.standaloneSessions, global: group.global)
         }
         invalidateTaskGroupsAfterReceipt()
@@ -367,7 +405,7 @@ final class WorkspaceStore: ObservableObject {
                 guard !Task.isCancelled else { return }
                 guard generation == taskGroupsMutationGeneration else { taskGroupsRefreshPending = true; continue }
                 taskGroupsLoaded = true
-                if !page.unchanged { taskGroups = page.groups; taskGroupsRevision = page.revision }
+                if !page.unchanged { conversationTaskGroups = page.groups; taskGroupsRevision = page.revision }
                 taskGroupsError = nil
             } catch {
                 guard !Task.isCancelled else { return }
@@ -385,7 +423,8 @@ final class WorkspaceStore: ObservableObject {
         name: String,
         directory: String,
         worktree: Bool?,
-        workspaceId: String? = nil
+        workspaceId: String? = nil,
+        parentTaskId: String? = nil
     ) async throws -> (workspace: Workspace, creation: WorkspaceTaskCreation) {
         let trimmedDirectory = directory.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = trimmedDirectory.hasSuffix("/") && trimmedDirectory.count > 1
@@ -399,14 +438,16 @@ final class WorkspaceStore: ObservableObject {
                 name: name,
                 baseRef: nil,
                 worktree: worktree ?? defaultTaskWorktree,
-                cwd: nil
+                cwd: nil,
+                parentTaskId: parentTaskId
             )
             workspace = existing
         } else {
             creation = try await api.createStandaloneTask(
                 name: name,
                 cwd: normalized.isEmpty ? nil : normalized,
-                worktree: normalized.isEmpty ? false : (worktree ?? defaultTaskWorktree)
+                worktree: normalized.isEmpty ? false : (worktree ?? defaultTaskWorktree),
+                parentTaskId: parentTaskId
             )
             workspace = workspaces.first(where: { $0.id == creation.workspaceId })
                 ?? Workspace(
@@ -431,7 +472,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     /// Worktree 合并：用审查结果生成任务书并启动只绑定项目的托管 Agent 会话。
-    /// provider 回退：项目默认 → 服务器默认 → Claude。
+    /// 系统运维功能统一由「勤劳的初二」执行，工具与模型走初二候选链。
     func startWorktreeMergeAgent(
         workspace: Workspace,
         overview: WorkspaceWorktreeOverview,
@@ -442,10 +483,8 @@ final class WorkspaceStore: ObservableObject {
             overview: overview,
             selectedTaskIds: selectedTaskIds
         )
-        let provider = workspace.defaultProvider ?? serverDefaultProvider
         return try await api.startWorktreeMergeAgent(
             workspace: workspace,
-            provider: provider,
             prompt: prompt
         )
     }
@@ -473,7 +512,7 @@ final class WorkspaceStore: ObservableObject {
     func deleteWorkspaceTask(workspaceId: String, taskId: String) async throws {
         try await api.deleteWorkspaceTask(taskId: taskId)
         invalidateTaskGroupsAfterReceipt()
-        taskGroups = taskGroups.map { group in
+        conversationTaskGroups = conversationTaskGroups.map { group in
             TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
                 tasks: group.tasks.filter { $0.id != taskId }, standaloneSessions: group.standaloneSessions, global: group.global)
@@ -519,7 +558,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     /// 确认完成代次。确认后重取一次任务分组，让未读提示立刻从服务端投影里消失；
-    /// 不在客户端手工改 `taskGroups` 里的只读字段，避免两套口径。
+    /// 不在客户端手工改 `conversationTaskGroups` 里的只读字段，避免两套口径。
     /// 失败不回滚：未读提示留在原样，下次明确打开还能重试。
     func markSessionCompletionViewed(sessionId: String, completionRevision: Int) async throws {
         _ = try await api.markSessionCompletionViewed(

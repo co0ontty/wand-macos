@@ -7,11 +7,23 @@ final class CommunicationsStore: ObservableObject {
     enum Section { case conversations, contacts }
     @Published var section: Section = .conversations
     @Published var query = ""
-    enum ArchiveFilter: String, CaseIterable { case all, unarchived, archived
-        var label: String { switch self { case .all: return "全部"; case .unarchived: return "未归档"; case .archived: return "已归档" } }
-    }
+    typealias ArchiveFilter = ConversationArchiveFilter
+    @Published var lastCapsuleRuntime: ConversationRuntimeFilter = .working { didSet { preferences.set(lastCapsuleRuntime.rawValue, forKey: "wand.desktop.lastCapsuleRuntime") } }
+    @Published var lastCapsuleWorkspace = "" { didSet { preferences.set(lastCapsuleWorkspace, forKey: "wand.desktop.lastCapsuleWorkspace") } }
+    @Published var runtimeFilter: ConversationRuntimeFilter = .all { didSet { if runtimeFilter != .all { lastCapsuleRuntime = runtimeFilter } } }
+    @Published var taskStageFilter: ConversationTaskStage = .all
+    @Published var workspaceFilter = "all" { didSet { if workspaceFilter != "all" { lastCapsuleWorkspace = workspaceFilter } } }
     @Published var archiveFilter: ArchiveFilter = .all { didSet { preferences.set(archiveFilter.rawValue, forKey: "wand.desktop.conversationArchiveFilter") } }
     @Published var activityOnly = false { didSet { preferences.set(activityOnly, forKey: "wand.desktop.conversationActivityOnly") } }
+    var listFilters: ConversationListFilters {
+        get { ConversationListFilters(runtime: runtimeFilter == .all && activityOnly ? .active : runtimeFilter, taskStage: taskStageFilter, workspace: workspaceFilter, archive: archiveFilter, activityOnly: activityOnly) }
+        set {
+            taskStageFilter = newValue.taskStage; workspaceFilter = newValue.workspace
+            archiveFilter = newValue.archive; activityOnly = newValue.activityOnly
+            runtimeFilter = newValue.runtime == .active && !newValue.activityOnly ? .all
+                : newValue.runtime == .all && newValue.activityOnly ? .active : newValue.runtime
+        }
+    }
     private let preferences: UserDefaults
     @Published var includesArchivedContacts = false
     @Published private(set) var contacts: [EmployeeContact] = []
@@ -61,6 +73,8 @@ final class CommunicationsStore: ObservableObject {
     init(api: CommunicationsServing, serverURL: URL, defaults: UserDefaults = .standard) {
         self.api = api
         preferences = defaults
+        lastCapsuleRuntime = ConversationRuntimeFilter(rawValue: defaults.string(forKey: "wand.desktop.lastCapsuleRuntime") ?? "") ?? .working
+        lastCapsuleWorkspace = defaults.string(forKey: "wand.desktop.lastCapsuleWorkspace") ?? ""
         archiveFilter = ArchiveFilter(rawValue: defaults.string(forKey: "wand.desktop.conversationArchiveFilter") ?? "") ?? .all
         activityOnly = defaults.bool(forKey: "wand.desktop.conversationActivityOnly")
         ledger = ConversationRequestLedger(api: api, serverURL: serverURL, defaults: defaults)
@@ -71,10 +85,14 @@ final class CommunicationsStore: ObservableObject {
         contacts.filter { (includesArchivedContacts || !$0.isArchived) && matches([$0.name, $0.duty] + ($0.tags ?? [])) }
     }
     var filteredConversations: [NativeConversation] { conversationList() }
-    func conversationList(sessions: [WorkspaceSessionSummary] = [], selectedSessionID: String? = nil) -> [NativeConversation] {
+    func conversationList(sessions: [WorkspaceSessionSummary] = [], selectedSessionID: String? = nil,
+                          entries: [ConversationSessionEntry]? = nil) -> [NativeConversation] {
         items.filter { item in
             if !DesktopGroupChatPresentation.isVisible && item.isGroup { return false }
-            if archiveFilter == .archived && !item.isArchived || archiveFilter == .unarchived && item.isArchived { return false }
+            if let entries, item.kind == "dm" {
+                return ConversationSessionEntry.matchesConversation(item, entries: entries, filters: listFilters, query: query)
+            } else if listFilters.hasFacets { return false }
+            if !archiveFilter.matches(item.isArchived) { return false }
             if activityOnly && !item.isActivity(sessions: sessions, selectedConversationID: selectedID, selectedSessionID: selectedSessionID) { return false }
             return matches([item.displayTitle, item.preview ?? ""] + (item.tasks ?? []).map { $0.task.title })
         }.sorted {
