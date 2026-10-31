@@ -715,7 +715,10 @@ enum TaskCommentMention {
         let end = min(max(caret, 0), chars.count)
         let start = query(in: body, caret: end)?.start ?? end
         let token = Array("@\(name) ")
-        let combined = String(chars[..<start] + token + chars[end...])
+        var combinedCharacters = Array(chars[..<start])
+        combinedCharacters.append(contentsOf: token)
+        combinedCharacters.append(contentsOf: chars[end...])
+        let combined = String(combinedCharacters)
         let normalized = removeLeadingSelectedMention(combined, name: name)
         return (normalized, min(normalized.count, start + token.count))
     }

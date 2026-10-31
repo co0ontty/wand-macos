@@ -657,7 +657,7 @@ private struct SidebarFixture: View {
     var body: some View {
         HStack(spacing: 0) {
             DesktopSidebarLayout(listVisible: !state.settingsPresented, onToggle: {}) {
-                DesktopNavigationRail(selection: state.settingsPresented ? .settings : .workspaces, onCommand: { _ in })
+                DesktopNavigationRail(selection: state.settingsPresented ? .settings : .conversations, onCommand: { _ in }) { EmptyView() }
             } list: {
                 ScrollView {
                     VStack(alignment: .leading) {

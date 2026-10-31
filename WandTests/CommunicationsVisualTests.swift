@@ -9,25 +9,27 @@ final class CommunicationsVisualTests: XCTestCase {
         let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Wand/MainShellView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let rail = try XCTUnwrap(source.components(separatedBy: "struct DesktopNavigationRail: View {").last)
+        let rail = try XCTUnwrap(source.components(separatedBy: "struct DesktopNavigationRail<Filters: View>: View {").last)
             .components(separatedBy: "private func item(").first ?? ""
         XCTAssertFalse(rail.contains("item(.contacts"))
-        for command in ["conversations", "workspaces", "knowledge", "taskBoard", "settings"] {
+        for command in ["conversations", "knowledge", "taskBoard", "settings"] {
             XCTAssertTrue(rail.contains("item(." + command + ","), command)
         }
-        let host = NSHostingView(rootView: DesktopNavigationRail(selection: .workspaces, onCommand: { _ in }))
-        host.frame = NSRect(x: 0, y: 0, width: 56, height: 700)
+        let host = NSHostingView(rootView: DesktopNavigationRail(selection: .conversations, onCommand: { _ in }) { EmptyView() })
+        host.frame = NSRect(x: 0, y: 0, width: 76, height: 700)
         host.layoutSubtreeIfNeeded()
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let image = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        try image.write(to: URL(fileURLWithPath: "/tmp/wand-hide-contacts/macos-navigation.png"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("wand-navigation-tests")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try image.write(to: directory.appendingPathComponent("macos-navigation.png"))
     }
 
     func testRootNavigationOmitsContactsAndKeepsWorkDestinations() async throws {
         var commands: [DesktopCommand] = []
-        let host = NSHostingView(rootView: DesktopNavigationRail(selection: .workspaces, onCommand: { commands.append($0) }))
-        host.frame = NSRect(x: 0, y: 0, width: 56, height: 700)
+        let host = NSHostingView(rootView: DesktopNavigationRail(selection: .conversations, onCommand: { commands.append($0) }) { EmptyView() })
+        host.frame = NSRect(x: 0, y: 0, width: 76, height: 700)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host; window.orderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil }
@@ -43,11 +45,11 @@ final class CommunicationsVisualTests: XCTestCase {
         }
         guard !labels.isEmpty else { throw XCTSkip("NSHostingView exports no accessibility labels in this test host") }
         XCTAssertFalse(labels.contains("通讯录"))
-        for command in [DesktopCommand.conversations, .workspaces, .knowledge, .taskBoard, .settings] {
+        for command in [DesktopCommand.conversations, .knowledge, .taskBoard, .settings] {
             XCTAssertTrue(labels.contains(command.title), command.title)
             XCTAssertTrue(try press(host, label: command.title))
         }
-        XCTAssertEqual(commands, [.conversations, .workspaces, .knowledge, .taskBoard, .settings])
+        XCTAssertEqual(commands, [.conversations, .knowledge, .taskBoard, .settings])
     }
 
     struct Fixture: Decodable { let contacts: [EmployeeContact]; let conversations: [NativeConversation] }
