@@ -126,13 +126,13 @@ final class ChatImagePreviewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(defaultSize.width, 960)
         XCTAssertGreaterThanOrEqual(defaultSize.height, 680)
 
-        // 模拟用户手动调整窗口大小并保存到 defaults
-        defaults.set(1350.0, forKey: ChatImagePreviewPresenter.previewSizeWidthKey)
-        defaults.set(920.0, forKey: ChatImagePreviewPresenter.previewSizeHeightKey)
+        // 使用 CI 的 1024×768 桌面也能容纳的尺寸，验证用户尺寸记忆。
+        defaults.set(900.0, forKey: ChatImagePreviewPresenter.previewSizeWidthKey)
+        defaults.set(600.0, forKey: ChatImagePreviewPresenter.previewSizeHeightKey)
 
         let remembered = ChatImagePreviewPresenter.targetPreviewSize(parent: nil, defaults: defaults)
-        XCTAssertEqual(remembered.width, 1350)
-        XCTAssertEqual(remembered.height, 920)
+        XCTAssertEqual(remembered.width, 900)
+        XCTAssertEqual(remembered.height, 600)
     }
 
     private func sampleImage() throws -> (image: NSImage, uri: String) {
