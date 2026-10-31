@@ -36,11 +36,11 @@ final class TaskBoardTests: XCTestCase {
         let json = #"[{"id":"submitted","status":"done","acceptance":{"evidence":"report","blocker":"设备验收待核对","acceptedAt":null}},{"id":"accepted","status":"done","deliveryRevision":0,"acceptance":{"evidence":"report","blocker":"","acceptedAt":"2026-01-01","confirmedRevision":0}},{"id":"archived","status":"archived"},{"id":"working","status":"doing","sessions":[{"id":"idle","status":"idle"}]}]"#
         let tasks = try JSONDecoder().decode([WandBoardTask].self, from: Data(json.utf8))
         XCTAssertEqual(wandBoardTaskWorkLabel(tasks[0]), "交付待 AI 验收")
-        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[0]), "等待你验收")
-        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[1]), "已通过")
+        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[0]), "待 AI 验收")
+        XCTAssertEqual(wandBoardTaskReviewLabel(tasks[1]), "已确认并归档")
         XCTAssertEqual(wandBoardTaskWorkLabel(tasks[2]), "未确认")
         XCTAssertEqual(wandBoardTaskReviewLabel(tasks[2]), "未验收")
-        XCTAssertEqual(wandBoardTaskWorkLabel(tasks[3]), "处理中")
+        XCTAssertEqual(wandBoardTaskWorkLabel(tasks[3]), "执行中")
         XCTAssertEqual(wandBoardTaskReviewLabel(tasks[3]), "未验收")
     }
 
@@ -511,15 +511,15 @@ final class TaskBoardTests: XCTestCase {
     }
 
     func testBoardLabelsCoverColumns() {
-        XCTAssertEqual(WandBoardStatus.columns.map(\.rawValue), ["backlog", "todo", "doing", "done"])
+        XCTAssertEqual(WandBoardStatus.columns.map(\.rawValue), ["backlog", "todo", "doing", "review", "ready"])
         XCTAssertEqual(WandBoardStatus.backlog.label, "待立项")
         XCTAssertFalse(WandBoardStatus.backlog.isClosed)
         XCTAssertEqual(WandBoardStatus.todo.label, "等待认领")
-        XCTAssertEqual(WandBoardStatus.doing.label, "处理中")
-        XCTAssertEqual(WandBoardStatus.done.label, "等待验收")
+        XCTAssertEqual(WandBoardStatus.doing.label, "执行中")
+        XCTAssertEqual(WandBoardStatus.done.label, "待验收")
         XCTAssertEqual(WandBoardStatus.archived.label, "归档任务")
         XCTAssertFalse(WandBoardStatus.todo.isClosed)
-        XCTAssertTrue(WandBoardStatus.done.isClosed)
+        XCTAssertFalse(WandBoardStatus.done.isClosed)
         XCTAssertTrue(WandBoardStatus.archived.isClosed)
         XCTAssertEqual(WandBoardPriority.urgent.label, "紧急")
         XCTAssertEqual(wandBoardProviderLabel("pi"), "Pi")
@@ -730,14 +730,14 @@ final class TaskBoardTests: XCTestCase {
         let json = """
         [
           {"id":"a","title":"逾期","status":"todo","dueDate":"2020-01-01"},
-          {"id":"b","title":"已确认","status":"done","dueDate":"2020-01-01"},
+          {"id":"b","title":"待 AI 验收","status":"review","dueDate":"2020-01-01"},
           {"id":"c","title":"已归档","status":"archived","dueDate":"2020-01-01"},
           {"id":"d","title":"没日期","status":"doing","priority":"urgent"}
         ]
         """.data(using: .utf8)!
         let tasks = try JSONDecoder().decode([WandBoardTask].self, from: json)
         XCTAssertTrue(wandBoardIsOverdue(tasks[0].dueDate, status: tasks[0].status))
-        XCTAssertFalse(wandBoardIsOverdue(tasks[1].dueDate, status: tasks[1].status))
+        XCTAssertTrue(wandBoardIsOverdue(tasks[1].dueDate, status: tasks[1].status))
         XCTAssertFalse(wandBoardIsOverdue(tasks[2].dueDate, status: tasks[2].status))
         XCTAssertFalse(wandBoardIsOverdue(nil, status: "todo"))
         XCTAssertEqual(wandBoardDueStamp("2026-09-30"), "9/30")
@@ -747,9 +747,9 @@ final class TaskBoardTests: XCTestCase {
         XCTAssertEqual(stats.total, 4)
         XCTAssertEqual(stats.todo, 1)
         XCTAssertEqual(stats.doing, 1)
-        XCTAssertEqual(stats.done, 1)
-        XCTAssertEqual(stats.remaining, 2)
-        XCTAssertEqual(stats.overdue, 1)
+        XCTAssertEqual(stats.review, 1)
+        XCTAssertEqual(stats.remaining, 3)
+        XCTAssertEqual(stats.overdue, 2)
         XCTAssertEqual(stats.high, 1)
     }
 
@@ -758,18 +758,19 @@ final class TaskBoardTests: XCTestCase {
         [
           {"id":"a","title":"有截止","status":"doing","createdAt":"2026-09-20T10:00:00Z","dueDate":"2026-09-24"},
           {"id":"b","title":"没有截止","status":"todo","createdAt":"2026-09-21T10:00:00Z"},
-          {"id":"c","title":"很久以前","status":"doing","createdAt":"2020-01-01T10:00:00Z"}
+          {"id":"c","title":"很久以前","status":"doing","createdAt":"2020-01-01T10:00:00Z","dueDate":"2020-01-01"}
         ]
         """.data(using: .utf8)!
         let tasks = try JSONDecoder().decode([WandBoardTask].self, from: json)
+        let today = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-22T10:00:00Z"))
         for zoom in WandBoardGanttZoom.allCases {
-            let range = wandBoardGanttRange(zoom: zoom)
+            let range = wandBoardGanttRange(zoom: zoom, today: today)
             XCTAssertEqual(range.days, zoom.days)
             XCTAssertEqual(range.columns.count, zoom.days)
             for task in tasks {
                 let span = wandBoardGanttSpan(task: task, range: range)
                 XCTAssertGreaterThanOrEqual(span.offset, 0)
-                XCTAssertGreaterThanOrEqual(span.length, 1)
+                XCTAssertEqual(span.length, task.id == "a" ? 1 : 0, "Only an in-range deadline creates a milestone")
                 XCTAssertLessThanOrEqual(span.offset + span.length, range.days)
             }
         }

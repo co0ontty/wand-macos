@@ -182,6 +182,7 @@ final class SettingsLayoutTests: XCTestCase {
         _ = try marker("settings-open-employees", in: host)
         XCTAssertTrue(descendants(host).compactMap { $0 as? NSSegmentedControl }.contains { $0.isEnabled })
         try clickMarker("settings-back", host: host, window: window)
+        await settle(host)
         XCTAssertTrue(closed, "宽窗口不再返回三列目录")
     }
 

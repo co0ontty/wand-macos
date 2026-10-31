@@ -55,6 +55,7 @@ final class ChatImagePreviewTests: XCTestCase {
         let opener = try await waitForProbe("chat-image-open-验收图", in: host)
         XCTAssertGreaterThan(opener.bounds.width, 1)
         click(opener)
+        try await waitUntil { presentedPreview(titled: "验收图", from: window) != nil }
         let sheet = try XCTUnwrap(presentedPreview(titled: "验收图", from: window))
         XCTAssertEqual(sheet.title, "验收图")
         let closer = try await waitForProbe("chat-image-close", in: try XCTUnwrap(sheet.contentView))
@@ -94,16 +95,19 @@ final class ChatImagePreviewTests: XCTestCase {
         XCTAssertNil(probe("chat-image-open-不要打开", in: host))
         XCTAssertFalse(descendants(host).isEmpty)
         click(tool)
+        try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) != nil }
         var sheet = try XCTUnwrap(presentedPreview(titled: "工具返回图片", from: window), "工具图片点击后应立刻挂出预览")
         XCTAssertEqual(sheet.title, "工具返回图片")
         ChatImagePreviewPresenter.shared.close()
         try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) == nil }
         click(tool)
+        try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) != nil }
         sheet = try XCTUnwrap(presentedPreview(titled: "工具返回图片", from: window), "同一张图片关闭后应能再次打开")
         XCTAssertEqual(sheet.title, "工具返回图片")
         ChatImagePreviewPresenter.shared.close()
         try await waitUntil { presentedPreview(titled: "工具返回图片", from: window) == nil }
         click(markdown)
+        try await waitUntil { presentedPreview(titled: "验收图", from: window) != nil }
         sheet = try XCTUnwrap(presentedPreview(titled: "验收图", from: window), "另一张图片应打开自己的预览")
         XCTAssertEqual(sheet.title, "验收图")
         ChatImagePreviewPresenter.shared.close()

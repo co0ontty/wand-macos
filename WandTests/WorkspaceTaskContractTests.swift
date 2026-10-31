@@ -74,6 +74,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         try await Task.sleep(nanoseconds: 180_000_000)
         XCTAssertEqual(selected, "s2")
         try clickSidebarMarker(host, window: window, id: "workbar-new")
+        try await Task.sleep(nanoseconds: 180_000_000)
         XCTAssertEqual(newCount, 1)
         for width in [900.0, 560.0] {
             window.setContentSize(NSSize(width: width, height: 52))
@@ -319,27 +320,27 @@ final class WorkspaceTaskContractTests: XCTestCase {
         let groups = TaskListPresentation.sidebarDirectoryGroups([global] + source, workspaces: [], query: "",
             activeOnly: false, selectedSessionId: nil, selectedTaskId: nil)
         XCTAssertEqual(groups.last?.id, "global")
-        XCTAssertEqual(groups.flatMap(\.tasks).count, 4)
+        XCTAssertEqual(groups.flatMap(\.tasks).map(\.id), ["checkout", "checkout"], "Empty unselected tasks stay out of the session list")
         let active = TaskListPresentation.sidebarDirectoryGroups(source, workspaces: [], query: "",
             activeOnly: true, selectedSessionId: "layout", selectedTaskId: nil)
         XCTAssertTrue(active.flatMap(\.tasks).isEmpty)
-        XCTAssertEqual(active.map(\.id), source.map(\.id), "Activity filtering retains directory roots")
+        XCTAssertTrue(active.isEmpty, "Activity filtering hides directories without active sessions")
     }
 
-    func testSidebarKeepsUnboundDirectoryMembersAndDefaultGroupSearch() throws {
+    func testSidebarKeepsUnboundDirectoryMembersAndDirectorySearch() throws {
         let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"[{"workspaceId":"cwd:/repo/free","workspaceName":"Free","workspaceCwd":"/repo/free","synthetic":true,"tasks":[],"standaloneSessions":[{"id":"free","title":"独立工作","status":"idle"},{"id":"old","archived":true}]},{"workspaceId":"global","workspaceName":"全局","workspaceCwd":"/scratch","global":true,"tasks":[],"standaloneSessions":[{"id":"other","title":"全局工作","status":"idle"}]}]"#.utf8))
         let projected = TaskListPresentation.sidebarDirectoryGroups(groups, workspaces: [], query: "", activeOnly: false, selectedSessionId: nil, selectedTaskId: nil)
         XCTAssertEqual(Set(projected.map(\.id)), Set(groups.map(\.id)))
         XCTAssertEqual(Set(projected.flatMap(\.standaloneSessions).map(\.id)), ["free", "other"])
-        let searched = TaskListPresentation.sidebarDirectoryGroups(groups, workspaces: [], query: "Free - 未分组任务", activeOnly: false, selectedSessionId: nil, selectedTaskId: nil)
-        XCTAssertEqual(searched.flatMap(\.standaloneSessions).map(\.id), ["free"])
+        let searched = TaskListPresentation.sidebarDirectoryGroups(groups, workspaces: [], query: "Free", activeOnly: false, selectedSessionId: nil, selectedTaskId: nil)
+        XCTAssertEqual(searched.flatMap(\.standaloneSessions).map(\.id), ["free", "old"], "Directory search can reveal archived sessions")
         var known = Set<String>(), expanded = Set<String>()
         TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
         XCTAssertTrue(expanded.contains("cwd:/repo/free"), "只有未分组会话的目录同样可发现和展开")
     }
 
     @MainActor
-    func testNativeDefaultGroupExpandsAndOpensTheActualUnboundSession() async throws {
+    func testNativeUnboundSessionOpensDirectlyWithoutSyntheticTask() async throws {
         let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"[{"workspaceId":"cwd:/repo/free","workspaceName":"Free","workspaceCwd":"/repo/free","synthetic":true,"tasks":[],"standaloneSessions":[{"id":"free","title":"独立工作","provider":"pi","sessionKind":"structured","cwd":"/repo/free","status":"idle"}]}]"#.utf8))
         let data = try JSONEncoder().encode(groups)
         let api = makeAPI { request in
@@ -356,11 +357,12 @@ final class WorkspaceTaskContractTests: XCTestCase {
         window.contentView = host; window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil }
         host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 220_000_000); host.layoutSubtreeIfNeeded()
-        try clickSidebarMarker(host, window: window, id: "sidebar-default-task-cwd:/repo/free")
+        XCTAssertNil(sidebarPresenceView(host, id: "sidebar-default-task-cwd:/repo/free"))
         try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
         XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-standalone-free"))
         try captureSidebar(host, name: "fixture-default-group-expanded")
         try clickSidebarMarker(host, window: window, id: "sidebar-standalone-free")
+        try await Task.sleep(nanoseconds: 180_000_000)
         XCTAssertEqual(opened, "free")
     }
 

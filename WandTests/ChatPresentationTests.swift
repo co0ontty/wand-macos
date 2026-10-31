@@ -472,8 +472,9 @@ final class NativeQueueDensityTests: XCTestCase {
     @MainActor
     func testQueueFullTextAndRetrieveUseRealNativeButtons() async throws {
         var retrieved = 0
+        let retrieval = expectation(description: "Native retrieve action")
         let long = String(repeating: "长文完整内容不可丢失。\n", count: 12) + "全文末尾"
-        let row = QueueItemRow(index: 0, text: long, onPromote: {}, onDelete: {}, onRetrieve: { retrieved += 1 }, onMove: { _ in }, canRetrieve: true, canDelete: true, count: 2)
+        let row = QueueItemRow(index: 0, text: long, onPromote: {}, onDelete: {}, onRetrieve: { retrieved += 1; retrieval.fulfill() }, onMove: { _ in }, canRetrieve: true, canDelete: true, count: 2)
         let host = NSHostingView(rootView: row.frame(width: 536).padding(8).background(Theme.surface).transaction { $0.animation = nil; $0.disablesAnimations = true })
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 552, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host; window.orderFront(nil)
@@ -497,7 +498,9 @@ final class NativeQueueDensityTests: XCTestCase {
         XCTAssertGreaterThan(host.fittingSize.height, collapsed + 80)
         try press("queue-expand-0"); try await Task.sleep(nanoseconds: 120_000_000); host.layoutSubtreeIfNeeded()
         XCTAssertEqual(host.fittingSize.height, collapsed, accuracy: 1)
-        try press("queue-retrieve-0"); XCTAssertEqual(retrieved, 1)
+        try press("queue-retrieve-0")
+        await fulfillment(of: [retrieval], timeout: 3)
+        XCTAssertEqual(retrieved, 1)
     }
 
 }
