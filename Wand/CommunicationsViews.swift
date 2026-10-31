@@ -1342,19 +1342,16 @@ struct DesktopUnifiedSessionList: View {
                 && TaskListPresentation.searchMatches(communications.query, values: [item.displayTitle, item.preview])
         }
     }
+    private var filterSummary: String {
+        let workspace = ConversationSessionEntry.workspaceOptions(store.conversationTaskGroups)
+            .first { $0.id == communications.workspaceFilter }?.label ?? "工作区不可用"
+        let stage = communications.taskStageFilter == .all ? "" : " · 任务阶段：\(communications.taskStageFilter.label)"
+        return "\(communications.listFilters.runtime.label)\(stage) · \(workspace)"
+    }
     var body: some View {
         VStack(spacing: 8) {
-            HStack {
-                TextField("搜索会话", text: $communications.query).textFieldStyle(.roundedBorder).accessibilityLabel("搜索会话")
-                if !communications.query.isEmpty { Button { communications.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
-                Button { filtersOpen = true } label: { Image(systemName: "line.3.horizontal.decrease").frame(width: 28, height: 28) }
-                    .buttonStyle(WandIconButtonStyle()).help("设置会话列表的任务阶段、工作区、归档及活动筛选，不影响当前会话").accessibilityLabel("筛选会话")
-                    .popover(isPresented: $filtersOpen) {
-                        ConversationFilterPanel(filters: communications.listFilters, groups: store.conversationTaskGroups,
-                            close: { filtersOpen = false }, apply: { communications.listFilters = $0; filtersOpen = false })
-                    }
-            }.padding(.horizontal, 12)
-            Text(communications.listFilters.runtime.label + (communications.taskStageFilter == .all ? "" : " · 任务阶段：" + communications.taskStageFilter.label) + " · " + (ConversationSessionEntry.workspaceOptions(store.conversationTaskGroups).first { $0.id == communications.workspaceFilter }?.label ?? "工作区不可用"))
+            searchBar
+            Text(filterSummary)
                 .font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
             Text("\(rows.count + legacyRows.count) 个会话").font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
             if let selectedID, entries.contains(where: { $0.id == selectedID }), !rows.contains(where: { $0.id == selectedID }) {
@@ -1364,35 +1361,7 @@ struct DesktopUnifiedSessionList: View {
                 }.padding(.horizontal, 12)
             }
             if let error = error ?? store.taskGroupsError { Text(error).font(.system(size: 11)).foregroundColor(Theme.danger).padding(.horizontal, 12) }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 3) {
-                        if !attentionRows.isEmpty {
-                            HStack { Text("我需要关注"); Spacer(); Text("\(attentionRows.count)") }
-                                .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary).padding(8)
-                            ForEach(attentionRows) { entry in sessionRow(entry).id(entry.id) }
-                            if !otherRows.isEmpty {
-                                HStack { Text("其他会话"); Spacer(); Text("\(otherRows.count)") }
-                                    .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary).padding(8)
-                            }
-                        }
-                        ForEach(otherRows) { entry in sessionRow(entry).id(entry.id) }
-                        ForEach(legacyRows) { item in
-                            Button { onOpenConversation(item) } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                                    Text(item.preview ?? "历史会话").font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
-                                }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).padding(.horizontal, 8)
-                            }.buttonStyle(DesktopNavigationButtonStyle(active: selectedConversationID == item.id))
-                        }
-                        if rows.isEmpty && legacyRows.isEmpty && store.taskGroupsLoaded {
-                            Text("没有符合条件的会话").foregroundColor(Theme.textSecondary).padding(12)
-                            Button("清除筛选与搜索") { communications.listFilters = ConversationListFilters(); communications.query = "" }
-                        }
-                        if !store.taskGroupsLoaded { ProgressView().controlSize(.small).padding() }
-                    }.padding(.horizontal, 8).padding(.bottom, 12)
-                }.onChange(of: locateID) { id in if let id { proxy.scrollTo(id, anchor: .center); locateID = nil } }
-            }
+            sessionList
         }
         .sheet(item: $moveTarget) { DesktopSessionMoveSheet(api: api, store: store, session: $0) }
         .alert("删除会话？", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
@@ -1404,6 +1373,51 @@ struct DesktopUnifiedSessionList: View {
             }
         } message: { Text("将删除这条会话的消息与执行记录，此操作无法撤销。") }
     }
+    private var searchBar: some View {
+        HStack {
+            TextField("搜索会话", text: $communications.query).textFieldStyle(.roundedBorder).accessibilityLabel("搜索会话")
+            if !communications.query.isEmpty { Button { communications.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
+            Button { filtersOpen = true } label: { Image(systemName: "line.3.horizontal.decrease").frame(width: 28, height: 28) }
+                .buttonStyle(WandIconButtonStyle()).help("设置会话列表的任务阶段、工作区、归档及活动筛选，不影响当前会话").accessibilityLabel("筛选会话")
+                .popover(isPresented: $filtersOpen) {
+                    ConversationFilterPanel(filters: communications.listFilters, groups: store.conversationTaskGroups,
+                        close: { filtersOpen = false }, apply: { communications.listFilters = $0; filtersOpen = false })
+                }
+        }.padding(.horizontal, 12)
+    }
+
+    private var sessionList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 3) {
+                    if !attentionRows.isEmpty {
+                        HStack { Text("我需要关注"); Spacer(); Text("\(attentionRows.count)") }
+                            .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary).padding(8)
+                        ForEach(attentionRows) { entry in sessionRow(entry).id(entry.id) }
+                        if !otherRows.isEmpty {
+                            HStack { Text("其他会话"); Spacer(); Text("\(otherRows.count)") }
+                                .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary).padding(8)
+                        }
+                    }
+                    ForEach(otherRows) { entry in sessionRow(entry).id(entry.id) }
+                    ForEach(legacyRows) { item in
+                        Button { onOpenConversation(item) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Text(item.preview ?? "历史会话").font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                            }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).padding(.horizontal, 8)
+                        }.buttonStyle(DesktopNavigationButtonStyle(active: selectedConversationID == item.id))
+                    }
+                    if rows.isEmpty && legacyRows.isEmpty && store.taskGroupsLoaded {
+                        Text("没有符合条件的会话").foregroundColor(Theme.textSecondary).padding(12)
+                        Button("清除筛选与搜索") { communications.listFilters = ConversationListFilters(); communications.query = "" }
+                    }
+                    if !store.taskGroupsLoaded { ProgressView().controlSize(.small).padding() }
+                }.padding(.horizontal, 8).padding(.bottom, 12)
+            }.onChange(of: locateID) { id in if let id { proxy.scrollTo(id, anchor: .center); locateID = nil } }
+        }
+    }
+
     private func sessionRow(_ entry: ConversationSessionEntry) -> some View {
         let session = entry.session
         return Button { onOpen(session.id) } label: {

@@ -48,6 +48,7 @@ private struct RuntimeSettingsProbe: View {
         }
         .background(Theme.workspaceBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .transaction { $0.disablesAnimations = true }
     }
 }
 private struct ComposerGeometryProbe: NSViewRepresentable {
@@ -89,6 +90,7 @@ final class AvatarComposerParityTests: XCTestCase {
 
     func testCompactComposerIsOneRowAndActionsStayAnchoredWhileEditorGrows() async throws {
         let focus = ComposerFocusController()
+        focus.collapse()
         let host = NSHostingView(rootView: RuntimeSettingsProbe(focus: focus))
         host.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -163,7 +165,7 @@ final class AvatarComposerParityTests: XCTestCase {
     func testTodoSharesInputEdgeWithoutMovingActions() async throws {
         let focus = ComposerFocusController()
         let host = NSHostingView(rootView: RuntimeSettingsProbe(focus: focus))
-        host.frame = NSRect(x: 0, y: 0, width: 940, height: 240)
+        host.frame = NSRect(x: 0, y: 0, width: 940, height: 320)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host
         defer { window.contentView = nil }
@@ -174,7 +176,7 @@ final class AvatarComposerParityTests: XCTestCase {
         }
         let todos = [TodoItem(content: String(repeating: "核对界面与输入", count: 12), status: "in_progress", activeForm: nil)]
         for width: CGFloat in [390, 940] {
-            window.setContentSize(NSSize(width: width, height: 240)); host.frame.size.width = width
+            window.setContentSize(NSSize(width: width, height: 320)); host.frame.size.width = width
             host.rootView = RuntimeSettingsProbe(focus: focus)
             host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
             let send = try rect("runtime-send")
@@ -201,7 +203,7 @@ final class AvatarComposerParityTests: XCTestCase {
         store.queuedMessages = [String(repeating: "待发消息内容与长文本 ", count: 60), "第二条消息"]
         let todos = [TodoItem(content: "正在核对布局", status: "in_progress", activeForm: nil)]
         let host = NSHostingView(rootView: RuntimeSettingsProbe(focus: focus))
-        host.frame = NSRect(x: 0, y: 0, width: 940, height: 240)
+        host.frame = NSRect(x: 0, y: 0, width: 940, height: 320)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host
         defer { window.contentView = nil }
@@ -211,7 +213,7 @@ final class AvatarComposerParityTests: XCTestCase {
             return view.convert(view.bounds, to: host)
         }
         for width: CGFloat in [320, 390, 940] {
-            window.setContentSize(NSSize(width: width, height: 240)); host.frame.size.width = width
+            window.setContentSize(NSSize(width: width, height: 320)); host.frame.size.width = width
             host.rootView = RuntimeSettingsProbe(focus: focus)
             host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
             let send = try rect("runtime-send")
@@ -280,7 +282,7 @@ final class AvatarComposerParityTests: XCTestCase {
 
     func testComposerThinkingPreferencesDoNotPretendUnknownLevelsAreOff() {
         XCTAssertEqual(composerThinkingPreference("pi:xhigh"), "超高")
-        XCTAssertEqual(composerThinkingPreference("off"), "自动（模型默认）")
+        XCTAssertEqual(composerThinkingPreference("off"), "自动")
         XCTAssertEqual(composerThinkingPreference("pi:new-level"), "new-level")
         XCTAssertEqual(composerThinkingPreference("pi:max"), "极高")
         let pi = thinkingEffortOptions(provider: "pi", selectedModel: nil, defaultModel: nil, models: [])
@@ -290,9 +292,9 @@ final class AvatarComposerParityTests: XCTestCase {
         XCTAssertEqual(codex.first { $0.id == "max" }?.label, "超高")
     }
 
-    func testFocusBorrowingExplicitDismissAckAndRecoveryMatchAndroid() {
+    func testDefaultExpandedFocusBorrowingExplicitDismissAckAndRecovery() {
         let focus = ComposerFocusController()
-        XCTAssertFalse(focus.editing)
+        XCTAssertTrue(focus.editing)
         focus.focus(); focus.borrow("model", open: true); focus.borrow("files", open: true)
         XCTAssertTrue(focus.editing); XCTAssertFalse(focus.focused)
         focus.resume("model"); XCTAssertFalse(focus.focused)
@@ -302,11 +304,11 @@ final class AvatarComposerParityTests: XCTestCase {
         focus.focus(); focus.submit(); focus.collapse()
         XCTAssertTrue(focus.editing, "pending ack cannot hide the submission feedback")
         focus.accepted(hasPendingContent: true); XCTAssertTrue(focus.editing)
-        focus.submit(); focus.accepted(hasPendingContent: false); XCTAssertFalse(focus.editing)
+        focus.submit(); focus.accepted(hasPendingContent: false); XCTAssertTrue(focus.editing)
         focus.focus(); focus.failed(); focus.collapse()
         XCTAssertTrue(focus.editing, "failed/unknown recovery is sticky")
-        focus.resetPresentation(); XCTAssertFalse(focus.editing)
-        focus.accepted(hasPendingContent: false); XCTAssertFalse(focus.editing)
+        focus.resetPresentation(); XCTAssertTrue(focus.editing)
+        focus.accepted(hasPendingContent: false); XCTAssertTrue(focus.editing)
     }
 
     func testIMECommitInsertTextReleasesSendGate() {
@@ -386,10 +388,11 @@ final class AvatarComposerParityTests: XCTestCase {
 
     func testSendStopMouseDispatchAndStableSlotAcrossCollapse() async throws {
         let focus = ComposerFocusController()
+        focus.collapse()
         let probe = NativeProbe()
         let host = NSHostingView(rootView: MouseSendProbe(focus: focus, probe: probe)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom))
-        host.frame = NSRect(x: 0, y: 0, width: 600, height: 240)
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 320)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host; window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil }
@@ -407,7 +410,7 @@ final class AvatarComposerParityTests: XCTestCase {
         }
         let emptySlot = rect()
         XCTAssertEqual(emptySlot.width, 32, accuracy: 0.5)
-        XCTAssertEqual(emptySlot.maxX, host.bounds.maxX, accuracy: 0.5)
+        XCTAssertEqual(emptySlot.maxX, host.bounds.maxX - 12, accuracy: 0.5)
         try await click(); XCTAssertEqual(probe.submissions, 0, "hidden empty action cannot dispatch")
         probe.text = "保留草稿"; try await settle()
         try await click(); XCTAssertEqual(probe.submissions, 1, "collapsed draft can send without opening editor")
