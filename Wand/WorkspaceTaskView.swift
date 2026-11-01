@@ -195,13 +195,31 @@ enum DesktopSessionTabScope {
         return ids
     }
 
-    static func standalone(groups: [TaskDirectoryGroup], selected: SessionSnapshot) -> [WorkspaceSessionSummary] {
+    /// 顶部标签条跟随侧边栏的「仅活跃」与胶囊筛选：侧边栏显示多少，上面就显示多少。
+    /// 若筛选后没有匹配的会话，则保留当前会话，避免顶栏全空。
+    static func standalone(
+        groups: [TaskDirectoryGroup],
+        selected: SessionSnapshot,
+        activeOnly: Bool = false,
+        matching: ((TaskDirectoryGroup, WorkspaceSessionSummary) -> Bool)? = nil
+    ) -> [WorkspaceSessionSummary] {
         let live = WorkspaceSessionSummary(snapshot: selected)
         guard selected.archived != true, selected.workspaceTaskId == nil,
               let group = groups.first(where: { $0.standaloneSessions.contains(where: { $0.id == selected.id }) }) else { return [live] }
-        let sessions = group.standaloneSessions.filter {
+        var candidates = group.standaloneSessions.filter {
             $0.archived != true && $0.workspaceTaskId == nil && $0.teamChat == nil
-        }.map { $0.id == selected.id ? live : $0 }
+        }
+        if let matching {
+            candidates = candidates.filter { matching(group, $0) }
+        }
+        let chosen: [WorkspaceSessionSummary]
+        if activeOnly {
+            let active = candidates.filter { TaskListPresentation.isActive($0, selectedSessionId: selected.id) }
+            chosen = active.isEmpty ? [live] : active
+        } else {
+            chosen = candidates.isEmpty ? [live] : candidates
+        }
+        let sessions = chosen.map { $0.id == selected.id ? live : $0 }
         guard sessions.contains(where: { $0.id == selected.id }) else { return [live] }
         return sessions.enumerated().sorted { lhs, rhs in
             let a = lhs.element.startedAt ?? "", b = rhs.element.startedAt ?? ""

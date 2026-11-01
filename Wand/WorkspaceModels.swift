@@ -590,6 +590,8 @@ struct TaskDirectoryGroup: Codable, Equatable, Identifiable {
     let standaloneSessions: [WorkspaceSessionSummary]
 
     let global: Bool?
+    let userAdded: Bool?
+    let directoryVisible: Bool?
 
     var id: String { workspaceId }
     var isSynthetic: Bool { synthetic ?? false }
@@ -597,7 +599,8 @@ struct TaskDirectoryGroup: Codable, Equatable, Identifiable {
     var displayName: String { isGlobal ? "未归属工作区" : workspaceName }
 
     init(workspaceId: String, workspaceName: String, workspaceCwd: String, synthetic: Bool?,
-         tasks: [WorkspaceTaskSummary], standaloneSessions: [WorkspaceSessionSummary], global: Bool? = nil) {
+         tasks: [WorkspaceTaskSummary], standaloneSessions: [WorkspaceSessionSummary], global: Bool? = nil,
+         userAdded: Bool? = nil, directoryVisible: Bool? = nil) {
         self.workspaceId = workspaceId
         self.workspaceName = workspaceName
         self.workspaceCwd = workspaceCwd
@@ -605,6 +608,8 @@ struct TaskDirectoryGroup: Codable, Equatable, Identifiable {
         self.tasks = tasks
         self.standaloneSessions = standaloneSessions
         self.global = global
+        self.userAdded = userAdded
+        self.directoryVisible = directoryVisible
     }
 }
 
@@ -644,7 +649,7 @@ struct TaskGroupsPage: Equatable {
             if activeTasks.isEmpty && sessions.isEmpty && (group.isSynthetic || group.isGlobal) { return nil }
             return TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: activeTasks,
-                standaloneSessions: sessions, global: group.global)
+                standaloneSessions: sessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible)
         }
     }
 
@@ -792,10 +797,10 @@ enum TaskListPresentation {
             }
             let sessions = sidebarSessions(group.standaloneSessions).filter { ($0.archived != true || !query.isEmpty) && (!activeOnly || isActive($0, selectedSessionId: selectedSessionId)) && searchMatches(query, values: [groupSearchText($0), group.displayName, group.workspaceCwd]) }
             let tasks = candidates.filter { keep.contains($0.id) }
-            guard !tasks.isEmpty || !sessions.isEmpty else { return nil }
+            guard group.userAdded == true || !tasks.isEmpty || !sessions.isEmpty else { return nil }
             return TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: tasks,
-                standaloneSessions: sessions, global: group.global)
+                standaloneSessions: sessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible)
         }.sorted { !$0.isGlobal && $1.isGlobal }
     }
 
@@ -917,7 +922,7 @@ enum TaskListPresentation {
             return TaskDirectoryGroup(
                 workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
-                tasks: tasks, standaloneSessions: standaloneSessions, global: group.global
+                tasks: tasks, standaloneSessions: standaloneSessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible
             )
         }
     }
@@ -1187,7 +1192,7 @@ struct ConversationSessionEntry: Identifiable {
     }
     var workspace: String? {
         guard let group, !isSystemCall else { return nil }
-        return group.isSynthetic || group.isGlobal || group.workspaceId == "wand-global" ? "none" : "id:" + group.workspaceId
+        return group.userAdded != true || group.isSynthetic || group.isGlobal || group.workspaceId == "wand-global" ? "none" : "id:" + group.workspaceId
     }
     var workspaceLabel: String {
         guard let workspace else { return "工作区未知" }
@@ -1230,7 +1235,7 @@ struct ConversationSessionEntry: Identifiable {
     static func workspaceOptions(_ groups: [TaskDirectoryGroup]) -> [(id: String, label: String)] {
         var seen = Set<String>()
         return [("all", "全部工作区"), ("none", "未分配工作区")] + groups.compactMap { group in
-            guard !group.isSynthetic, !group.isGlobal, group.workspaceId != "wand-global",
+            guard group.userAdded == true, !group.isSynthetic, !group.isGlobal, group.workspaceId != "wand-global",
                   !group.workspaceId.hasPrefix("system-calls:"), seen.insert(group.workspaceId).inserted else { return nil }
             return ("id:" + group.workspaceId, group.workspaceName)
         }

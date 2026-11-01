@@ -118,14 +118,6 @@ final class WandTaskPlanningDraft: ObservableObject {
         defer { creating = false }
         do {
             let path = directory.trimmingCharacters(in: .whitespacesAndNewlines)
-            if submitted.workspaceId.isEmpty, !path.isEmpty {
-                let workspace = try await api.createWorkspace(name: (path as NSString).lastPathComponent,
-                    cwd: path, defaultProvider: nil)
-                // Keep this receipt when task creation is rejected; a retry must reuse the workspace.
-                draft.workspaceId = workspace.id
-                submitted.workspaceId = workspace.id
-                workspaces.append(workspace)
-            }
             let task = try await api.createBoardTask(
                 title: submitted.title, description: submitted.description, status: submitted.status,
                 priority: submitted.priority, labels: submitted.parsedLabels,
@@ -134,7 +126,8 @@ final class WandTaskPlanningDraft: ObservableObject {
                 workspaceId: submitted.workspaceId.isEmpty ? nil : submitted.workspaceId,
                 agent: submitted.agent, parentTaskId: submitted.parentTaskId,
                 employeeId: submitted.employeeId.isEmpty ? nil : submitted.employeeId,
-                employeeOverride: submitted.employeeOverride
+                employeeOverride: submitted.employeeOverride,
+                cwd: path.isEmpty ? nil : path
             )
             createdTask = task
             NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
@@ -365,14 +358,9 @@ struct WandBoardCreateView: View {
 
     private var directoryField: some View {
                 WandBoardField("项目目录") {
-                    Picker("", selection: $owner.draft.workspaceId) {
-                        Text("不指定目录（使用全局目录）").tag("")
-                        ForEach(owner.workspaces) { workspace in
-                            Text(workspace.name).tag(workspace.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    WorkspaceSelector(selection: $owner.draft.workspaceId, choices: owner.workspaces.map { (id: $0.id, name: $0.name) }, onCreated: { workspace in
+                        owner.workspaces.append(workspace); owner.directory = workspace.cwd
+                    })
                     .onChange(of: owner.draft.workspaceId) { id in
                         owner.directory = owner.workspaces.first { $0.id == id }?.cwd ?? ""
                     }

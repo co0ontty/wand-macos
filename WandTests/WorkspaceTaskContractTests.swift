@@ -602,7 +602,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
         let structured = workspaceTaskWindowRequest(target: .qoder, binding: binding, kind: .structured)
         XCTAssertEqual(structured.path, "/api/sessions")
         XCTAssertEqual(structured.body["kind"], .string("structured"))
-        XCTAssertEqual(structured.body["runner"], .string("qoder-cli-print"))
+        XCTAssertEqual(structured.body["runner"], .string("qoder-cli-acp"))
         XCTAssertNil(structured.body["command"])
 
         let pty = workspaceTaskWindowRequest(target: .qoder, binding: binding, kind: .pty)
@@ -637,7 +637,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/api/sessions")
             if body["kind"] as? String == "structured" {
                 XCTAssertEqual(body["kind"] as? String, "structured")
-                XCTAssertEqual(body["runner"] as? String, "qoder-cli-print")
+                XCTAssertEqual(body["runner"] as? String, "qoder-cli-acp")
                 XCTAssertEqual(body["prompt"] as? String, "Inspect the selected task")
                 XCTAssertNil(body["command"])
             } else {

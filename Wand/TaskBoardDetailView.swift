@@ -127,12 +127,7 @@ struct WandBoardDetailView: View {
     }
 
     private var workspaceOptions: [(id: String, name: String)] {
-        var options = workspaces.map { (id: $0.id, name: $0.name) }
-        if let id = task.workspaceId, let workspace = task.workspace,
-           !options.contains(where: { $0.id == id }) {
-            options.insert((id: workspace.id, name: "\(workspace.name) · \(workspace.cwd)"), at: 0)
-        }
-        return options
+        workspaces.map { (id: $0.id, name: $0.name) }
     }
 
     private func mainColumn(scrollProxy: ScrollViewProxy) -> some View {
@@ -561,19 +556,9 @@ struct WandBoardDetailView: View {
             }
 
             WandBoardField("项目目录") {
-                Picker("", selection: Binding(
-                    get: { task.workspaceId ?? "" },
-                    set: { value in
-                        Task { await onPatch(["workspaceId": value.isEmpty ? NSNull() : value]) }
-                    }
-                )) {
-                    Text("不指定项目（使用全局目录）").tag("")
-                    ForEach(workspaceOptions, id: \.id) { option in
-                        Text(option.name).tag(option.id)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                WorkspaceSelector(selection: Binding(get: { task.workspaceId ?? "" }, set: { value in
+                    Task { await onPatch(["workspaceId": value.isEmpty ? NSNull() : value]) }
+                }), choices: workspaceOptions)
                 .disabled(busy)
             }
 

@@ -202,3 +202,78 @@ struct WorkspaceCreateView: View {
         }
     }
 }
+
+
+private struct WorkspaceAPIEnvironmentKey: EnvironmentKey {
+    static let defaultValue: WandAPI? = nil
+}
+extension EnvironmentValues {
+    var workspaceAPI: WandAPI? {
+        get { self[WorkspaceAPIEnvironmentKey.self] }
+        set { self[WorkspaceAPIEnvironmentKey.self] = newValue }
+    }
+}
+
+struct WorkspaceSelector: View {
+    @Binding var selection: String
+    let choices: [(id: String, name: String)]
+    var emptyLabel = "未归属工作区"
+    var onCreated: (Workspace) -> Void = { _ in }
+    @Environment(\.workspaceAPI) private var api
+    @State private var adding = false
+    @State private var added: Workspace?
+
+    var body: some View {
+        Menu {
+            Button(emptyLabel) { selection = "" }
+            ForEach(choices, id: \.id) { choice in
+                Button(choice.name) { selection = choice.id }
+            }
+            if let added, !choices.contains(where: { $0.id == added.id }) {
+                Button(added.name) { selection = added.id }
+            }
+            Divider()
+            Button("添加工作区", systemImage: "plus") { adding = true }
+        } label: {
+            Label(choices.first { $0.id == selection }?.name ?? (added?.id == selection ? added?.name : nil) ?? emptyLabel, systemImage: "folder")
+        }
+        .accessibilityLabel("选择工作区")
+        .sheet(isPresented: $adding) {
+            if let api {
+                WorkspaceAddDialog(api: api) { workspace in
+                    added = workspace; selection = workspace.id; onCreated(workspace); adding = false
+                }
+            }
+        }
+    }
+}
+
+struct AddWorkspaceButton: View {
+    var onCreated: (Workspace) -> Void = { _ in }
+    @Environment(\.workspaceAPI) private var api
+    @State private var adding = false
+    var body: some View {
+        Button("添加工作区", systemImage: "plus") { adding = true }
+            .sheet(isPresented: $adding) {
+                if let api { WorkspaceAddDialog(api: api) { workspace in onCreated(workspace); adding = false } }
+            }
+    }
+}
+
+private struct WorkspaceAddDialog: View {
+    let api: WandAPI
+    let onCreated: (Workspace) -> Void
+    @StateObject private var store: WorkspaceStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var busy = false
+    init(api: WandAPI, onCreated: @escaping (Workspace) -> Void) {
+        self.api = api; self.onCreated = onCreated
+        _store = StateObject(wrappedValue: WorkspaceStore(api: api, serverID: api.baseURL.absoluteString))
+    }
+    var body: some View {
+        WorkspaceCreateView(api: api, store: store) { workspace in
+            NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
+            onCreated(workspace)
+        }
+    }
+}

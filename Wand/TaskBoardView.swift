@@ -270,14 +270,7 @@ struct TaskBoardView: View {
             .frame(width: 200)
             .wandInputSurface(focused: searchFocused, cornerRadius: Theme.Radius.control)
 
-            Picker("", selection: $workspaceFilter) {
-                Text("所有目录").tag("")
-                ForEach(workspaces) { workspace in
-                    Text(workspace.name).tag(workspace.id)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
+            WorkspaceSelector(selection: $workspaceFilter, choices: workspaces.map { (id: $0.id, name: $0.name) }, emptyLabel: "全部工作区", onCreated: { workspaces.append($0) })
             .frame(width: 170)
 
             if view != .dashboard {

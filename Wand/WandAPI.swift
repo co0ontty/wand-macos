@@ -813,7 +813,8 @@ final class WandAPI {
         agent: WandBoardTaskAgent? = nil,
         parentTaskId: String? = nil,
         employeeId: String? = nil,
-        employeeOverride: Bool = false
+        employeeOverride: Bool = false,
+        cwd: String? = nil
     ) async throws -> WandBoardTask {
         var body: [String: Any] = [
             // 标题可选：留空由服务端按描述自动生成。
@@ -832,6 +833,7 @@ final class WandAPI {
         } else {
             body["workspaceId"] = NSNull()
         }
+        if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
         if let parentTaskId { body["parentTaskId"] = parentTaskId }
         if let employeeId {
             var subject: [String: Any] = ["type": "employee", "id": employeeId]
@@ -948,8 +950,8 @@ final class WandAPI {
 
     // MARK: - 目录与配置
 
-    func listDirectory(_ query: String) async throws -> DirectoryListing {
-        try await request(DirectoryListing.self, method: "GET", path: "/api/directory?q=\(percentEncode(query))")
+    func listDirectory(_ query: String, foldersOnly: Bool = false) async throws -> DirectoryListing {
+        try await request(DirectoryListing.self, method: "GET", path: "/api/directory?q=\(percentEncode(query))&foldersOnly=\(foldersOnly)")
     }
 
     func searchFiles(query: String, cwd: String) async throws -> FileSearchResponse {

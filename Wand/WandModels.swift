@@ -156,7 +156,7 @@ enum WandProvider: String, CaseIterable, Identifiable, Codable {
         case .codex: return "codex-cli-exec"
         case .opencode: return "opencode-cli-run"
         case .grok: return "grok-cli-headless"
-        case .qoder: return "qoder-cli-print"
+        case .qoder: return "qoder-cli-acp"
         case .pi: return "pi-cli-json"
         }
     }

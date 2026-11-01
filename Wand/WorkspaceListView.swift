@@ -365,7 +365,7 @@ struct WorkspaceListView: View {
     }
 
     private var visibleTaskGroups: [TaskDirectoryGroup] {
-        TaskListPresentation.sidebarDirectoryGroups(store.taskGroups, workspaces: store.workspaces, query: query,
+        TaskListPresentation.sidebarDirectoryGroups(store.taskGroups.filter { $0.userAdded == true }, workspaces: store.workspaces, query: query,
             activeOnly: activeOnly, selectedSessionId: selectedSessionId, selectedTaskId: selectedTaskId)
     }
 

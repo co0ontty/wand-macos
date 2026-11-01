@@ -360,6 +360,7 @@ private struct ConversationWorkspaceFilterPicker: View {
                     if matches.isEmpty { Text("没有匹配的工作区").foregroundColor(Theme.textSecondary).padding(6) }
                 }
             }.frame(maxHeight: 220)
+            AddWorkspaceButton { workspace in selection = "id:" + workspace.id; close() }
         }.font(.system(size: 12)).padding(12).frame(width: 280)
             .onAppear { searchFocused = autofocus }
     }
@@ -649,9 +650,8 @@ struct ConversationPane: View {
                     .chatContentWidth()
                 }
                 .clipped().simultaneousGesture(TapGesture().onEnded { composerFocus.collapseFromContent() })
-                .safeAreaInset(edge: .top, spacing: 0) {
+                .overlay(alignment: .leading) {
                     HStack {
-                        Spacer()
                         TurnNavigator(entries: turnNavigation.entries, windowNote: turnNavigationNote) { id in
                             guard pageActive, store.selectedID == conversation.id,
                                   store.selectedScope == scope,
@@ -821,6 +821,8 @@ struct ConversationComposerSurface: View {
     @State private var settingsOpen = false
     @State private var directoryOpen = false
     @State private var directoryDraft = ""
+    @State private var recentDirectories: [RecentPath] = []
+    @Environment(\.workspaceAPI) private var workspaceAPI
     private var blockReason: String? { store.sendBlockReason(for: owner.scope) }
     private var failed: Bool {
         switch owner.phase { case .rejected, .acceptedWithFailure: return true; default: return false }
@@ -994,6 +996,9 @@ struct ConversationComposerSurface: View {
                 ComposerPopoverHeader(title: "本次消息运行目录") { directoryOpen = false }
                 TextField("输入服务端目录路径", text: $directoryDraft).textFieldStyle(.roundedBorder)
                     .accessibilityLabel("本次消息运行目录路径")
+                ForEach(recentDirectories.prefix(6)) { item in
+                    Button(item.path) { owner.editCwd(item.path); directoryOpen = false }.lineLimit(1).help(item.path)
+                }
                 Text("只影响之后发送的新工作，不改变已有工作的目录。")
                     .font(.system(size: 12)).foregroundColor(Theme.textSecondary)
                 HStack {
@@ -1004,6 +1009,7 @@ struct ConversationComposerSurface: View {
                     }.disabled(directoryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }.padding(16).frame(width: 340)
+                .task { recentDirectories = (try? await workspaceAPI?.recentPaths()) ?? [] }
         }
     }
 
@@ -1200,6 +1206,42 @@ private func communicationEmpty(_ title: String, detail: String, symbol: String)
 }
 
 
+struct CapsuleCircleButtonStyle: ButtonStyle {
+    var active = false
+    func makeBody(configuration: Configuration) -> some View {
+        CapsuleCircleButtonBody(configuration: configuration, active: active)
+    }
+    private struct CapsuleCircleButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        let active: Bool
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.colorSchemeContrast) private var contrast
+
+        var body: some View {
+            configuration.label
+                .background(
+                    Circle()
+                        .fill(Theme.textPrimary.opacity(
+                            isEnabled && configuration.isPressed ? 0.14 : (active ? 0.10 : (isEnabled && hovering ? 0.05 : 0))
+                        ))
+                )
+                .overlay {
+                    if active {
+                        Circle()
+                            .stroke(Theme.wandAccent.opacity(0.45), lineWidth: 1)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .contentShape(Circle())
+                .foregroundColor(active ? Theme.wandAccent : (hovering ? Theme.textPrimary : Theme.textSecondary))
+                .opacity(isEnabled ? 1 : 0.45)
+                .onHover { hovering = $0 }
+                .wandMotion(value: hovering)
+        }
+    }
+}
+
 /// The single desktop rail owns the same task/workspace facets as the flat list.
 struct DesktopSidebarCapsules: View {
     @ObservedObject var store: CommunicationsStore
@@ -1251,7 +1293,7 @@ struct DesktopSidebarCapsules: View {
                         VStack(spacing: 4) {
                             ForEach(rest, id: \.id) { workspaceButton($0) }
                             Button { searchOpen = true } label: { Image(systemName: "magnifyingglass").frame(width: 40, height: 40) }
-                                .buttonStyle(WandIconButtonStyle()).help("搜索工作区：按名称查找更多工作区").accessibilityLabel("搜索工作区")
+                                .buttonStyle(CapsuleCircleButtonStyle(active: searchOpen)).help("搜索工作区：按名称查找更多工作区").accessibilityLabel("搜索工作区")
                                 .popover(isPresented: $searchOpen, arrowEdge: .trailing) {
                                     ConversationWorkspaceFilterPicker(options: options, selection: $store.workspaceFilter) { searchOpen = false; expanded = nil }
                                 }
@@ -1277,7 +1319,7 @@ struct DesktopSidebarCapsules: View {
             : value == .failed ? "运行失败：查看执行失败的会话，统一归入我需要关注" : "全部运行状态：保留工作区和其他筛选条件"
         return Button { store.runtimeFilter = value; store.activityOnly = false; expanded = nil } label: {
             Image(systemName: symbol).frame(width: 40, height: 40)
-        }.buttonStyle(DesktopNavigationButtonStyle(active: selectedRuntime == value))
+        }.buttonStyle(CapsuleCircleButtonStyle(active: selectedRuntime == value))
             .help(hint).accessibilityLabel("筛选运行状态：" + value.label)
             .accessibilityAddTraits(selectedRuntime == value ? .isSelected : [])
             .accessibilityAction(named: Text("展开其他运行状态")) { expanded = .runtime }
@@ -1306,8 +1348,8 @@ struct DesktopSidebarCapsules: View {
                         }
                 }
             }.frame(width: 40, height: 40)
-        }.buttonStyle(DesktopNavigationButtonStyle(active: store.workspaceFilter == option.id))
-            .help(option.id == "all" ? "全部工作区：显示所有工作区的会话，保留运行状态筛选" : "只显示「\(option.label)」的会话，不切换当前会话")
+        }.buttonStyle(CapsuleCircleButtonStyle(active: store.workspaceFilter == option.id))
+            .help(option.id == "all" ? "全部工作区：显示所有工作区的会话，保留运行状态筛选" : (option.id == "none" ? "未分配工作区：查看未关联到工作区的独立会话" : "工作区：\(option.label)"))
             .accessibilityLabel("筛选工作区：" + option.label)
             .accessibilityAddTraits(store.workspaceFilter == option.id ? .isSelected : [])
             .accessibilityAction(named: Text("展开其他工作区")) { expanded = .workspace }

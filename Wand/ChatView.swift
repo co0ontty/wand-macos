@@ -629,9 +629,8 @@ struct ChatView: View {
                         jumpToLatestButton(proxy)
                     }
                 }
-                .safeAreaInset(edge: .top, spacing: 0) {
+                .overlay(alignment: .leading) {
                     HStack {
-                        Spacer()
                         TurnNavigator(entries: turnNavigation.entries, windowNote: turnNavigationNote) { id in
                             guard pageActive, store.sessionId == sessionId,
                                   turnNavigation.resolve(id) != nil else { return }
@@ -702,6 +701,10 @@ struct ChatView: View {
                 && absoluteIndex == absoluteLatestAssistantTurnIndex
             TurnView(
                 turn: turn,
+                replyEmployeeID: store.snapshot?.employeeId,
+                replyEmployeeName: store.displayEmployeeName,
+                replyEmployeeAvatar: store.displayEmployeeAvatar,
+                replyRunning: controlsCurrentReplyExpansion && runningPresentation.spinning,
                 baseURL: api.baseURL,
                 isLastTurn: index == store.messages.count - 1,
                 isResponding: runningPresentation.spinning && ChatRunningPresentation.activityIsCurrent(
@@ -3488,6 +3491,10 @@ private func toolInputSummary(_ description: String?, _ input: [String: JSONValu
 }
 
 private struct AssistantReplyHeader: View {
+    var employeeID: String?
+    var employeeName: String
+    var employeeAvatar: String
+    var running: Bool
     let collapsed: Bool
     let preview: String
     let onToggle: () -> Void
@@ -3498,10 +3505,31 @@ private struct AssistantReplyHeader: View {
                 onToggle()
             } label: {
                 HStack(spacing: 8) {
-                    WandBrandMark(size: 24)
-                    Text("Wand")
+                    Group {
+                        if let employeeID {
+                            ContactAvatar(id: employeeID, avatar: employeeAvatar, name: employeeName, size: 36)
+                        } else {
+                            WandBrandMark(size: 28)
+                        }
+                    }
+                    .frame(width: 44, height: 44)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border, lineWidth: 1))
+                    Text(employeeID == nil ? "Wand" : employeeName)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
+                    if running {
+                        HStack(spacing: 7) {
+                            ReplyStatusDots()
+                            Text("正在回复").font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundColor(Theme.wandAccent)
+                        .fixedSize()
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("正在回复")
+                    }
                     if collapsed, !preview.isEmpty {
                         Text(preview)
                             .font(.system(size: 12))
@@ -3524,6 +3552,25 @@ private struct AssistantReplyHeader: View {
                 .fill(Theme.border.opacity(0.65))
                 .frame(height: 0.5)
         }
+    }
+}
+
+private struct ReplyStatusDots: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    let phase = (context.date.timeIntervalSinceReferenceDate - Double(index) * 0.2) / 1.4
+                    let wave = (1 - cos(phase * 2 * .pi)) / 2
+                    Circle().fill(Theme.wandAccent).frame(width: 3, height: 3)
+                        .scaleEffect(reduceMotion ? 1 : 0.8 + wave * 0.5)
+                        .opacity(reduceMotion ? 1 : 0.35 + wave * 0.65)
+                }
+            }.frame(height: 16)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -3947,6 +3994,10 @@ private func subagentTailRefreshToken(_ items: [DisplayItem]) -> Int {
 /// Canonical native message/Markdown/tool renderer, shared by session chat and employee conversations.
 struct TurnView: View {
     let turn: ConversationTurn
+    var replyEmployeeID: String?
+    var replyEmployeeName: String
+    var replyEmployeeAvatar: String
+    var replyRunning: Bool
     var baseURL: URL?
     var isLastTurn: Bool
     var isResponding: Bool
@@ -3970,6 +4021,10 @@ struct TurnView: View {
 
     init(
         turn: ConversationTurn,
+        replyEmployeeID: String? = nil,
+        replyEmployeeName: String = "Wand",
+        replyEmployeeAvatar: String = "",
+        replyRunning: Bool = false,
         baseURL: URL? = nil,
         isLastTurn: Bool = false,
         isResponding: Bool = false,
@@ -3988,6 +4043,10 @@ struct TurnView: View {
         interactiveTools: Bool = true
     ) {
         self.turn = turn
+        self.replyEmployeeID = replyEmployeeID
+        self.replyEmployeeName = replyEmployeeName
+        self.replyEmployeeAvatar = replyEmployeeAvatar
+        self.replyRunning = replyRunning
         self.baseURL = baseURL
         self.isLastTurn = isLastTurn
         self.isResponding = isResponding
@@ -4156,6 +4215,10 @@ struct TurnView: View {
         VStack(alignment: .leading, spacing: 10) {
             if showHeader {
                 AssistantReplyHeader(
+                    employeeID: replyEmployeeID,
+                    employeeName: replyEmployeeName,
+                    employeeAvatar: replyEmployeeAvatar,
+                    running: replyRunning,
                     collapsed: collapsed,
                     preview: replyPreview(turn.content),
                     onToggle: {

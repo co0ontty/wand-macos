@@ -38,7 +38,7 @@ import SwiftUI
 enum FocusComposerMetrics {
     // Web --composer-control-height / --control-radius, at desktop pointer density.
     static let touch: CGFloat = 32
-    static let controlRadius: CGFloat = 8
+    static let controlRadius: CGFloat = 10
     static let surfaceRadius: CGFloat = 14
     static let maximumTextHeight: CGFloat = 220
     static let normalCompanionSize: CGFloat = 72
@@ -66,7 +66,7 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
             editor()
                 .frame(height: expanded ? nil : 0).clipped().opacity(expanded ? 1 : 0)
                 .allowsHitTesting(expanded).accessibilityHidden(!expanded)
-            if expanded { ComposerToolbarDivider().padding(.vertical, 4) }
+            if expanded { ComposerToolbarDivider(focused: isFocused).padding(.vertical, 4) }
             HStack(spacing: 6) {
                 add().frame(width: FocusComposerMetrics.touch, height: FocusComposerMetrics.touch)
                 if showsAdvancedSettings, expanded {
@@ -90,7 +90,7 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
                     .padding(.leading, 2)
             }
         }
-        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 8)
+        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
         .frame(maxWidth: .infinity)
         .foregroundColor(Theme.textSecondary)
         .wandInputSurface(focused: isFocused, cornerRadius: FocusComposerMetrics.surfaceRadius)
@@ -99,10 +99,12 @@ struct FocusComposerSurface<Editor: View, Add: View, Send: View>: View {
 }
 
 struct ComposerToolbarDivider: View {
+    var focused: Bool = false
     var body: some View {
         Canvas { context, size in
             var path = Path(); path.move(to: .zero); path.addLine(to: CGPoint(x: size.width, y: 0))
-            context.stroke(path, with: .color(Theme.border), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            let strokeColor = focused ? Theme.wandAccent.opacity(0.55) : Color(nsColor: Theme.borderSubtle)
+            context.stroke(path, with: .color(strokeColor), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
         }.frame(height: 1).allowsHitTesting(false).accessibilityHidden(true)
     }
 }

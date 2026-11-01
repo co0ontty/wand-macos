@@ -640,25 +640,25 @@ struct NewSessionView: View {
             VStack(spacing: 0) {
                 submissionReadiness
                 VStack(alignment: .leading, spacing: 0) {
-                firstMessageCard
-                if draft.loading {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("正在读取默认配置…").font(.system(size: 12))
-                    }.foregroundColor(Theme.textSecondary).frame(height: 34).padding(.horizontal, 14)
-                } else if let error = draft.loadError {
-                    VStack(alignment: .leading, spacing: 8) {
-                        errorBanner(error)
-                        Button("重试加载") { Task { await loadInitial() } }
-                            .buttonStyle(WandSecondaryButtonStyle())
-                    }.padding(14)
-                } else {
-                    ComposerToolbarDivider().padding(.horizontal, 12).padding(.bottom, 8)
-                    composerOptions(compact: width < 700)
-                        .padding(.horizontal, 12).padding(.bottom, 8)
-                        .disabled(draft.creating)
+                    firstMessageCard
+                    if draft.loading {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("正在读取默认配置…").font(.system(size: 12))
+                        }.foregroundColor(Theme.textSecondary).frame(height: 34)
+                    } else if let error = draft.loadError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            errorBanner(error)
+                            Button("重试加载") { Task { await loadInitial() } }
+                                .buttonStyle(WandSecondaryButtonStyle())
+                        }
+                    } else {
+                        ComposerToolbarDivider(focused: composerFocused).padding(.bottom, 8)
+                        composerOptions(compact: width < 700)
+                            .disabled(draft.creating)
+                    }
                 }
-                }
+                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
                 .wandInputSurface(focused: composerFocused, cornerRadius: FocusComposerMetrics.surfaceRadius)
                 HStack(spacing: 8) {
                     directoryButton
@@ -894,7 +894,7 @@ struct NewSessionView: View {
                 startSymbol("exclamationmark", shown: draft.submissionPhase == .failed)
                 startSymbol("questionmark", shown: draft.creationUnconfirmed)
                 ProgressView().controlSize(.small).tint(.white).opacity(draft.creating ? 1 : 0)
-            }.frame(width: 34, height: 34)
+            }.frame(width: 32, height: 32)
         }
         .buttonStyle(.plain).foregroundColor(canCreate ? Color.white : Theme.textSecondary)
         .background(RoundedRectangle(cornerRadius: FocusComposerMetrics.controlRadius).fill(canCreate ? Theme.brand : Theme.surfaceSoft)).disabled(!canCreate)
@@ -1163,7 +1163,7 @@ struct NewSessionView: View {
             submitActionName: "启动会话"
         )
         .frame(height: max(48, min(220, composerHeight)))
-        .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 8)
+        .padding(.bottom, 6)
         .disabled(draft.creating)
     }
 
@@ -1526,7 +1526,7 @@ struct DirectoryBrowserView: View {
         loading = true
         errorMessage = nil
         do {
-            let listing = try await api.listDirectory(currentPath)
+            let listing = try await api.listDirectory(currentPath, foldersOnly: true)
             items = listing.items
             // 服务端会把 ~ 之类输入解析为绝对路径；用首项的父路径回填展示。
             if currentPath == "~", let first = listing.items.first {

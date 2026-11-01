@@ -22,6 +22,7 @@ struct TurnNavigationEntry: Identifiable {
     let id: TurnNavigationID
     let absoluteIndex: Int
     let preview: String
+    let reply: String
 }
 
 struct TurnNavigationIndex {
@@ -46,7 +47,10 @@ struct TurnNavigationIndex {
             } else {
                 identity = .window(scope: scope, window: window, absoluteIndex: absoluteIndex)
             }
-            return TurnNavigationEntry(id: identity, absoluteIndex: absoluteIndex, preview: preview)
+            let reply = turns.dropFirst(index + 1).prefix(while: { $0.role != "user" })
+                .filter { $0.role == "assistant" }.map { userQuestionPreview($0) }
+                .filter { !$0.isEmpty }.joined(separator: " ")
+            return TurnNavigationEntry(id: identity, absoluteIndex: absoluteIndex, preview: preview, reply: reply)
         }
     }
 
@@ -73,71 +77,53 @@ struct TurnNavigator: View {
     }
 
     var body: some View {
-        Button {
-            presented.toggle()
-        } label: {
-            ZStack {
-                Image(systemName: "list.number")
-                    .opacity(presented ? 0 : 1)
-                    .rotationEffect(.degrees(reduceMotion || !presented ? 0 : -45))
-                Image(systemName: "xmark")
-                    .opacity(presented ? 1 : 0)
-                    .rotationEffect(.degrees(reduceMotion || presented ? 0 : 45))
-            }
-        }
-        .buttonStyle(WandIconButtonStyle())
-        .wandMotion(value: presented)
-        .help("提问目录 · 仅当前已加载范围")
-        .accessibilityLabel(presented ? "关闭提问目录" : "打开提问目录")
-        .popover(isPresented: $presented, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("提问目录").font(.headline)
-                Text(windowNote).font(.caption).foregroundColor(Theme.textSecondary)
-                if entries.isEmpty {
-                    Text("当前范围没有用户提问")
-                        .font(.callout).foregroundColor(Theme.textSecondary)
-                } else {
-                    List(selection: $selection) {
-                        ForEach(entries) { entry in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("消息 \(entry.absoluteIndex + 1)")
-                                    .font(.caption).foregroundColor(Theme.textSecondary)
-                                Text(String(entry.preview.prefix(100)))
-                                    .font(.callout).lineLimit(2)
-                            }
-                            .tag(entry.id)
-                        }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(entries) { entry in
+                    Button {
+                        selection = entry.id
+                        presented = true
+                    } label: {
+                        Capsule()
+                            .fill(selection == entry.id ? Theme.textPrimary : Theme.textSecondary.opacity(0.55))
+                            .frame(width: selection == entry.id ? 24 : 8, height: 2)
+                            .frame(width: 32, height: 12, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
-                    .listStyle(.plain)
-                    .focused($listFocused)
-                    .frame(height: 220)
-                    Text(selected.map { String($0.preview.prefix(400)) } ?? "选择一条提问以预览")
-                        .font(.callout).lineLimit(5)
-                        .frame(maxWidth: .infinity, minHeight: 70, alignment: .topLeading)
-                    Button("跳转到提问") {
-                        guard let selected else { return }
-                        presented = false
-                        onJump(selected.id)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(entry.preview)
+                    .onHover { hovering in
+                        if hovering { selection = entry.id; presented = true }
                     }
-                    .buttonStyle(WandPrimaryButtonStyle())
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(selected == nil)
                 }
             }
-            .padding(16)
-            .frame(width: 280)
-            .foregroundColor(Theme.textPrimary)
-            .background(Theme.surface)
-            .onAppear {
-                if selected == nil { selection = entries.last?.id }
-                listFocused = true
+        }
+        .frame(width: 36, height: min(CGFloat(entries.count * 12), 240))
+        .help(windowNote)
+        .popover(isPresented: $presented, arrowEdge: .leading) {
+            if let selected {
+                Button {
+                    presented = false
+                    onJump(selected.id)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(selected.preview).font(.callout.weight(.semibold)).lineLimit(1)
+                        Text(selected.reply.isEmpty ? "暂无回复摘要" : String(selected.reply.prefix(240)))
+                            .font(.callout).foregroundColor(Theme.textSecondary).lineLimit(3)
+                        Text("点击跳转到提问").font(.caption).foregroundColor(Theme.textSecondary)
+                    }
+                    .frame(width: 280, alignment: .leading).padding(12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(Theme.textPrimary)
+                .background(Theme.surface)
+                .onExitCommand { presented = false }
             }
-            .onExitCommand { presented = false }
         }
         .onChange(of: entries.map(\.id)) { ids in
-            if let selection, !ids.contains(selection) { self.selection = nil }
+            if let selection, !ids.contains(selection) { self.selection = nil; presented = false }
         }
-        .onChange(of: entries.count) { _ in presented = false }
         .onChange(of: pageActive) { active in if !active { presented = false } }
         .onDisappear { presented = false }
     }

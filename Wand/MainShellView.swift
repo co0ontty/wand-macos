@@ -37,6 +37,8 @@ struct MainShellView: View {
 
     @State private var filePanelOpen: Bool = false
     @AppStorage("wand.desktop.sidebarVisible") private var sidebarVisible = true
+    @State private var chatsPeekOpen = false
+    @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var showCommandPalette = false
     @State private var pendingCommand: DesktopCommand?
     @FocusState private var sidebarSearchFocused: Bool
@@ -164,6 +166,7 @@ struct MainShellView: View {
     var body: some View {
         nativeShell
         .environment(\.messageLinkAPI, api)
+        .environment(\.workspaceAPI, api)
         .onChange(of: serverURL) { _ in MessageLinkPresenter.shared.close() }
         .onChange(of: token) { _ in MessageLinkPresenter.shared.close() }
         .onDisappear { MessageLinkPresenter.shared.close() }
@@ -648,14 +651,56 @@ struct MainShellView: View {
         reduceMotion ? .identity : .offset(x: 10).combined(with: .opacity)
     }
 
+    private func handleConversationsHover(_ hovering: Bool) {
+        guard !sidebarListVisible else {
+            chatsPeekOpen = false
+            peekDismissTask?.cancel()
+            return
+        }
+        peekDismissTask?.cancel()
+        if hovering {
+            peekDismissTask = Task {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled else { return }
+                chatsPeekOpen = true
+            }
+        } else {
+            peekDismissTask = Task {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled else { return }
+                chatsPeekOpen = false
+            }
+        }
+    }
+
     private var sidebarColumn: some View {
-        DesktopSidebarLayout(listVisible: sidebarListVisible, onToggle: { handle(.toggleSidebar) }) {
+        DesktopSidebarLayout(
+            listVisible: sidebarListVisible,
+            onToggle: { handle(.toggleSidebar) },
+            peekVisible: chatsPeekOpen,
+            onPeekHover: { hovering in
+                handleConversationsHover(hovering)
+            }
+        ) {
             VStack(spacing: 0) {
-                DesktopNavigationRail(selection: settingsPresented ? .settings : showKnowledge ? .knowledge : showTaskBoard ? .taskBoard : .conversations,
+                DesktopNavigationRail(
+                    selection: settingsPresented ? .settings : showKnowledge ? .knowledge : showTaskBoard ? .taskBoard : .conversations,
                     onCommand: { command in
+                        chatsPeekOpen = false
+                        peekDismissTask?.cancel()
                         if command == .conversations { closeSettings(); showKnowledge = false; showTaskBoard = false; sidebarVisible = true }
                         else { handle(command) }
-                    }) {
+                    },
+                    onNewSession: {
+                        chatsPeekOpen = false
+                        peekDismissTask?.cancel()
+                        let workspace = workspaceStore.workspaces.first { "id:" + $0.id == communicationsStore.workspaceFilter }
+                        beginCreation(context: SessionCreationContext(cwd: workspace?.cwd ?? "", workspaceId: workspace?.id, startsNewTask: false))
+                    },
+                    onConversationsHover: { hovering in
+                        handleConversationsHover(hovering)
+                    }
+                ) {
                     DesktopSidebarCapsules(store: communicationsStore, groups: workspaceStore.conversationTaskGroups)
                 }
             }
@@ -666,22 +711,23 @@ struct MainShellView: View {
                     Spacer()
                     commandSearchButton
                 }.padding(12)
-                Button {
-                    let workspace = workspaceStore.workspaces.first { "id:" + $0.id == communicationsStore.workspaceFilter }
-                    beginCreation(context: SessionCreationContext(cwd: workspace?.cwd ?? "", workspaceId: workspace?.id, startsNewTask: false))
-                } label: {
-                    Label("新建会话", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 32)
-                }.buttonStyle(.borderedProminent).tint(Theme.wandAccent).padding(.horizontal, 12).padding(.bottom, 8)
                 if communicationsStore.section == .contacts && showCommunications {
                     CommunicationsSidebar(store: communicationsStore, onCreateSession: { employee in
+                        chatsPeekOpen = false
                         beginCreation(context: SessionCreationContext(cwd: "", startsNewTask: false, employeeId: employee.id))
                     }, onShowConversation: { showCommunications = true })
                 } else {
                     DesktopUnifiedSessionList(store: workspaceStore, communications: communicationsStore, api: api,
                         selectedID: showCommunications ? nil : openingSessionId ?? selectedSessionId,
                         selectedConversationID: showCommunications ? communicationsStore.selectedID : nil,
-                        onOpen: openConversationSession,
+                        onOpen: { id in
+                            chatsPeekOpen = false
+                            peekDismissTask?.cancel()
+                            openConversationSession(id)
+                        },
                         onOpenConversation: { conversation in
+                            chatsPeekOpen = false
+                            peekDismissTask?.cancel()
                             invalidateSessionOpen(); showCommunications = true; showCreation = false
                             showKnowledge = false; showTaskBoard = false
                             communicationsStore.select(conversation.id)
@@ -1017,7 +1063,19 @@ struct MainShellView: View {
                     Text(selection.task.name).font(.system(size: 15, weight: .medium)).lineLimit(1)
                 }
             } else if let session = selectedSession {
-                let peers = DesktopSessionTabScope.standalone(groups: workspaceStore.taskGroups, selected: session)
+                let peers = DesktopSessionTabScope.standalone(
+                    groups: workspaceStore.taskGroups,
+                    selected: session,
+                    activeOnly: sidebarActiveOnly,
+                    matching: { group, summary in
+                        if !communicationsStore.runtimeFilter.matches(summary) { return false }
+                        if communicationsStore.workspaceFilter != "all" {
+                            let entryWorkspace = group.userAdded != true || group.isSynthetic || group.isGlobal || group.workspaceId == "wand-global" ? "none" : "id:" + group.workspaceId
+                            if entryWorkspace != communicationsStore.workspaceFilter { return false }
+                        }
+                        return true
+                    }
+                )
                 WorkspaceSessionHeader(store: workspaceStore, sessions: peers, selectedId: selectedSessionId,
                     onSelect: { id in if id != selectedSessionId { openSession(id, inConversations: conversationNavigation) } },
                     onNew: { beginCreation(context: SessionCreationContext(cwd: session.cwd, startsNewTask: false)) },
@@ -1533,6 +1591,8 @@ extension View {
 struct DesktopSidebarLayout<Rail: View, List: View>: View {
     let listVisible: Bool
     let onToggle: () -> Void
+    var peekVisible: Bool = false
+    var onPeekHover: ((Bool) -> Void)? = nil
     @ViewBuilder let rail: () -> Rail
     @ViewBuilder let list: () -> List
 
@@ -1553,13 +1613,32 @@ struct DesktopSidebarLayout<Rail: View, List: View>: View {
             }
             .padding(.leading, listVisible ? 82 : 0).padding(.trailing, listVisible ? 12 : 0)
             .frame(height: 52).windowDrag().sidebarPresence("desktop-sidebar-header")
-            HStack(spacing: 0) {
-                rail().frame(width: Theme.LayoutMetrics.navigationRailWidth)
-                list()
-                    .frame(width: Theme.LayoutMetrics.sidebarWidth)
-                    .desktopPage(active: listVisible)
-                    .frame(width: listVisible ? Theme.LayoutMetrics.sidebarWidth : 0, alignment: .leading)
-                    .clipped()
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    rail().frame(width: Theme.LayoutMetrics.navigationRailWidth)
+                    list()
+                        .frame(width: Theme.LayoutMetrics.sidebarWidth)
+                        .desktopPage(active: listVisible)
+                        .frame(width: listVisible ? Theme.LayoutMetrics.sidebarWidth : 0, alignment: .leading)
+                        .clipped()
+                }
+                if !listVisible && peekVisible {
+                    HStack(spacing: 0) {
+                        Color.clear.frame(width: Theme.LayoutMetrics.navigationRailWidth)
+                        list()
+                            .frame(width: Theme.LayoutMetrics.sidebarWidth)
+                            .background(Theme.sidebarBackground)
+                            .overlay(alignment: .trailing) {
+                                Rectangle().fill(Color(nsColor: Theme.borderSubtle)).frame(width: 0.5)
+                            }
+                            .shadow(color: Color.black.opacity(0.16), radius: 16, x: 5, y: 0)
+                            .onHover { hovering in
+                                onPeekHover?(hovering)
+                            }
+                    }
+                    .transition(.opacity)
+                    .zIndex(100)
+                }
             }
             .frame(maxHeight: .infinity)
             .sidebarPresence("desktop-sidebar-body")
@@ -1571,27 +1650,46 @@ struct DesktopSidebarLayout<Rail: View, List: View>: View {
 struct DesktopNavigationRail<Filters: View>: View {
     let selection: DesktopCommand
     let onCommand: (DesktopCommand) -> Void
+    var onNewSession: (() -> Void)? = nil
+    var onConversationsHover: ((Bool) -> Void)? = nil
     @ViewBuilder let filters: () -> Filters
 
     var body: some View {
         VStack(spacing: 4) {
             ScrollView {
                 VStack(spacing: 4) {
-            item(.conversations, title: "会话")
-            item(.knowledge, title: "知识库")
-            item(.taskBoard, title: "任务")
+                    if let onNewSession {
+                        Button(action: onNewSession) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(Theme.wandAccent))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut("n", modifiers: .command)
+                        .help("新建会话 · ⌘N")
+                        .accessibilityLabel("新建会话")
+                        .padding(.vertical, 4)
+                        .sidebarPresence("desktop-navigation-new-session")
+                    }
+                    item(.conversations, title: "会话", shortcut: "⌘1", onHover: onConversationsHover)
+                    item(.knowledge, title: "知识库", shortcut: "⌘2")
+                    item(.taskBoard, title: "任务", shortcut: "⌘3")
                     filters()
                 }
             }
             Spacer(minLength: 4)
-            item(.settings, title: "设置")
+            item(.settings, title: "设置", shortcut: "⌘,")
         }
         .padding(.horizontal, 6).padding(.top, 4).padding(.bottom, 12)
         .sidebarPresence("desktop-navigation-rail")
     }
 
-    private func item(_ command: DesktopCommand, title: String) -> some View {
+    private func item(_ command: DesktopCommand, title: String, shortcut: String? = nil, onHover: ((Bool) -> Void)? = nil) -> some View {
         let active = selection == command
+        let shortcutSuffix = shortcut.map { " · \($0)" } ?? (command.shortcutLabel.isEmpty ? "" : " · \(command.shortcutLabel)")
         return Button { onCommand(command) } label: {
             VStack(spacing: 4) {
                 Image(systemName: command.symbol).font(.system(size: 17, weight: .medium))
@@ -1601,7 +1699,8 @@ struct DesktopNavigationRail<Filters: View>: View {
             .frame(width: 44, height: 48).contentShape(Rectangle())
         }
         .buttonStyle(DesktopNavigationButtonStyle(active: active))
-        .help(command.title + " · " + command.shortcutLabel)
+        .onHover { hovering in onHover?(hovering) }
+        .help(command.title + shortcutSuffix)
         .accessibilityLabel(command.title)
         .accessibilityAddTraits(active ? .isSelected : [])
         .sidebarPresence("desktop-navigation-\(command.rawValue)")

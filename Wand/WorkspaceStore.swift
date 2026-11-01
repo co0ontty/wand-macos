@@ -259,7 +259,7 @@ final class WorkspaceStore: ObservableObject {
             TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
                 tasks: group.tasks.filter { $0.workspaceId != workspaceId },
-                standaloneSessions: group.standaloneSessions, global: group.global)
+                standaloneSessions: group.standaloneSessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible)
         }
         _ = startTaskGroupsRefresh(force: true)
         workspaces.removeAll { $0.id == workspaceId }
@@ -342,7 +342,7 @@ final class WorkspaceStore: ObservableObject {
             tasks: [], standaloneSessions: [])
         let updated = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
             workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
-            tasks: [summary] + group.tasks.filter { $0.id != creation.id }, standaloneSessions: group.standaloneSessions, global: group.global)
+            tasks: [summary] + group.tasks.filter { $0.id != creation.id }, standaloneSessions: group.standaloneSessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible)
         if let index { conversationTaskGroups[index] = updated } else { conversationTaskGroups.insert(updated, at: 0) }
         invalidateTaskGroupsAfterReceipt()
     }
@@ -364,7 +364,7 @@ final class WorkspaceStore: ObservableObject {
                 queuedExecutionCount: task.queuedExecutionCount,
                 boardTaskId: task.boardTaskId, boardTaskStatus: task.boardTaskStatus)
             conversationTaskGroups[groupIndex] = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
-                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: tasks, standaloneSessions: group.standaloneSessions, global: group.global)
+                workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: tasks, standaloneSessions: group.standaloneSessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible)
         }
         invalidateTaskGroupsAfterReceipt()
     }
@@ -515,7 +515,7 @@ final class WorkspaceStore: ObservableObject {
         conversationTaskGroups = conversationTaskGroups.map { group in
             TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic,
-                tasks: group.tasks.filter { $0.id != taskId }, standaloneSessions: group.standaloneSessions, global: group.global)
+                tasks: group.tasks.filter { $0.id != taskId }, standaloneSessions: group.standaloneSessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible)
         }
         _ = startTaskGroupsRefresh(force: true)
         if var list = tasksByWorkspace[workspaceId] {
