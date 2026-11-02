@@ -1073,8 +1073,8 @@ struct ChatView: View {
                 .padding(.horizontal, ChatLayoutMetrics.horizontalInset)
                 .padding(.bottom, 8)
             }
-            if store.isReadOnlySystemCall {
-                Label("系统调用记录 · 只读日志，不能继续发送或恢复执行", systemImage: "doc.text")
+            if store.isReadOnly {
+                Label(store.snapshot?.historyOnly == true ? "历史回复 · 只读，执行会话已回收" : "系统调用记录 · 只读日志，不能继续发送或恢复执行", systemImage: "doc.text")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1481,7 +1481,7 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !store.isReadOnlySystemCall && !store.loading && store.loadError == nil && !store.sending && !store.queueMutationPending
+        !store.isReadOnly && !store.loading && store.loadError == nil && !store.sending && !store.queueMutationPending
             && !composerIsComposing && !attachments.isUploading && (
             !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.attachments.isEmpty
@@ -4139,6 +4139,12 @@ struct TurnView: View {
                         .textSelection(.enabled)
                 }
             }
+            if turn.readAt?.isEmpty == false {
+                Text("已读")
+                    .font(.caption2)
+                    .foregroundColor(Theme.textSecondary)
+                    .accessibilityLabel("已读，服务端已接收并开始处理")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -4885,9 +4891,9 @@ struct MarkdownText: View {
                 interpretedSyntax: .inlineOnlyPreservingWhitespace
             )
         ) {
-            return parsed
+            return messageReferenceLinks(parsed)
         }
-        return AttributedString(raw)
+        return messageReferenceLinks(AttributedString(raw))
     }
 }
 

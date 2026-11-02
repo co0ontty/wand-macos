@@ -361,7 +361,7 @@ final class WorkspaceStore: ObservableObject {
                 sessions: [session] + task.sessions.filter { $0.id != snapshot.id },
                 totalSessions: task.listedSessionCount + (isNew ? 1 : 0), archived: task.archived,
                 parentWorkspaceTaskId: task.parentWorkspaceTaskId, executionStatus: task.executionStatus,
-                queuedExecutionCount: task.queuedExecutionCount,
+                queuedExecutionCount: task.queuedExecutionCount, queuedDispatchCount: task.queuedDispatchCount,
                 boardTaskId: task.boardTaskId, boardTaskStatus: task.boardTaskStatus)
             conversationTaskGroups[groupIndex] = TaskDirectoryGroup(workspaceId: group.workspaceId, workspaceName: group.workspaceName,
                 workspaceCwd: group.workspaceCwd, synthetic: group.synthetic, tasks: tasks, standaloneSessions: group.standaloneSessions, global: group.global, userAdded: group.userAdded, directoryVisible: group.directoryVisible)

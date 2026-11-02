@@ -47,6 +47,8 @@ enum WandMessageLink {
             return file(parts.percentEncodedPath.removingPercentEncoding ?? parts.percentEncodedPath,
                 search: parts.percentEncodedQuery, fragment: parts.percentEncodedFragment, baseURL: baseURL, context: .init())
         }
+        if value.range(of: "^/api/reference/[0-9a-f-]+$", options: [.regularExpression, .caseInsensitive]) != nil,
+           let target = WandEndpoint.url(baseURL: baseURL, route: value) { return .external(target) }
         if value.hasPrefix("/api/") { return resolveAPI(parts, baseURL: baseURL) }
         guard scheme == nil || isRelativeLocation(value), !value.hasPrefix("#") else { return invalid }
         // Delimiters are URI syntax only before decoding. %23/%3F stay filename bytes.

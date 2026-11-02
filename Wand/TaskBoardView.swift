@@ -18,6 +18,7 @@ struct TaskBoardView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var executionQueue = false
+    @State private var toolsOpen = false
     @State private var tasks: [WandBoardTask] = []
     @State private var workspaces: [Workspace] = []
     @State private var milestones: [WandBoardMilestone] = []
@@ -106,10 +107,8 @@ struct TaskBoardView: View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(Theme.border).frame(height: 0.5)
-            if selectedTask == nil {
-                toolbar
-                resultSummary
-            }
+            toolbar
+            resultSummary
             if let errorMessage {
                 banner(
                     text: errorMessage,
@@ -127,6 +126,9 @@ struct TaskBoardView: View {
         }
         .frame(minWidth: embedded ? 0 : 640, minHeight: embedded ? 0 : 520)
         .background(Theme.workspaceBackground)
+        .wandTaskInspector(isPresented: Binding(get: { selectedTask != nil }, set: { if !$0 { selectedId = "" } })) {
+            detailInspector
+        }
         .alert(item: $archiveConfirm) { task in
             Alert(
                 title: Text("归档「\(task.title)」？"),
@@ -171,53 +173,51 @@ struct TaskBoardView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            if !embedded || selectedTask != nil {
+            if !embedded {
                 Button {
-                    if selectedTask != nil {
-                        selectedId = ""
-                    } else {
-                        close()
-                    }
+                    close()
                 } label: {
                     Label(
-                        selectedTask == nil ? "关闭" : "返回",
-                        systemImage: selectedTask == nil ? "xmark" : "chevron.left"
+                        "关闭",
+                        systemImage: "xmark"
                     )
                     .font(.system(size: 12, weight: .medium))
                     .padding(.horizontal, 8)
                     .frame(height: 30)
                 }
                 .buttonStyle(DesktopNavigationButtonStyle())
-                .help(selectedTask == nil ? "关闭任务看板" : "返回任务看板")
+                .help("关闭任务看板")
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(selectedTask?.identifier ?? "任务看板")
+                Text("任务看板")
                     .font(.system(size: 20, weight: .semibold))
                     .monospacedDigit()
                     .foregroundColor(Theme.textPrimary)
                     .lineLimit(1)
-                Text(selectedTask == nil ? "安排工作，跟进执行，确认结果。" : "查看进度与执行记录")
-                    .font(.system(size: 12))
-                    .foregroundColor(Theme.textSecondary)
             }
             Spacer(minLength: 12)
-            DesktopCopyPageLinkButton(url: shareURL, label: selectedId.isEmpty ? "复制当前页面链接" : "复制任务链接")
-            if selectedTask == nil {
-                WandTaskOrganizationButton(api: api, target: workspaceFilter.isEmpty ? .all : .workspace(workspaceFilter), onOpenSession: onOpenSession) {
-                    await reload(showProgress: false)
-                }
-                Button {
-                    Task { await reload(showProgress: true) }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 11))
-                        Text("刷新").font(.system(size: 12))
+            Button { toolsOpen.toggle() } label: {
+                Image(systemName: "ellipsis")
+            }
+            .buttonStyle(WandIconButtonStyle())
+            .help("更多选项")
+            .accessibilityLabel("任务面板更多选项")
+            .popover(isPresented: $toolsOpen, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    DesktopCopyPageLinkButton(url: shareURL, label: selectedId.isEmpty ? "复制当前页面链接" : "复制任务链接")
+                    Toggle("包含子任务的执行队列", isOn: $executionQueue)
+                    WandTaskOrganizationButton(api: api, target: workspaceFilter.isEmpty ? .all : .workspace(workspaceFilter), onOpenSession: onOpenSession) {
+                        await reload(showProgress: false)
                     }
+                    Button {
+                        toolsOpen = false
+                        Task { await reload(showProgress: true) }
+                    } label: { Label("刷新任务", systemImage: "arrow.clockwise") }
+                    .disabled(loading)
                 }
-                .buttonStyle(WandSecondaryButtonStyle())
-                .disabled(loading)
-                .help("刷新任务")
-                .accessibilityLabel("刷新任务")
+                .padding(16)
+            }
+            Group {
                 Button {
                     openCreate(WandBoardStatus.backlog.rawValue)
                 } label: {
@@ -235,15 +235,43 @@ struct TaskBoardView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 4) {
-                ForEach(WandBoardView.allCases) { entry in
-                    Button(entry.label) { view = entry }
-                        .buttonStyle(WandBoardSegmentButtonStyle(active: entry == view))
-                        .help(entry.label)
+        Group {
+            if #available(macOS 13.0, *) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) {
+                        viewTabs
+                        Spacer(minLength: 8)
+                        toolbarControls
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        viewTabs
+                        toolbarControls
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    viewTabs
+                    toolbarControls
                 }
             }
-            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 8)
+    }
+
+    private var viewTabs: some View {
+        HStack(spacing: 4) {
+            ForEach(WandBoardView.allCases) { entry in
+                Button(entry.label) { view = entry }
+                    .buttonStyle(WandBoardSegmentButtonStyle(active: entry == view))
+                    .help(entry.label)
+            }
+        }
+        .fixedSize()
+    }
+
+    private var toolbarControls: some View {
+        HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11))
@@ -273,13 +301,11 @@ struct TaskBoardView: View {
             WorkspaceSelector(selection: $workspaceFilter, choices: workspaces.map { (id: $0.id, name: $0.name) }, emptyLabel: "全部工作区", onCreated: { workspaces.append($0) })
             .frame(width: 170)
 
-            if view != .dashboard {
-                WandBoardFilterMenu(
-                    filters: filters,
-                    labels: availableLabels,
-                    onChange: { filters = $0 }
-                )
-            }
+            WandBoardFilterMenu(
+                filters: filters,
+                labels: availableLabels,
+                onChange: { filters = $0 }
+            )
             if view == .board {
                 WandBoardDisplayMenu(display: display, onChange: { next in
                     display = next
@@ -287,13 +313,10 @@ struct TaskBoardView: View {
                 })
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.bottom, 8)
     }
 
     private var resultSummary: some View {
         HStack(spacing: 8) {
-            Toggle("子任务执行队列", isOn: $executionQueue)
             Text(loading ? "正在同步任务…" : "共 \(visible.count) 个任务\(filtered ? " · 已筛选" : "")")
                 .font(.system(size: 11))
                 .foregroundColor(filtered ? Theme.wandAccent : Theme.textMuted)
@@ -313,10 +336,16 @@ struct TaskBoardView: View {
         .padding(.bottom, 8)
     }
 
-    // MARK: - 内容
-
     @ViewBuilder
-    private var content: some View {
+    private var detailInspector: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(selectedTask?.identifier ?? "任务详情").font(.headline)
+                Spacer()
+                Button { selectedId = "" } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).accessibilityLabel("关闭任务详情")
+            }.padding()
+            Divider()
         if let task = selectedTask {
             WandBoardDetailView(
                 task: task,
@@ -352,7 +381,15 @@ struct TaskBoardView: View {
                 }
             )
             .id(task.id)
-        } else if loading && tasks.isEmpty {
+        }
+        }
+    }
+
+    // MARK: - 内容
+
+    @ViewBuilder
+    private var content: some View {
+        if loading && tasks.isEmpty {
             VStack(spacing: 12) {
                 ProgressView().tint(Theme.wandAccent)
                 Text("正在加载任务…")
@@ -397,6 +434,7 @@ struct TaskBoardView: View {
                     grouped: grouped,
                     allTasks: tasks,
                     display: display,
+                    showWorkspace: workspaceFilter.isEmpty,
                     loading: loading,
                     busyId: busyId,
                     archiveOpen: archiveOpen,
@@ -968,5 +1006,22 @@ struct WandBoardDisplayMenu: View {
         .padding(12)
         .frame(width: 220)
         .background(Theme.surfaceElevated)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func wandTaskInspector<Inspector: View>(isPresented: Binding<Bool>, @ViewBuilder inspector: () -> Inspector) -> some View {
+        if #available(macOS 14.0, *) {
+            self.inspector(isPresented: isPresented) { inspector().inspectorColumnWidth(min: 420, ideal: 620, max: 900) }
+        } else {
+            HStack(spacing: 0) {
+                self
+                if isPresented.wrappedValue {
+                    Divider()
+                    inspector().frame(minWidth: 420, idealWidth: 620, maxWidth: 900)
+                }
+            }
+        }
     }
 }

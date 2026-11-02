@@ -189,7 +189,7 @@ struct ConversationMessageAuthor: Decodable {
 
 struct ConversationSessionLink: Decodable { let sessionId: String; let title: String? }
 struct ConversationTaskLink: Decodable { let conversationId: String; let taskId: String; let title: String? }
-struct ConversationReplyPreview: Decodable { let status: String; let text: String }
+struct ConversationReplyPreview: Decodable { let status: String; let text: String; var historyOnly: Bool? = nil }
 struct ConversationTaskReplyPreview: Decodable { let runId: String?; let status: String; let text: String }
 
 struct ConversationScope: Hashable {

@@ -155,7 +155,7 @@ final class WandAPI {
         }
     }
 
-    func postBoardTaskComment(id: String, requestId: String, body: String, employeeId: String?, sourceCommentId: String?, purpose: String? = nil) async throws -> WandTaskComment {
+    func postBoardTaskComment(id: String, requestId: String, body: String, employeeId: String?, sourceCommentId: String?, purpose: String? = nil, agent: WandBoardTaskAgent? = nil) async throws -> WandTaskComment {
         if purpose == "review", employeeId != nil {
             let task = try await getBoardTask(id: id)
             guard task.id == id && task.workflowVersion == 1 else { throw APIError.server(status: 409, message: "服务端尚不支持验收派发；草稿与原请求标识已保留，请更新服务并核对，不会改用普通执行。") }
@@ -165,6 +165,7 @@ final class WandAPI {
         if let employeeId { payload["employeeId"] = employeeId }
         if let sourceCommentId { payload["sourceCommentId"] = sourceCommentId }
         if employeeId != nil, let purpose { payload["purpose"] = purpose }
+        if employeeId != nil, let agent { payload["agent"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(agent)) }
         return try await request(Response.self, method: "POST", path: "/api/wand-tasks/\(percentEncodePathComponent(id))/comments", body: payload).comment
     }
 

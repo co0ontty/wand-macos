@@ -17,7 +17,19 @@ extension EnvironmentValues {
 }
 
 func messageLinkedText(_ text: String) -> AttributedString {
-    (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    messageReferenceLinks((try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text))
+}
+
+/// Resolve opaque IDs against real server records; retain existing explicit Markdown links.
+func messageReferenceLinks(_ input: AttributedString) -> AttributedString {
+    var value = input
+    let plain = String(value.characters)
+    guard let pattern = try? NSRegularExpression(pattern: "\\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\\b", options: .caseInsensitive) else { return value }
+    for match in pattern.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+        guard let range = Range(match.range, in: plain), let start = AttributedString.Index(range.lowerBound, within: value), let end = AttributedString.Index(range.upperBound, within: value), value[start..<end].link == nil else { continue }
+        value[start..<end].link = URL(string: "/api/reference/" + plain[range])
+    }
+    return value
 }
 
 /// Uploaded attachment paths are filesystem bytes, not URI navigation syntax.

@@ -2,6 +2,9 @@ import SwiftUI
 import CryptoKit
 
 struct WandTaskCommentDispatch: Decodable, Equatable {
+    var executionTaskId: String? = nil
+    var deliveryStatus: String? = nil
+    var blocker: String? = nil
     let employeeId: String
     let employeeName: String
     let state: String
@@ -16,7 +19,7 @@ struct WandTaskCommentDispatch: Decodable, Equatable {
         case "queued": return "排队中"
         case "running": return "执行中"
         case "blocked": return "等待审批"
-        case "idle": return "本轮已结束"
+        case "done", "idle": return "本轮已结束"
         case "exited": return "会话已退出"
         case "failed": return "执行失败"
         case "stopped": return "已停止"
@@ -30,6 +33,7 @@ struct WandTaskCommentDispatch: Decodable, Equatable {
 
 
 struct WandTaskComment: Decodable, Identifiable, Equatable {
+    var activityTaskId: String? = nil
     let id: String
     let taskId: String
     let authorName: String
@@ -175,9 +179,9 @@ struct TaskCommentRequestIdentity {
     let requestId: String
     let purpose: String
     private let defaults: UserDefaults
-    init(taskId: String, body: String, employeeId: String, sourceCommentId: String?, purpose: String = "execution", defaults: UserDefaults = .standard) {
+    init(taskId: String, body: String, employeeId: String, sourceCommentId: String?, purpose: String = "execution", agent: WandBoardTaskAgent? = nil, defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let data = (try? JSONEncoder().encode([body.trimmingCharacters(in: .whitespacesAndNewlines), employeeId, sourceCommentId ?? ""])) ?? Data()
+        let data = (try? JSONEncoder().encode([body.trimmingCharacters(in: .whitespacesAndNewlines), employeeId, sourceCommentId ?? "", agent.flatMap { try? JSONEncoder().encode($0).base64EncodedString() } ?? ""])) ?? Data()
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         key = "wand.task-comment-request." + taskId + "." + digest
         let saved = defaults.string(forKey: key)
@@ -269,10 +273,10 @@ final class TaskCommentsStore: ObservableObject {
         do {
             let page = try await fetch(taskId, nil, limit)
             guard taskGeneration == taskRequest, refreshGeneration == request, loadedTaskId == taskId, !Task.isCancelled else { return }
-            let firstPage = page.comments.filter { $0.taskId == taskId }
+            let firstPage = page.comments.filter { ($0.taskId == taskId || $0.activityTaskId == taskId || $0.dispatch?.executionTaskId == taskId) }
             // Polling refreshes the newest page without dropping older pages the user loaded.
             // Fresh rows win by ID so dispatch status changes are reflected in both projections.
-            comments = unique(firstPage + comments.filter { $0.taskId == taskId })
+            comments = unique(firstPage + comments.filter { ($0.taskId == taskId || $0.activityTaskId == taskId || $0.dispatch?.executionTaskId == taskId) })
             totalCount = max(0, page.totalCount)
             // Keep the user's current pagination position during periodic refreshes.
             // Only initialize/advance it from the first page before older pages were loaded.
@@ -291,7 +295,7 @@ final class TaskCommentsStore: ObservableObject {
         let taskRequest = taskGeneration
         let request = UUID()
         statusGeneration = request
-        let ids = Array(Set(comments.filter { $0.taskId == taskId }.map(\.id))).sorted()
+        let ids = Array(Set(comments.filter { ($0.taskId == taskId || $0.activityTaskId == taskId || $0.dispatch?.executionTaskId == taskId) }.map(\.id))).sorted()
         do {
             var statuses: [String: WandTaskCommentStatus] = [:]
             for start in stride(from: 0, to: ids.count, by: 100) {
@@ -303,8 +307,8 @@ final class TaskCommentsStore: ObservableObject {
             }
             guard taskGeneration == taskRequest, statusGeneration == request, loadedTaskId == taskId, !Task.isCancelled else { return }
             comments = comments.map { comment in
-                guard comment.taskId == taskId, let status = statuses[comment.id], status.includesDispatch else { return comment }
-                return WandTaskComment(id: comment.id, taskId: comment.taskId, authorName: comment.authorName, body: comment.body,
+                guard (comment.taskId == taskId || comment.activityTaskId == taskId || comment.dispatch?.executionTaskId == taskId), let status = statuses[comment.id], status.includesDispatch else { return comment }
+                return WandTaskComment(activityTaskId: comment.activityTaskId, id: comment.id, taskId: comment.taskId, authorName: comment.authorName, body: comment.body,
                     createdAt: comment.createdAt, sourceCommentId: comment.sourceCommentId, dispatch: status.dispatch, purpose: comment.purpose, reviewWritebackPending: status.reviewWritebackPending ?? comment.reviewWritebackPending)
             }
         } catch {
@@ -331,7 +335,7 @@ final class TaskCommentsStore: ObservableObject {
             let page = try await fetch(taskId, cursor, limit)
             guard taskGeneration == taskRequest, refreshGeneration == refreshRequest, olderPageGeneration == request,
                   loadedTaskId == taskId, !Task.isCancelled else { return }
-            comments = unique(comments + page.comments.filter { $0.taskId == taskId })
+            comments = unique(comments + page.comments.filter { ($0.taskId == taskId || $0.activityTaskId == taskId || $0.dispatch?.executionTaskId == taskId) })
             totalCount = max(0, page.totalCount)
             nextCursor = page.nextCursor
             loadedOlderPage = true
@@ -418,6 +422,7 @@ struct TaskCommentExecutionItemRow: View {
                 Text("@\(comment.dispatch?.employeeName ?? "员工")").font(.system(size: 12))
                 Spacer()
                 Text(comment.dispatch?.label ?? "状态未知").font(.caption).foregroundColor(Theme.textSecondary)
+                if let delivery = comment.dispatch?.deliveryStatus { Text(delivery == "submitted" ? "交付已提交" : "尚未提交交付").font(.caption).foregroundStyle(.secondary) }
             }
             HStack {
                 Text(comment.createdAt).font(.system(size: 11)).foregroundColor(Theme.textTertiary)
@@ -719,8 +724,7 @@ enum TaskCommentMention {
         combinedCharacters.append(contentsOf: token)
         combinedCharacters.append(contentsOf: chars[end...])
         let combined = String(combinedCharacters)
-        let normalized = removeLeadingSelectedMention(combined, name: name)
-        return (normalized, min(normalized.count, start + token.count))
+        return (combined, min(combined.count, start + token.count))
     }
 
     static func removeLeadingSelectedMention(_ body: String, name: String) -> String {

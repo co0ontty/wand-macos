@@ -1,8 +1,9 @@
 import SwiftUI
+import AppKit
 
 @MainActor
 private enum TaskCommentDraftCache {
-    struct Draft { var body = ""; var employeeId = ""; var source: String? = nil; var revision = UUID() }
+    struct Draft { var agent: WandBoardTaskAgent? = nil; var body = ""; var employeeId = ""; var source: String? = nil; var revision = UUID() }
     static var drafts: [String: Draft] = [:]
 }
 
@@ -11,7 +12,7 @@ struct TaskCommentComposer: View {
     let api: WandAPI
     let taskId: String
     var dispatchPurpose: String = "execution"
-    let employees: [(id: String, name: String)]
+    let employees: [(id: String, name: String, agent: WandBoardTaskAgent?)]
     @Binding var sourceCommentId: String?
     let onSaved: () async -> Void
     @State private var bodyText = ""
@@ -25,6 +26,10 @@ struct TaskCommentComposer: View {
     @State private var active = true
     @State private var message = ""
     @State private var outcome = "idle"
+    @State private var agentOverride: WandBoardTaskAgent? = nil
+    @State private var agentDraft = WandBoardTaskAgent.default
+    @State private var settingsOpen = false
+    @State private var catalog: ModelsResponse? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
     private var phase: String { busy ? "sending" : outcome }
@@ -32,7 +37,7 @@ struct TaskCommentComposer: View {
     private var dispatching: Bool { TaskCommentMention.holds(bodyText, name: boundName) }
     private var mention: TaskCommentMention.Query? { TaskCommentMention.query(in: bodyText, caret: caret) }
     private var mentionKey: String { mention.map { "\($0.start):\($0.text)" } ?? "" }
-    private var mentionMatches: [(id: String, name: String)] {
+    private var mentionMatches: [(id: String, name: String, agent: WandBoardTaskAgent?)] {
         guard let mention, mentionDismissed != mentionKey else { return [] }
         return employees.filter { mention.text.isEmpty || $0.name.localizedStandardContains(mention.text) }
     }
@@ -49,7 +54,7 @@ struct TaskCommentComposer: View {
     private func changed() {
         revision = UUID()
         outcome = "idle"; message = ""
-        TaskCommentDraftCache.drafts[taskId] = .init(body: bodyText, employeeId: employeeId, source: sourceCommentId, revision: revision)
+        TaskCommentDraftCache.drafts[taskId] = .init(agent: agentOverride, body: bodyText, employeeId: employeeId, source: sourceCommentId, revision: revision)
     }
 
     private func replaceBody(_ value: String, from previous: String) {
@@ -59,11 +64,12 @@ struct TaskCommentComposer: View {
         changed()
     }
 
-    private func choose(_ employee: (id: String, name: String)) {
+    private func choose(_ employee: (id: String, name: String, agent: WandBoardTaskAgent?)) {
         let next = TaskCommentMention.insert(body: bodyText, caret: caret, name: employee.name)
-        bodyText = TaskCommentMention.removeLeadingSelectedMention(next.body, name: employee.name)
+        bodyText = next.body
         caret = min(next.caret, bodyText.count)
         employeeId = employee.id
+        agentOverride = nil
         mentionDismissed = ""
         changed()
         focused = true
@@ -92,7 +98,21 @@ struct TaskCommentComposer: View {
             } else if mention != nil && mentionDismissed != mentionKey {
                 Text("没有匹配的员工").font(.caption).foregroundStyle(.secondary).accessibilityLabel("提及员工")
             }
-            TextEditor(text: Binding(get: { bodyText }, set: { replaceBody($0, from: bodyText) }))
+            TaskMentionTextEditor(text: Binding(get: { bodyText }, set: { replaceBody($0, from: bodyText) }), employeeName: boundName) {
+                guard let employee = employees.first(where: { $0.id == employeeId }) else { return }
+                agentDraft = agentOverride ?? employee.agent ?? .default; settingsOpen = true
+            }
+                .popover(isPresented: $settingsOpen) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("本次指派 · @" + boundName).font(.headline)
+                        WandBoardAgentEditor(agent: $agentDraft, catalog: catalog)
+                        HStack {
+                            Button("取消") { settingsOpen = false }
+                            Button("恢复员工默认") { agentOverride = nil; settingsOpen = false; changed() }
+                            Button("应用") { agentOverride = agentDraft; settingsOpen = false; changed() }
+                        }
+                    }.padding(16).frame(width: 360).task { catalog = try? await api.models() }
+                }
                 .frame(minHeight: 80, maxHeight: 150).focused($focused)
                 .accessibilityLabel("写评论。输入 @ 选择员工，选中后才会派发")
                 .accessibilityIdentifier("task-comment-input")
@@ -114,7 +134,7 @@ struct TaskCommentComposer: View {
         .onAppear {
             let draft = TaskCommentDraftCache.drafts[taskId] ?? .init()
             active = true
-            bodyText = draft.body; employeeId = draft.employeeId; caret = draft.body.count; revision = draft.revision
+            agentOverride = draft.agent; bodyText = draft.body; employeeId = draft.employeeId; caret = draft.body.count; revision = draft.revision
             if sourceCommentId == nil { sourceCommentId = draft.source }
             seenSource = sourceCommentId
             ready = true
@@ -139,15 +159,15 @@ struct TaskCommentComposer: View {
         let source = sourceCommentId, version = revision
         guard !text.isEmpty else { return }
         busy = true; mentionDismissed = mentionKey; message = ""
-        let identity = TaskCommentRequestIdentity(taskId: taskId, body: text, employeeId: employee, sourceCommentId: source, purpose: employee.isEmpty ? "execution" : dispatchPurpose)
+        let identity = TaskCommentRequestIdentity(taskId: taskId, body: text, employeeId: employee, sourceCommentId: source, purpose: employee.isEmpty ? "execution" : dispatchPurpose, agent: agentOverride)
         Task {
             do {
                 let comment = try await api.postBoardTaskComment(id: taskId, requestId: identity.requestId, body: text,
-                    employeeId: employee.isEmpty ? nil : employee, sourceCommentId: source, purpose: employee.isEmpty ? nil : identity.purpose)
+                    employeeId: employee.isEmpty ? nil : employee, sourceCommentId: source, purpose: employee.isEmpty ? nil : identity.purpose, agent: agentOverride)
                 identity.settle(comment)
                 let rejected = comment.dispatch?.state == "failed"
                 if active && revision == version && !rejected {
-                    bodyText = ""; employeeId = ""; caret = 0; sourceCommentId = nil; changed()
+                    bodyText = ""; employeeId = ""; agentOverride = nil; caret = 0; sourceCommentId = nil; changed()
                 } else if !rejected && TaskCommentDraftCache.drafts[taskId]?.revision == version {
                     TaskCommentDraftCache.drafts[taskId] = .init()
                 }
@@ -164,5 +184,48 @@ struct TaskCommentComposer: View {
             }
             busy = false
         }
+    }
+}
+
+/// System text view keeps IME, selection and drafts while styling the bound employee as an inline link.
+private struct TaskMentionTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    let employeeName: String
+    let onMention: () -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        let editor = scroll.documentView as! NSTextView
+        editor.isRichText = false; editor.isAutomaticQuoteSubstitutionEnabled = false
+        editor.font = .systemFont(ofSize: NSFont.systemFontSize)
+        editor.textContainerInset = NSSize(width: 8, height: 8)
+        editor.delegate = context.coordinator
+        editor.setAccessibilityLabel("任务评论输入，输入 @ 选择员工，点击员工标签修改本次配置")
+        return scroll
+    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let editor = scroll.documentView as? NSTextView, !editor.hasMarkedText() else { return }
+        if editor.string != text { let selection = editor.selectedRange(); editor.string = text; editor.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0)) }
+        context.coordinator.decorate(editor)
+    }
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: TaskMentionTextEditor
+        init(_ parent: TaskMentionTextEditor) { self.parent = parent }
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView, !view.hasMarkedText() else { return }
+            parent.text = view.string; decorate(view)
+        }
+        func decorate(_ view: NSTextView) {
+            guard let storage = view.textStorage else { return }
+            let full = NSRange(location: 0, length: storage.length)
+            storage.removeAttribute(.link, range: full); storage.removeAttribute(.backgroundColor, range: full)
+            storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: full)
+            guard !parent.employeeName.isEmpty else { return }
+            let range = (view.string as NSString).range(of: "@" + parent.employeeName)
+            guard range.location != NSNotFound else { return }
+            storage.addAttributes([.link: "wand-mention:edit", .backgroundColor: NSColor.controlAccentColor.withAlphaComponent(0.12)], range: range)
+        }
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool { parent.onMention(); return true }
     }
 }

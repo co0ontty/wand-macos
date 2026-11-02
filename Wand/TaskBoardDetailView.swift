@@ -198,7 +198,11 @@ struct WandBoardDetailView: View {
                     api: api,
                     taskId: task.id,
                     dispatchPurpose: task.status == "review" ? "review" : "execution",
-                    employees: employees.filter { !$0.isArchived }.map { (id: $0.id, name: $0.name) },
+                    employees: employees.filter { !$0.isArchived }.map { employee in
+                        (id: employee.id, name: employee.name, agent: employee.candidates.first.map { candidate in
+                            WandBoardTaskAgent(provider: candidate.provider, model: candidate.model ?? "default", thinkingEffort: candidate.thinkingEffort ?? "off", mode: candidate.mode ?? "default", kind: candidate.kind ?? "structured", engine: candidate.engine)
+                        })
+                    },
                     sourceCommentId: $replyCommentId
                 ) {
                     await commentsStore.load(taskId: task.id, fetch: loadComments)
@@ -207,7 +211,7 @@ struct WandBoardDetailView: View {
             }
             composeSection
         }
-        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -490,31 +494,6 @@ struct WandBoardDetailView: View {
                         .disabled(busy || composePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
-            } else {
-                Button {
-                    selectedEmployeeId = ""
-                    composePrompt = ""
-                    composeOpen = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
-                        Text("新建并行会话（CLI）").font(.system(size: 12))
-                    }
-                    .foregroundColor(Theme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .background(
-                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                            .fill(Theme.surface)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                            .strokeBorder(Theme.border, lineWidth: 1)
-                    )
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(busy)
             }
         }
     }

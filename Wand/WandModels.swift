@@ -488,6 +488,7 @@ struct ConversationTurn: Decodable {
     let requestId: String?
     let createdAt: String?
     let completedAt: String?
+    let readAt: String?
     let author: ConversationMessageAuthor?
     let sessionLink: ConversationSessionLink?
     let sessionPreview: ConversationReplyPreview?
@@ -497,14 +498,14 @@ struct ConversationTurn: Decodable {
     let notice: Bool?
 
     private enum CodingKeys: String, CodingKey {
-        case role, content, messageId, requestId, createdAt, completedAt, author, sessionLink, sessionPreview
+        case role, content, messageId, requestId, createdAt, completedAt, readAt, author, sessionLink, sessionPreview
         case conversationLink, taskPreview, conversationTarget, notice, blockOffset, blockTotal
     }
 
     init(role: String, content: [ContentBlock]) {
         self.role = role; self.content = content
         blockOffset = nil; blockTotal = nil
-        messageId = nil; requestId = nil; createdAt = nil; completedAt = nil; author = nil; sessionLink = nil; sessionPreview = nil
+        messageId = nil; requestId = nil; createdAt = nil; completedAt = nil; readAt = nil; author = nil; sessionLink = nil; sessionPreview = nil
         conversationLink = nil; taskPreview = nil; conversationTarget = nil; notice = nil
     }
 
@@ -517,6 +518,7 @@ struct ConversationTurn: Decodable {
         requestId = try? c.decode(String.self, forKey: .requestId)
         createdAt = try? c.decode(String.self, forKey: .createdAt)
         completedAt = try? c.decode(String.self, forKey: .completedAt)
+        readAt = try? c.decode(String.self, forKey: .readAt)
         author = try? c.decode(ConversationMessageAuthor.self, forKey: .author)
         sessionLink = try? c.decode(ConversationSessionLink.self, forKey: .sessionLink)
         sessionPreview = try? c.decode(ConversationReplyPreview.self, forKey: .sessionPreview)
@@ -642,6 +644,7 @@ struct SessionSnapshot: Decodable, Identifiable {
     var automationId: String? = nil
     var teamChat: WorkspaceSessionTeamChat? = nil
     var teamStep: WorkspaceSessionTeamStep? = nil
+    var historyOnly: Bool? = nil
 
     var isStructured: Bool { (sessionKind ?? "pty") == "structured" }
     var isReadOnlySystemCall: Bool { automationId?.hasPrefix("system-ai:") == true }

@@ -87,7 +87,7 @@ final class ChatStore: ObservableObject {
     var displayEmployeeAvatar: String { if let currentEmployee { return currentEmployee.avatar ?? "" }; return snapshot?.employeeAvatar ?? "" }
 
     var isStructured: Bool { snapshot?.isStructured ?? true }
-    var isReadOnlySystemCall: Bool { snapshot?.isReadOnlySystemCall == true }
+    var isReadOnly: Bool { snapshot?.isReadOnlySystemCall == true || snapshot?.historyOnly == true }
     var sessionEnded: Bool { ["exited", "failed", "stopped"].contains(status) }
     var canLoadEarlier: Bool { loadedOffset > 0 }
 
@@ -107,6 +107,7 @@ final class ChatStore: ObservableObject {
 
     private var realtimeRevision = 0
     func start() {
+        guard snapshot?.historyOnly != true else { return }
         guard !started else { socket.connect(); socket.subscribe(sessionId: sessionId); return }
         started = true
 
@@ -156,8 +157,10 @@ final class ChatStore: ObservableObject {
                 let snap = try await api.getSession(id: sessionId)
                 apply(snapshot: snap)
                 loading = false
-                socket.connect()
-                socket.subscribe(sessionId: sessionId)
+                if snap.historyOnly != true {
+                    socket.connect()
+                    socket.subscribe(sessionId: sessionId)
+                }
             } catch {
                 loading = false
                 loadError = error.localizedDescription
@@ -197,6 +200,7 @@ final class ChatStore: ObservableObject {
     private func apply(snapshot snap: SessionSnapshot) {
         let previousError = snapshot?.structuredState?.lastError
         self.snapshot = snap
+        if snap.historyOnly == true { socket.close() }
         if let modelCatalog { applyModelCatalog(modelCatalog) }
         applyWindowedMessages(snap.messages, offset: snap.messageOffset, total: snap.messageTotal, leadingBlockOffset: snap.leadingBlockOffset)
         status = snap.status ?? status
@@ -417,7 +421,7 @@ final class ChatStore: ObservableObject {
     /// 发送一条消息。PTY 会话分包发送正文与 Return，结构化会话直接发文本。
     func send(text: String, onAccepted: @escaping () -> Void = {},
               onUnknown: @escaping () -> Void = {}, onFailure: @escaping () -> Void = {}) {
-        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能继续发送。"; onFailure(); return }
+        guard !isReadOnly else { toast = "只读记录只读，不能继续发送。"; onFailure(); return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !sending, !queueMutationPending else { return }
         guard !unconfirmedInputs.contains(trimmed) else {
@@ -507,7 +511,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setModel(_ model: String?) {
-        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能修改执行模型。"; return }
+        guard !isReadOnly else { toast = "只读记录只读，不能修改执行模型。"; return }
         let previous = selectedModel
         modelUpdateRevision &+= 1
         let revision = modelUpdateRevision
@@ -526,7 +530,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setThinkingEffort(_ effort: String) {
-        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能修改思考设置。"; return }
+        guard !isReadOnly else { toast = "只读记录只读，不能修改思考设置。"; return }
         let previous = thinkingEffort
         thinkingUpdateRevision &+= 1
         let revision = thinkingUpdateRevision
@@ -555,7 +559,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setMode(_ mode: String) {
-        guard !isReadOnlySystemCall else { toast = "系统调用记录只读，不能修改执行模式。"; return }
+        guard !isReadOnly else { toast = "只读记录只读，不能修改执行模式。"; return }
         guard snapshot?.provider != "codex" else { return }
         modeUpdateRevision &+= 1; let captured = modeUpdateRevision
         enqueueSettingsMutation { [self] in
@@ -746,7 +750,7 @@ final class ChatStore: ObservableObject {
 
     /// 停止当前回复：结构化会话调 stop（杀掉当前回合），PTY 发 Esc 中断。
     func stopResponding() {
-        guard !isReadOnlySystemCall else { toast = "请在发起该调用的功能中取消，日志不能控制执行。"; return }
+        guard !isReadOnly else { toast = "只读记录不能控制执行。"; return }
         Task {
             do {
                 if isStructured {
@@ -795,7 +799,7 @@ final class ChatStore: ObservableObject {
 
     /// 会话已结束时按 claudeSessionId 原地恢复（服务端 reuseId 复用本会话）。
     func resume() {
-        guard !isReadOnlySystemCall else { toast = "系统调用记录不能恢复为交互任务。"; return }
+        guard !isReadOnly else { toast = "只读记录不能恢复为交互任务。"; return }
         Task {
             do {
                 let snap = try await api.resumeSession(id: sessionId)

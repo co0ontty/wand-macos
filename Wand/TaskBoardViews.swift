@@ -4,6 +4,7 @@ import SwiftUI
 
 /// 列表视图：按状态分组的紧凑行，组头可折叠；归档目录挂在「等你确认」组内。
 struct WandBoardListView: View {
+    @State private var expandedId = ""
     let grouped: [String: [WandBoardTask]]
     var allTasks: [WandBoardTask] = []
     let collapsed: Set<String>
@@ -27,7 +28,7 @@ struct WandBoardListView: View {
                     }
                 }
             }
-            .frame(maxWidth: 1260, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 28)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity)
@@ -82,11 +83,10 @@ struct WandBoardListView: View {
     }
 
     private func row(_ task: WandBoardTask) -> some View {
-        Button {
-            onOpenTask(task.id)
-        } label: {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 WandBoardStatusGlyph(status: WandBoardStatus(rawValue: task.status) ?? .todo)
+                Button { expandedId = expandedId == task.id ? "" : task.id } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(task.identifier.isEmpty ? String(task.id.prefix(8)) : task.identifier)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -102,6 +102,7 @@ struct WandBoardListView: View {
                         WandBoardRelationshipSummary(parent: parent, childCount: children.count)
                     }
                 }
+                }.buttonStyle(.plain).accessibilityLabel("\(expandedId == task.id ? "收起" : "展开") \(task.identifier): \(task.title)")
                 Spacer(minLength: 12)
                 Button("评论 \(task.commentCount)") { onOpenComments(task.id) }
                         .buttonStyle(.plain)
@@ -134,10 +135,11 @@ struct WandBoardListView: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
+        .help("点击标题展开摘要")
+        if expandedId == task.id { WandTaskInlineSummary(task: task, onOpen: { onOpenTask(task.id) }) }
         }
-        .buttonStyle(WandBoardRowButtonStyle())
-        .help(task.title)
     }
+
 }
 
 // MARK: - 概览视图
@@ -214,41 +216,34 @@ struct WandBoardDashboardView: View {
                     metric("待归档", stats.ready, WandBoardStatus.ready.color, stats.total)
                 }
 
+                panel("待你确认归档 · \(tasks.filter { $0.status == WandBoardStatus.ready.rawValue && wandBoardHasCurrentAIVerification($0) }.count)") {
+                    if humanQueue.isEmpty {
+                        emptyPanelText("暂无 AI 已通过、待人工确认的任务")
+                    } else {
+                        ForEach(humanQueue) { task in
+                            HStack(alignment: .top, spacing: 12) {
+                                WandTaskSummaryDisclosure(task: task, onOpen: { onOpenTask(task.id) })
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button("查看交付") { (onOpenAcceptance ?? onOpenTask)(task.id) }
+                                    .buttonStyle(WandSecondaryButtonStyle())
+                                    .fixedSize()
+                            }
+                        }
+                    }
+                }
+
                 progressPanel(stats: stats, series: series)
 
                 LazyVGrid(
                     columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)],
                     spacing: 16
                 ) {
-                    panel("人工确认队列") {
-                        if humanQueue.isEmpty {
-                            emptyPanelText("暂无 AI 已通过、待人工确认的任务")
-                        } else {
-                            ForEach(humanQueue) { task in
-                                dashboardRow(
-                                    action: { onOpenTask(task.id) },
-                                    glyph: { WandBoardStatusGlyph(status: .ready) },
-                                    title: task.title
-                                ) {
-                                    Text("待确认")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(Theme.textSecondary)
-                                }
-                            }
-                        }
-                    }
                     panel("即将到期") {
                         if dueSoon.isEmpty {
                             emptyPanelText("没有设置截止日期的任务")
                         } else {
                             ForEach(dueSoon) { task in
-                                dashboardRow(
-                                    action: { onOpenTask(task.id) },
-                                    glyph: { WandBoardStatusGlyph(status: WandBoardStatus(rawValue: task.status) ?? .todo) },
-                                    title: task.title
-                                ) {
-                                    WandBoardDueChip(dueDate: task.dueDate ?? "", status: task.status)
-                                }
+                                WandTaskSummaryDisclosure(task: task, onOpen: { onOpenTask(task.id) })
                             }
                         }
                     }
@@ -497,6 +492,7 @@ struct WandBoardDashboardView: View {
 
 /// 甘特视图：状态分组 + 时间轴条，支持日 / 周 / 月尺度与隐藏已确认。
 struct WandBoardGanttView: View {
+    @State private var expandedId = ""
     let grouped: [String: [WandBoardTask]]
     var allTasks: [WandBoardTask] = []
     let zoom: WandBoardGanttZoom
@@ -575,7 +571,7 @@ struct WandBoardGanttView: View {
             ForEach(items) { task in
                 let span = wandBoardGanttSpan(task: task, range: range)
                 Button {
-                    onOpenTask(task.id)
+                    expandedId = expandedId == task.id ? "" : task.id
                 } label: {
                     HStack(spacing: 12) {
                         HStack(spacing: 6) {
@@ -614,6 +610,7 @@ struct WandBoardGanttView: View {
                 }
                 .buttonStyle(WandBoardRowButtonStyle())
                 .help(task.title)
+                if expandedId == task.id { WandTaskInlineSummary(task: task, onOpen: { onOpenTask(task.id) }) }
                 WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
             }
         }

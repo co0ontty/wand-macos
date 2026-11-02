@@ -777,7 +777,7 @@ private struct CommunicationMessageRow: View {
                                 .environment(\.messageFileContext, WandMessageFileContext(sessionID: link.sessionId))
                                 .font(.system(size: 14)).lineSpacing(4).lineLimit(previewExpanded ? nil : 4).textSelection(.enabled)
                         }
-                        Button("打开对应执行会话") { onOpenSession(link.sessionId) }
+                        Button(turn.sessionPreview?.historyOnly == true ? "查看历史回复" : "打开对应执行会话") { onOpenSession(link.sessionId) }
                             .buttonStyle(.bordered).disabled(turn.sessionPreview?.status == "unavailable")
                     }.frame(maxWidth: .infinity, alignment: .leading).wandMotion(value: previewExpanded, layout: true)
                 } else {
@@ -1364,8 +1364,10 @@ struct DesktopUnifiedSessionList: View {
     let selectedConversationID: String?
     let onOpen: (String) -> Void
     let onOpenConversation: (NativeConversation) -> Void
+    let onOpenQueuedTask: (String) -> Void
     let onDeleted: (String) -> Void
     @State private var filtersOpen = false
+    @State private var queueExpanded = false
     @State private var deleteTarget: WorkspaceSessionSummary?
     @State private var moveTarget: WorkspaceSessionSummary?
     @State private var error: String?
@@ -1384,6 +1386,21 @@ struct DesktopUnifiedSessionList: View {
                 && TaskListPresentation.searchMatches(communications.query, values: [item.displayTitle, item.preview])
         }
     }
+    private var queuedTasks: [(group: TaskDirectoryGroup, task: WorkspaceTaskSummary, count: Int)] {
+        let filters = communications.listFilters
+        guard [.all, .queued, .active, .working].contains(filters.runtime), filters.archive != .archived else { return [] }
+        return store.conversationTaskGroups.flatMap { group in
+            group.tasks.compactMap { task in
+                let count = task.queuedDispatchCount ?? (task.hasQueuedExecution ? task.queuedExecutionCount ?? 0 : 0)
+                let workspace = group.userAdded == true && !group.isSynthetic && !group.isGlobal ? "id:" + group.workspaceId : "none"
+                guard count > 0, task.archived != true, task.boardTaskId != nil,
+                      filters.workspace == "all" || filters.workspace == workspace,
+                      filters.taskStage == .all || filters.taskStage.rawValue == task.boardTaskStatus,
+                      TaskListPresentation.searchMatches(communications.query, values: [task.name, group.workspaceName]) else { return nil }
+                return (group, task, count)
+            }
+        }
+    }
     private var filterSummary: String {
         let workspace = ConversationSessionEntry.workspaceOptions(store.conversationTaskGroups)
             .first { $0.id == communications.workspaceFilter }?.label ?? "工作区不可用"
@@ -1395,7 +1412,7 @@ struct DesktopUnifiedSessionList: View {
             searchBar
             Text(filterSummary)
                 .font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
-            Text("\(rows.count + legacyRows.count) 个会话").font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
+            Text("\(rows.count + legacyRows.count) 个会话 · \(queuedTasks.reduce(0) { $0 + $1.count }) 条任务派发排队中").font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
             if let selectedID, entries.contains(where: { $0.id == selectedID }), !rows.contains(where: { $0.id == selectedID }) {
                 VStack(alignment: .leading) {
                     Text("当前会话不在筛选结果中").font(.system(size: 11))
@@ -1432,6 +1449,26 @@ struct DesktopUnifiedSessionList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 3) {
+                    if !queuedTasks.isEmpty {
+                        DisclosureGroup(isExpanded: $queueExpanded) {
+                        ForEach(queuedTasks, id: \.task.id) { entry in
+                            Button { if let id = entry.task.boardTaskId { onOpenQueuedTask(id) } } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "clock").foregroundColor(Theme.textSecondary)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(entry.task.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                        Text("\(entry.group.workspaceName) · \(entry.count) 条派发排队中")
+                                            .font(.system(size: 11)).foregroundColor(Theme.textSecondary).lineLimit(1)
+                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                }.frame(minHeight: 52).padding(.horizontal, 8)
+                            }.buttonStyle(DesktopNavigationButtonStyle(active: false))
+                                .help("查看排队任务：" + entry.task.name)
+                        }
+                        } label: {
+                            HStack { Text("排队任务"); Spacer(); Text("\(queuedTasks.count)") }
+                                .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary)
+                        }.padding(8)
+                    }
                     if !attentionRows.isEmpty {
                         HStack { Text("我需要关注"); Spacer(); Text("\(attentionRows.count)") }
                             .font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.textSecondary).padding(8)
@@ -1450,13 +1487,14 @@ struct DesktopUnifiedSessionList: View {
                             }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).padding(.horizontal, 8)
                         }.buttonStyle(DesktopNavigationButtonStyle(active: selectedConversationID == item.id))
                     }
-                    if rows.isEmpty && legacyRows.isEmpty && store.taskGroupsLoaded {
+                    if rows.isEmpty && legacyRows.isEmpty && queuedTasks.isEmpty && store.taskGroupsLoaded {
                         Text("没有符合条件的会话").foregroundColor(Theme.textSecondary).padding(12)
                         Button("清除筛选与搜索") { communications.listFilters = ConversationListFilters(); communications.query = "" }
                     }
                     if !store.taskGroupsLoaded { ProgressView().controlSize(.small).padding() }
                 }.padding(.horizontal, 8).padding(.bottom, 12)
-            }.onChange(of: locateID) { id in if let id { proxy.scrollTo(id, anchor: .center); locateID = nil } }
+            }.onChange(of: communications.listFilters.runtime) { runtime in if runtime == .queued { queueExpanded = true } }
+            .onChange(of: locateID) { id in if let id { proxy.scrollTo(id, anchor: .center); locateID = nil } }
         }
     }
 

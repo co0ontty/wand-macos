@@ -497,6 +497,7 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
     var kind: String? = nil
     var executionStatus: String? = nil
     var queuedExecutionCount: Int? = nil
+    var queuedDispatchCount: Int? = nil
     var hasQueuedExecution: Bool { executionStatus == "queued" }
     var hasActiveExecution: Bool { executionStatus == "queued" || executionStatus == "running" }
     var parentWorkspaceTaskId: String? = nil
@@ -538,6 +539,7 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         parentWorkspaceTaskId: String? = nil,
         executionStatus: String? = nil,
         queuedExecutionCount: Int? = nil,
+        queuedDispatchCount: Int? = nil,
         boardTaskId: String? = nil,
         boardTaskStatus: String? = nil,
         kind: String? = nil
@@ -561,6 +563,7 @@ struct WorkspaceTaskSummary: Codable, Equatable, Identifiable {
         self.totalSessions = totalSessions ?? sessions.count
         self.executionStatus = executionStatus
         self.queuedExecutionCount = queuedExecutionCount
+        self.queuedDispatchCount = queuedDispatchCount
         self.archived = archived
     }
 
@@ -642,7 +645,7 @@ struct TaskGroupsPage: Equatable {
                     lastOpenedAt: task.lastOpenedAt, cwd: task.cwd, isolated: task.isolated, worktreeError: task.worktreeError,
                     sessions: sessions, totalSessions: max(0, task.listedSessionCount - (task.sessions.count - sessions.count)),
                     archived: task.archived, parentWorkspaceTaskId: task.parentWorkspaceTaskId,
-                    executionStatus: task.executionStatus, queuedExecutionCount: task.queuedExecutionCount,
+                    executionStatus: task.executionStatus, queuedExecutionCount: task.queuedExecutionCount, queuedDispatchCount: task.queuedDispatchCount,
                     boardTaskId: task.boardTaskId, boardTaskStatus: task.boardTaskStatus, kind: task.kind)
             }
             let sessions = group.standaloneSessions.filter { $0.archived != true }

@@ -731,6 +731,12 @@ struct MainShellView: View {
                             invalidateSessionOpen(); showCommunications = true; showCreation = false
                             showKnowledge = false; showTaskBoard = false
                             communicationsStore.select(conversation.id)
+                        }, onOpenQueuedTask: { id in
+                            chatsPeekOpen = false
+                            peekDismissTask?.cancel()
+                            createdBoardTaskId = id
+                            showCommunications = false; showCreation = false; showKnowledge = false
+                            showTaskBoard = true
                         }, onDeleted: { id in
                             guard selectedSessionId == id else { return }
                             invalidateSessionOpen(); clearCompletionIntent()

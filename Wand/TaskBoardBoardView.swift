@@ -11,6 +11,7 @@ struct WandBoardBoardView: View {
     let grouped: [String: [WandBoardTask]]
     var allTasks: [WandBoardTask] = []
     let display: WandBoardDisplay
+    var showWorkspace = true
     let loading: Bool
     let busyId: String
     let archiveOpen: Bool
@@ -42,16 +43,18 @@ struct WandBoardBoardView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let contentWidth = min(1260, geometry.size.width)
-            let columnCount = CGFloat(max(1, mainColumns.count))
-            let columnWidth = min(360, max(280, (contentWidth - 56 - CGFloat(max(0, mainColumns.count - 1)) * 24) / columnCount))
-            let sideWidth: CGFloat = otherColumns.isEmpty ? 0 : min(320, columnWidth)
+            let contentWidth = geometry.size.width
+            let visibleColumnCount = mainColumns.count + (otherColumns.isEmpty ? 0 : 1)
+            let columnCount = CGFloat(max(1, visibleColumnCount))
+            let columnWidth = max(280, (contentWidth - 40 - CGFloat(max(0, visibleColumnCount - 1)) * 12) / columnCount)
+            let sideWidth: CGFloat = otherColumns.isEmpty ? 0 : columnWidth
             let naturalWidth = CGFloat(mainColumns.count) * columnWidth
-                + (mainColumns.isEmpty || otherColumns.isEmpty ? 0 : 24)
-                + sideWidth + 56
+                + CGFloat(max(0, mainColumns.count - 1)) * 12
+                + (mainColumns.isEmpty || otherColumns.isEmpty ? 0 : 12)
+                + sideWidth + 40
             VStack(alignment: .leading, spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 24) {
+                HStack(alignment: .top, spacing: 12) {
                     ForEach(mainColumns) { status in
                         column(status)
                             .frame(width: columnWidth)
@@ -65,14 +68,14 @@ struct WandBoardBoardView: View {
                         .frame(width: sideWidth)
                     }
                 }
-                .padding(.horizontal, 28)
+                .padding(.horizontal, 20)
                 .padding(.bottom, 12)
                 .frame(width: max(contentWidth, naturalWidth), alignment: .topLeading)
             }
             .frame(maxWidth: contentWidth, maxHeight: .infinity, alignment: .topLeading)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             archiveZone(archived: grouped[WandBoardStatus.archived.rawValue] ?? [])
-                .padding(.horizontal, 28)
+                .padding(.horizontal, 20)
             }
         }
     }
@@ -181,6 +184,7 @@ struct WandBoardBoardView: View {
             display: display,
             parent: wandBoardParent(of: task, in: allTasks),
             childCount: wandBoardChildren(of: task, in: allTasks).count,
+            showWorkspace: showWorkspace,
             busy: busyId == task.id,
             dropTarget: sessionDropTarget == task.id,
             onOpen: { onOpenTask(task.id) },
@@ -197,7 +201,6 @@ struct WandBoardBoardView: View {
             },
             onUnbindSession: { onUnbindSession(task, $0) }
         )
-        WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
         }
         .onDrag {
             NSItemProvider(item: task.id as NSString, typeIdentifier: wandBoardTaskDragType)

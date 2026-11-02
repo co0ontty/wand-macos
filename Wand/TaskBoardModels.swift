@@ -1163,7 +1163,7 @@ func wandBoardMatches(
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
     if needle.isEmpty { return true }
     // 搜索范围与 Web `filterIssues` 一致：标题 / 编号 / 描述 / 标签，不含项目名。
-    let haystack = ([task.title, task.identifier, task.description] + task.labels)
+    let haystack = ([task.id, task.title, task.identifier, task.description] + task.labels)
         .joined(separator: " ")
     return haystack.localizedCaseInsensitiveContains(needle)
 }
