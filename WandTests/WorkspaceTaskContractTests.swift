@@ -341,7 +341,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
 
     @MainActor
     func testNativeUnboundSessionOpensDirectlyWithoutSyntheticTask() async throws {
-        let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"[{"workspaceId":"cwd:/repo/free","workspaceName":"Free","workspaceCwd":"/repo/free","synthetic":true,"tasks":[],"standaloneSessions":[{"id":"free","title":"独立工作","provider":"pi","sessionKind":"structured","cwd":"/repo/free","status":"idle"}]}]"#.utf8))
+        let groups = try JSONDecoder().decode([TaskDirectoryGroup].self, from: Data(#"[{"workspaceId":"cwd:/repo/free","workspaceName":"Free","workspaceCwd":"/repo/free","synthetic":false,"userAdded":true,"tasks":[],"standaloneSessions":[{"id":"free","title":"独立工作","provider":"pi","sessionKind":"structured","cwd":"/repo/free","status":"idle"}]}]"#.utf8))
         let data = try JSONEncoder().encode(groups)
         let api = makeAPI { request in
             XCTAssertEqual(request.httpMethod, "GET")
@@ -370,7 +370,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
     func testNativeTaskClickUsesRealOwnerAndRefreshPreservesDirectoryFold() async throws {
         let source = try searchGroups()[0], task = source.tasks[0]
         let group = TaskDirectoryGroup(workspaceId: "cwd:/repo/ui", workspaceName: "UI", workspaceCwd: "/repo/ui",
-            synthetic: true, tasks: [task], standaloneSessions: [])
+            synthetic: false, tasks: [task], standaloneSessions: [], userAdded: true)
         let data = try JSONEncoder().encode([group])
         let api = makeAPI { request in
             XCTAssertEqual(request.httpMethod, "GET")
@@ -1479,8 +1479,8 @@ final class WorkspaceTaskContractTests: XCTestCase {
     func testOrganizationRefreshMovesSidebarMembersFromDefaultGroupIntoCreatedTask() async throws {
         let lock = NSLock()
         var committed = false
-        let initial = Data(#"[{"workspaceId":"w1","workspaceName":"wand","workspaceCwd":"/repo","tasks":[],"standaloneSessions":[{"id":"s1","title":"通知设置保存","cwd":"/repo","provider":"pi","sessionKind":"structured","status":"idle"}]}]"#.utf8)
-        let classified = Data(#"[{"workspaceId":"w1","workspaceName":"wand","workspaceCwd":"/repo","tasks":[{"id":"new-task","workspaceId":"w1","name":"修复通知保存","cwd":"/repo","status":"active","createdAt":"2026-10-01","sessions":[{"id":"s1","title":"通知设置保存","cwd":"/repo","provider":"pi","sessionKind":"structured","status":"idle"}]}],"standaloneSessions":[]}]"#.utf8)
+        let initial = Data(#"[{"workspaceId":"w1","workspaceName":"wand","workspaceCwd":"/repo","userAdded":true,"tasks":[],"standaloneSessions":[{"id":"s1","title":"通知设置保存","cwd":"/repo","provider":"pi","sessionKind":"structured","status":"idle"}]}]"#.utf8)
+        let classified = Data(#"[{"workspaceId":"w1","workspaceName":"wand","workspaceCwd":"/repo","userAdded":true,"tasks":[{"id":"new-task","workspaceId":"w1","name":"修复通知保存","cwd":"/repo","status":"active","createdAt":"2026-10-01","sessions":[{"id":"s1","title":"通知设置保存","cwd":"/repo","provider":"pi","sessionKind":"structured","status":"idle"}]}],"standaloneSessions":[]}]"#.utf8)
         let api = makeAPI { request in
             if request.url?.path == "/api/tasks" { return lock.withLock { committed } ? classified : initial }
             if request.url?.path == "/api/sessions/auto-organize" {

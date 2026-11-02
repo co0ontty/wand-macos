@@ -18,7 +18,7 @@ final class ConversationListFiltersTests: XCTestCase {
     private func group(_ id: String, tasks: [WorkspaceTaskSummary] = [], sessions: [WorkspaceSessionSummary] = [],
                        synthetic: Bool = false, global: Bool = false) -> TaskDirectoryGroup {
         TaskDirectoryGroup(workspaceId: id, workspaceName: "同名工作区", workspaceCwd: "/same/path", synthetic: synthetic,
-            tasks: tasks, standaloneSessions: sessions, global: global)
+            tasks: tasks, standaloneSessions: sessions, global: global, userAdded: !synthetic && !global && id != "wand-global")
     }
     private func dm(archived: Bool = false) throws -> NativeConversation {
         try JSONDecoder().decode(NativeConversation.self, from: JSONSerialization.data(withJSONObject: [

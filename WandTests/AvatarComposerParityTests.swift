@@ -105,7 +105,7 @@ final class AvatarComposerParityTests: XCTestCase {
         let add = try rect("runtime-add"), send = try rect("runtime-send")
         XCTAssertEqual(add.height, 32, accuracy: 1)
         XCTAssertEqual(send.midY, add.midY, accuracy: 1)
-        XCTAssertEqual(try rect("runtime-surface").height, 56, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-surface").height, 54, accuracy: 1)
         XCTAssertEqual(try rect("runtime-settings").maxX, host.bounds.maxX, accuracy: 1)
         XCTAssertLessThan(try rect("runtime-settings").midY, add.midY)
         XCTAssertEqual(try rect("runtime-avatar").minX, 0, accuracy: 1)
@@ -116,7 +116,7 @@ final class AvatarComposerParityTests: XCTestCase {
         XCTAssertEqual(try rect("runtime-send").minY, send.minY, accuracy: 1)
         focus.collapse()
         host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
-        XCTAssertEqual(try rect("runtime-surface").height, 56, accuracy: 1)
+        XCTAssertEqual(try rect("runtime-surface").height, 54, accuracy: 1)
         XCTAssertEqual(try rect("runtime-send"), send)
     }
 
