@@ -167,7 +167,7 @@ final class WandAPI {
             guard task.id == id && task.workflowVersion == 1 else { throw APIError.server(status: 409, message: "服务端尚不支持验收派发；草稿与原请求标识已保留，请更新服务并核对，不会改用普通执行。") }
         }
         struct Response: Decodable { let comment: WandTaskComment }
-        var payload: [String: Any] = ["requestId": requestId, "body": body]
+        var payload: [String: Any] = ["requestId": requestId, "body": body, "submissionSource": "manual"]
         if let employeeId { payload["employeeId"] = employeeId }
         if let sourceCommentId { payload["sourceCommentId"] = sourceCommentId }
         if employeeId != nil, let purpose { payload["purpose"] = purpose }
@@ -280,7 +280,7 @@ final class WandAPI {
         if let before, !before.isEmpty { path += "&before=\(percentEncode(before))" }
         do {
             let response = try await request(Response.self, method: "GET", path: path)
-            return WandTaskCommentsPage(comments: response.comments.filter { $0.taskId == id }, totalCount: response.totalCount ?? response.comments.count, nextCursor: response.nextCursor)
+            return WandTaskCommentsPage(comments: response.comments.filter { $0.taskId == id || $0.activityTaskId == id || $0.dispatch?.executionTaskId == id }, totalCount: response.totalCount ?? response.comments.count, nextCursor: response.nextCursor)
         } catch APIError.server(status: 404, message: _) {
             return WandTaskCommentsPage(comments: [], totalCount: 0, nextCursor: nil) // Older servers have no comments route.
         }

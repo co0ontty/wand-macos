@@ -1246,9 +1246,11 @@ struct CapsuleCircleButtonStyle: ButtonStyle {
 struct DesktopSidebarCapsules: View {
     @ObservedObject var store: CommunicationsStore
     let groups: [TaskDirectoryGroup]
+    @Environment(\.workspaceAPI) private var workspaceAPI
     private enum PickerKind { case runtime, workspace }
     @State private var expanded: PickerKind?
     @State private var searchOpen = false
+    @State private var addingWorkspace = false
     private var options: [(id: String, label: String)] { ConversationSessionEntry.workspaceOptions(groups) }
     private let choices: [ConversationRuntimeFilter] = [.confirmation, .working, .all, .failed]
     private func canonical(_ value: ConversationRuntimeFilter) -> ConversationRuntimeFilter {
@@ -1285,6 +1287,12 @@ struct DesktopSidebarCapsules: View {
                 .onExitCommand { expanded = nil }
             Text("工作区").font(.system(size: 10)).foregroundColor(Theme.textSecondary)
             VStack(spacing: 4) {
+                if expanded == .workspace || searchOpen {
+                    Button { addingWorkspace = true } label: { Image(systemName: "plus").frame(width: 40, height: 40) }
+                        .buttonStyle(CapsuleCircleButtonStyle(active: false))
+                        .help("添加工作区：填写目录和别名")
+                        .accessibilityLabel("添加工作区")
+                }
                 workspaceButton(("all", "全部工作区"))
                 workspaceButton(favoriteWorkspace)
                 if expanded == .workspace || searchOpen {
@@ -1305,6 +1313,15 @@ struct DesktopSidebarCapsules: View {
                 .onMoveCommand { if $0 == .down { expanded = .workspace } }
                 .onExitCommand { if !searchOpen { expanded = nil } }
         }.padding(.top, 12).padding(.bottom, 8)
+        .sheet(isPresented: $addingWorkspace) {
+            if let workspaceAPI {
+                WorkspaceAddDialog(api: workspaceAPI) { workspace in
+                    store.workspaceFilter = "id:" + workspace.id
+                    addingWorkspace = false
+                    expanded = nil
+                }
+            }
+        }
     }
     private struct CapsuleSurface: ViewModifier {
         func body(content: Content) -> some View {

@@ -492,7 +492,11 @@ struct WandBoardDashboardView: View {
 
 /// 甘特视图：状态分组 + 时间轴条，支持日 / 周 / 月尺度与隐藏已确认。
 struct WandBoardGanttView: View {
-    @State private var expandedId = ""
+    @State private var anchor = Date()
+    @State private var expandedWeeks: Set<String> = []
+    let selectedStatuses: Set<String>
+    let onStatuses: (Set<String>) -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let grouped: [String: [WandBoardTask]]
     var allTasks: [WandBoardTask] = []
     let zoom: WandBoardGanttZoom
@@ -501,14 +505,38 @@ struct WandBoardGanttView: View {
     let onHideCompleted: (Bool) -> Void
     let onOpenTask: (String) -> Void
 
-    private let labelWidth: CGFloat = 220
-    private let rowHeight: CGFloat = 30
+    private let labelWidth: CGFloat = 100
+    private let rowHeight: CGFloat = 56
+    private var cellWidth: CGFloat { zoom == .day ? 580 : zoom == .week ? 220 : 180 }
+    private let quickStatuses: [WandBoardStatus] = [.backlog, .todo, .review, .ready]
+    private func label(_ status: WandBoardStatus) -> String {
+        status == .backlog ? "待排期" : status == .todo ? "待认领" : status.label
+    }
+    private func participants(_ task: WandBoardTask) -> [WandBoardAssignedExecutor] {
+        var seen = Set<String>()
+        return task.sessions.compactMap { session in
+            guard let person = wandBoardEmployeeIdentity(session, sessions: task.sessions, assignee: task.assignedExecutor), seen.insert(person.id).inserted else { return nil }
+            return person
+        }
+    }
 
     var body: some View {
-        let range = wandBoardGanttRange(zoom: zoom)
-        let statuses = WandBoardStatus.columns + [.archived]
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            timeline(today: context.date)
+        }
+    }
+
+    private func timeline(today: Date) -> some View {
+        let range = wandBoardGanttRange(zoom: zoom, today: anchor)
+        let tasks = grouped.values.flatMap { $0 }.filter { !hideCompleted || $0.status != "archived" || wandBoardHasOpenDescendant($0, in: allTasks) }
+            .filter { wandBoardGanttSpan(task: $0, range: range, today: today).length > 0 }
+            .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
+                ForEach(quickStatuses) { status in
+                    Button(label(status)) { onStatuses(selectedStatuses == [status.rawValue] ? [] : [status.rawValue]) }
+                        .buttonStyle(WandBoardSegmentButtonStyle(active: selectedStatuses == [status.rawValue]))
+                }
                 Toggle("隐藏已归档",  isOn: Binding(get: { hideCompleted }, set: onHideCompleted))
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12))
@@ -523,18 +551,152 @@ struct WandBoardGanttView: View {
             }
             .padding(.horizontal, 28)
 
+            HStack(spacing: 10) {
+                Button("上一时段") { navigate(-1, range: range) }
+                Text(range.start + (range.days > 1 ? " — " + (range.columns.last ?? "") : ""))
+                    .font(.system(size: 13, weight: .semibold))
+                Button("下一时段") { navigate(1, range: range) }
+                Button("回到今天") { anchor = Date() }
+                Spacer()
+                Text("\(tasks.count) 个任务 · 时长为创建至今").font(.caption).foregroundColor(Theme.textSecondary)
+            }.padding(.horizontal, 28)
+
+            if zoom == .month {
+                monthGrid(tasks: tasks, range: range, today: today)
+            } else {
+            ScrollViewReader { proxy in
             ScrollView([.horizontal, .vertical]) {
                 VStack(alignment: .leading, spacing: 10) {
                     headRow(range: range)
-                    ForEach(statuses) { status in
-                        let items = (grouped[status.rawValue] ?? []).filter { !hideCompleted || $0.status != "archived" || wandBoardHasOpenDescendant($0, in: allTasks) }
-                        if !items.isEmpty { group(status, items: items, range: range) }
-                    }
+                    if tasks.isEmpty { Text("这个时段没有匹配的任务，可切换日期或筛选").foregroundColor(Theme.textSecondary).padding() }
+                    group(items: tasks, range: range, today: today)
                 }
                 .padding(.horizontal, 28)
                 .padding(.bottom, 24)
             }
+            .onAppear { proxy.scrollTo("gantt-today", anchor: .trailing) }
+            .onChange(of: zoom) { _ in proxy.scrollTo("gantt-today", anchor: .trailing) }
+            }
+            }
         }
+    }
+
+    private func monthWeeks(_ range: WandBoardGanttRange) -> [WandBoardGanttRange] {
+        guard let first = wandBoardDay(fromDueDate: range.start) else { return [] }
+        let calendar = Calendar.current
+        let offset = calendar.component(.weekday, from: first) - 1
+        let origin = calendar.date(byAdding: .day, value: -offset, to: first) ?? first
+        return (0..<((offset + range.days + 6) / 7)).map { week in
+            let columns = (0..<7).map { day in wandBoardIsoDate(calendar.date(byAdding: .day, value: week * 7 + day, to: origin) ?? origin) }
+            return WandBoardGanttRange(start: columns[0], days: 7, columns: columns)
+        }
+    }
+
+    private func monthGrid(tasks: [WandBoardTask], range: WandBoardGanttRange, today: Date) -> some View {
+        GeometryReader { geometry in
+            let width = max(840, geometry.size.width - 56)
+            ScrollView([.horizontal, .vertical]) {
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        ForEach(["周日", "周一", "周二", "周三", "周四", "周五", "周六"], id: \.self) { day in
+                            Text(day).font(.system(size: 12)).foregroundColor(Theme.textSecondary).frame(width: width / 7, height: 36)
+                        }
+                    }
+                    ForEach(monthWeeks(range), id: \.start) { week in
+                        monthWeek(tasks: tasks, week: week, month: String(range.start.prefix(7)), today: today, width: width)
+                    }
+                }
+                .frame(width: width)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 1))
+                .padding(.horizontal, 28).padding(.bottom, 24)
+            }
+        }
+    }
+
+    private func monthWeek(tasks: [WandBoardTask], week: WandBoardGanttRange, month: String, today: Date, width: CGFloat) -> some View {
+        let items = tasks.filter { wandBoardGanttSpan(task: $0, range: week, today: today).length > 0 }
+        let expanded = expandedWeeks.contains(week.start)
+        let visible = expanded ? items : Array(items.prefix(4))
+        let cell = width / 7
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 0) {
+                ForEach(week.columns, id: \.self) { day in
+                    Text(day.hasSuffix("-01") ? String(day.suffix(5)) : String(Int(day.suffix(2)) ?? 1))
+                        .font(.system(size: 12, weight: day == wandBoardIsoDate(today) ? .bold : .regular))
+                        .foregroundColor(day == wandBoardIsoDate(today) ? Theme.accentSolid : Theme.textSecondary)
+                        .opacity(String(day.prefix(7)) == month ? 1 : 0.5)
+                        .frame(width: cell - 12, height: 34, alignment: .trailing).padding(.trailing, 12)
+                }
+            }
+            ForEach(visible) { task in
+                let span = wandBoardGanttSpan(task: task, range: week, today: today)
+                HStack(spacing: 0) {
+                    if span.offset > 0 { Color.clear.frame(width: cell * CGFloat(span.offset), height: 56) }
+                    monthEvent(task: task, today: today, span: span.length)
+                        .frame(width: cell * CGFloat(span.length) - 8, height: 56).padding(.horizontal, 4)
+                    Spacer(minLength: 0)
+                }
+            }
+            if items.count > 4 {
+                Button(expanded ? "收起本周任务" : "展开其余 \(items.count - 4) 个任务") {
+                    if expanded { expandedWeeks.remove(week.start) } else { expandedWeeks.insert(week.start) }
+                }.buttonStyle(.plain).font(.system(size: 12)).foregroundColor(Theme.textSecondary).padding(8)
+            }
+            Spacer(minLength: 8)
+        }
+        .frame(width: width, alignment: .topLeading).frame(minHeight: 156)
+        .background(HStack(spacing: 0) {
+            ForEach(week.columns, id: \.self) { day in
+                Rectangle().fill(Theme.border.opacity(String(day.prefix(7)) != month ? 0.2 : weekend(day) ? 0.12 : 0))
+                    .frame(width: cell).overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 1) }
+            }
+        })
+        .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
+    }
+
+    private func monthEvent(task: WandBoardTask, today: Date, span: Int) -> some View {
+        let status = WandBoardStatus(rawValue: task.status) ?? .backlog
+        let people = participants(task)
+        return Button { onOpenTask(task.id) } label: {
+            VStack(spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(label(status)).font(.system(size: 10, weight: .medium)).fixedSize()
+                        .foregroundColor(status.color).padding(.horizontal, 4).padding(.vertical, 2)
+                        .background(status.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                    Text(task.title).font(.system(size: 12)).foregroundColor(Theme.textPrimary).lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    Text(wandBoardTaskAge(task.createdAt, now: today)).font(.system(size: 11)).foregroundColor(Theme.textSecondary).fixedSize()
+                    HStack(spacing: -6) {
+                        ForEach(Array(people.prefix(span == 1 ? 1 : 3)), id: \.id) { person in
+                            ContactAvatar(id: person.id, avatar: person.avatar ?? "", name: person.name, size: 22)
+                        }
+                        let remaining = people.count - (span == 1 ? 1 : 3)
+                        if remaining > 0 { Text("+\(remaining)").font(.system(size: 10)).padding(.leading, 6) }
+                    }.help("历史参与者：" + people.map(\.name).joined(separator: "、"))
+                }
+            }.padding(.horizontal, 6).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(reduceTransparency ? AnyShapeStyle(Theme.surfaceSoft) : AnyShapeStyle(.regularMaterial), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.border, lineWidth: 1))
+        }.buttonStyle(.plain).help(task.identifier + " · " + task.title + " · 已创建 " + wandBoardTaskAge(task.createdAt, now: today))
+    }
+
+    private func navigate(_ direction: Int, range: WandBoardGanttRange) {
+        guard let start = wandBoardDay(fromDueDate: range.start) else { return }
+        anchor = Calendar.current.date(byAdding: zoom == .month ? .month : .day, value: direction * (zoom == .month ? 1 : range.days), to: start) ?? start
+    }
+
+    private func weekend(_ day: String) -> Bool {
+        guard let date = wandBoardDay(fromDueDate: day) else { return false }
+        return Calendar.current.isDateInWeekend(date)
+    }
+
+    private func dayLabel(_ day: String) -> String {
+        guard let date = wandBoardDay(fromDueDate: day) else { return day }
+        let weekday = Calendar.current.component(.weekday, from: date) - 1
+        return String(day.suffix(5)) + " · " + (day == wandBoardIsoDate(Date()) ? "今天" : "周" + ["日", "一", "二", "三", "四", "五", "六"][weekday])
     }
 
     private func headRow(range: WandBoardGanttRange) -> some View {
@@ -543,75 +705,88 @@ struct WandBoardGanttView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Theme.textSecondary)
                 .frame(width: labelWidth, alignment: .leading)
-            let cell = max(8, 520 / CGFloat(range.days))
+            let cell = cellWidth
             HStack(spacing: 0) {
                 ForEach(range.columns, id: \.self) { day in
-                    Text(String(Int(day.suffix(2)) ?? 0))
+                    Text(dayLabel(day))
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(Theme.textMuted)
-                        .frame(width: cell)
+                        .frame(width: cell, height: 32)
+                        .background(weekend(day) ? Theme.border.opacity(0.15) : Color.clear)
+                        .id(day == wandBoardIsoDate(Date()) ? "gantt-today" : day)
                 }
             }
         }
     }
 
-    private func group(_ status: WandBoardStatus, items: [WandBoardTask], range: WandBoardGanttRange) -> some View {
-        let cell = max(8, 520 / CGFloat(range.days))
+    private func group(items: [WandBoardTask], range: WandBoardGanttRange, today: Date) -> some View {
+        let cell = cellWidth
         let trackWidth = cell * CGFloat(range.days)
         return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 7) {
-                WandBoardStatusGlyph(status: status)
-                Text(status.label)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary)
-                Text("\(items.count)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(Theme.textMuted)
-            }
             ForEach(items) { task in
-                let span = wandBoardGanttSpan(task: task, range: range)
+                let status = WandBoardStatus(rawValue: task.status) ?? .backlog
+                let span = wandBoardGanttSpan(task: task, range: range, today: today)
                 Button {
-                    expandedId = expandedId == task.id ? "" : task.id
+                    onOpenTask(task.id)
                 } label: {
                     HStack(spacing: 12) {
                         HStack(spacing: 6) {
                             Text(task.identifier.isEmpty ? String(task.id.prefix(8)) : task.identifier)
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(Theme.textTertiary)
-                            Text(task.title.isEmpty ? "未命名任务" : task.title)
-                                .font(.system(size: 12))
-                                .foregroundColor(Theme.textPrimary)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            if let parent = wandBoardParent(of: task, in: allTasks) {
-                                Image(systemName: "arrow.turn.down.right")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(Theme.textSecondary)
-                                    .help("归属 \(parent.identifier) · \(parent.title)")
-                                    .accessibilityLabel("父任务 \(parent.title)")
-                            }
+
                         }
                         .frame(width: labelWidth, alignment: .leading)
                         ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(status.color.opacity(0.12))
-                                .frame(width: trackWidth, height: 8)
+                            HStack(spacing: 0) {
+                                ForEach(range.columns, id: \.self) { day in
+                                    Rectangle().fill(weekend(day) ? Theme.border.opacity(0.15) : Color.clear).frame(width: cell, height: rowHeight)
+                                }
+                            }
+                            Rectangle().fill(Theme.border.opacity(0.3)).frame(width: trackWidth, height: 1)
                             if span.length > 0 {
-                                Circle().fill(status.color).frame(width: 10, height: 10)
-                                    .offset(x: cell * (CGFloat(span.offset) + 0.5) - 5)
+                                let people = participants(task)
+                                HStack(spacing: 8) {
+                                    Text(label(status)).font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(status.color).padding(.horizontal, 5).padding(.vertical, 3)
+                                        .background(status.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                                        .fixedSize()
+                                    Text(task.title.isEmpty ? "未命名任务" : task.title)
+                                        .font(.system(size: 12)).foregroundColor(Theme.textPrimary).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Text(wandBoardTaskAge(task.createdAt, now: today))
+                                        .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.textSecondary).fixedSize()
+                                        .help("已创建 " + wandBoardTaskAge(task.createdAt, now: today))
+                                    HStack(spacing: -6) {
+                                        ForEach(Array(people.prefix(span.length == 1 ? 1 : 3)), id: \.id) { person in
+                                            ContactAvatar(id: person.id, avatar: person.avatar ?? "", name: person.name, size: 24)
+                                                .background(Theme.surfaceSoft, in: Circle())
+                                                .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+                                        }
+                                        let remaining = people.count - (span.length == 1 ? 1 : 3)
+                                        if remaining > 0 { Text("+\(remaining)").font(.system(size: 10)).padding(.leading, 8) }
+                                    }.help("历史参与者：" + people.map(\.name).joined(separator: "、"))
+                                }
+                                .padding(.horizontal, 8)
+                                .frame(width: cell * CGFloat(span.length), height: 36)
+                                .background(reduceTransparency ? AnyShapeStyle(Theme.surfaceSoft) : AnyShapeStyle(.regularMaterial), in: RoundedRectangle(cornerRadius: 7))
+                                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.border, lineWidth: 1))
+                                .offset(x: cell * CGFloat(span.offset))
                             } else {
-                                Text(task.dueDate?.isEmpty == false ? "截止日期不在当前范围" : "待排期 · 未设置截止日期")
+                                Text(task.title + " · 添加或归档时间缺失")
                                     .font(.caption).foregroundColor(Theme.textSecondary)
                             }
-                        }
+                            if let index = range.columns.firstIndex(of: wandBoardIsoDate(today)) {
+                                Rectangle().fill(Theme.accentSolid.opacity(0.5)).frame(width: 1, height: rowHeight)
+                                    .offset(x: cell * (CGFloat(index) + 0.5))
+                            }
+                        }.frame(width: trackWidth)
                     }
                     .frame(height: rowHeight)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(WandBoardRowButtonStyle())
-                .help(task.title)
-                if expandedId == task.id { WandTaskInlineSummary(task: task, onOpen: { onOpenTask(task.id) }) }
-                WandGoalChildren(task: task, tasks: allTasks, onOpen: onOpenTask)
+                .help(task.dueDate?.isEmpty == false ? "截止 \(task.dueDate ?? "")" : "添加 \(task.createdAt) → \(task.status == "archived" ? task.archivedAt ?? "归档时间缺失" : "现在")")
             }
         }
     }

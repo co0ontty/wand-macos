@@ -2,9 +2,31 @@ import SwiftUI
 
 /// 新建项目 sheet：名称 + 服务器目录 + 默认 Agent。
 /// 目录走服务端路径（可远程），浏览器用已有 DirectoryBrowserView。
+enum WorkspaceAddDraftStore {
+    static var initialCwd = ""
+    static var cwd = ""
+    static var name = ""
+    static func restore(initialCwd: String) -> (cwd: String, name: String)? {
+        guard self.initialCwd == initialCwd, !cwd.isEmpty || !name.isEmpty else { return nil }
+        return (cwd, name)
+    }
+    static func remember(initialCwd: String, cwd: String, name: String) {
+        self.initialCwd = initialCwd
+        self.cwd = cwd
+        self.name = name
+    }
+    static var suppressRemember = false
+    static func clear() {
+        initialCwd = ""
+        cwd = ""
+        name = ""
+    }
+}
+
 struct WorkspaceCreateView: View {
     let api: WandAPI
     @ObservedObject var store: WorkspaceStore
+    var initialCwd = ""
     let onCreated: (Workspace) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -116,6 +138,22 @@ struct WorkspaceCreateView: View {
                 }
             }
         }
+        .onAppear {
+            if let restored = WorkspaceAddDraftStore.restore(initialCwd: initialCwd) {
+                cwd = restored.cwd
+                name = restored.name
+            } else if cwd.isEmpty {
+                cwd = initialCwd
+            }
+        }
+        .onDisappear {
+            if WorkspaceAddDraftStore.suppressRemember {
+                WorkspaceAddDraftStore.clear()
+                WorkspaceAddDraftStore.suppressRemember = false
+            } else {
+                WorkspaceAddDraftStore.remember(initialCwd: initialCwd, cwd: cwd, name: name)
+            }
+        }
         .task {
             if let provider = try? await api.workspaceDefaultProvider() {
                 defaultProvider = provider
@@ -194,6 +232,8 @@ struct WorkspaceCreateView: View {
                 defaultProvider: defaultProvider
             )
             creating = false
+            WorkspaceAddDraftStore.clear()
+            WorkspaceAddDraftStore.suppressRemember = true
             onCreated(created)
             dismiss()
         } catch {
@@ -218,6 +258,7 @@ struct WorkspaceSelector: View {
     @Binding var selection: String
     let choices: [(id: String, name: String)]
     var emptyLabel = "未归属工作区"
+    var initialCwd = ""
     var onCreated: (Workspace) -> Void = { _ in }
     @Environment(\.workspaceAPI) private var api
     @State private var adding = false
@@ -240,7 +281,7 @@ struct WorkspaceSelector: View {
         .accessibilityLabel("选择工作区")
         .sheet(isPresented: $adding) {
             if let api {
-                WorkspaceAddDialog(api: api) { workspace in
+                WorkspaceAddDialog(api: api, initialCwd: initialCwd) { workspace in
                     added = workspace; selection = workspace.id; onCreated(workspace); adding = false
                 }
             }
@@ -249,29 +290,36 @@ struct WorkspaceSelector: View {
 }
 
 struct AddWorkspaceButton: View {
+    var initialCwd = ""
+    var apiOverride: WandAPI? = nil
     var onCreated: (Workspace) -> Void = { _ in }
-    @Environment(\.workspaceAPI) private var api
+    @Environment(\.workspaceAPI) private var environmentAPI
     @State private var adding = false
+    private var api: WandAPI? { apiOverride ?? environmentAPI }
     var body: some View {
         Button("添加工作区", systemImage: "plus") { adding = true }
+            .accessibilityLabel("添加工作区")
             .sheet(isPresented: $adding) {
-                if let api { WorkspaceAddDialog(api: api) { workspace in onCreated(workspace); adding = false } }
+                if let api { WorkspaceAddDialog(api: api, initialCwd: initialCwd) { workspace in onCreated(workspace); adding = false } }
             }
     }
 }
 
-private struct WorkspaceAddDialog: View {
+struct WorkspaceAddDialog: View {
     let api: WandAPI
+    var initialCwd = ""
     let onCreated: (Workspace) -> Void
     @StateObject private var store: WorkspaceStore
     @Environment(\.dismiss) private var dismiss
     @State private var busy = false
-    init(api: WandAPI, onCreated: @escaping (Workspace) -> Void) {
-        self.api = api; self.onCreated = onCreated
+    init(api: WandAPI, initialCwd: String = "", onCreated: @escaping (Workspace) -> Void) {
+        self.api = api
+        self.initialCwd = initialCwd
+        self.onCreated = onCreated
         _store = StateObject(wrappedValue: WorkspaceStore(api: api, serverID: api.baseURL.absoluteString))
     }
     var body: some View {
-        WorkspaceCreateView(api: api, store: store) { workspace in
+        WorkspaceCreateView(api: api, store: store, initialCwd: initialCwd) { workspace in
             NotificationCenter.default.post(name: .wandRefreshLists, object: nil)
             onCreated(workspace)
         }

@@ -358,8 +358,10 @@ struct WandBoardCreateView: View {
 
     private var directoryField: some View {
                 WandBoardField("项目目录") {
-                    WorkspaceSelector(selection: $owner.draft.workspaceId, choices: owner.workspaces.map { (id: $0.id, name: $0.name) }, onCreated: { workspace in
-                        owner.workspaces.append(workspace); owner.directory = workspace.cwd
+                    WorkspaceSelector(selection: $owner.draft.workspaceId, choices: owner.workspaces.map { (id: $0.id, name: $0.name) }, initialCwd: owner.directory, onCreated: { workspace in
+                        if !owner.workspaces.contains(where: { $0.id == workspace.id }) { owner.workspaces.append(workspace) }
+                        owner.directory = workspace.cwd
+                        owner.draft.workspaceId = workspace.id
                     })
                     .onChange(of: owner.draft.workspaceId) { id in
                         owner.directory = owner.workspaces.first { $0.id == id }?.cwd ?? ""

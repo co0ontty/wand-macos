@@ -480,7 +480,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case assignedExecutor
         case executionSubject, acceptance, deliveryRevision, verification, legacyReview, workflowVersion, id, workspaceId, workspaceTaskId, parentTaskId, identifier, title, titleSource, description, status, priority
-        case labels, dueDate, milestoneId, milestone, sortOrder, agent, createdAt, updatedAt
+        case labels, dueDate, milestoneId, milestone, sortOrder, agent, createdAt, updatedAt, archivedAt
         case sessionIds, sessions, workspace, commentCount, queuedCommentCount, executionStatus, queuedExecutionCount
     }
 
@@ -512,6 +512,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
     let assignedExecutor: WandBoardAssignedExecutor?
     let agent: WandBoardTaskAgent?
     let createdAt: String
+    let archivedAt: String?
     let updatedAt: String
     let sessionIds: [String]
     let sessions: [WandBoardTaskSession]
@@ -556,6 +557,7 @@ struct WandBoardTask: Decodable, Identifiable, Equatable {
         sortOrder = (try? container.decode(Int.self, forKey: .sortOrder)) ?? 0
         assignedExecutor = try? container.decodeIfPresent(WandBoardAssignedExecutor.self, forKey: .assignedExecutor)
         agent = try? container.decodeIfPresent(WandBoardTaskAgent.self, forKey: .agent)
+        archivedAt = try? container.decodeIfPresent(String.self, forKey: .archivedAt)
         createdAt = (try? container.decode(String.self, forKey: .createdAt)) ?? ""
         updatedAt = (try? container.decode(String.self, forKey: .updatedAt)) ?? ""
         sessionIds = (try? container.decode([String].self, forKey: .sessionIds)) ?? []
@@ -686,7 +688,7 @@ enum WandBoardView: String, CaseIterable, Identifiable {
         case .dashboard: return "概览"
         case .board: return "看板"
         case .list: return "列表"
-        case .gantt: return "甘特图"
+        case .gantt: return "日历"
         }
     }
 
@@ -695,7 +697,7 @@ enum WandBoardView: String, CaseIterable, Identifiable {
         case .dashboard: return "chart.pie"
         case .board: return "rectangle.split.3x1"
         case .list: return "list.bullet"
-        case .gantt: return "chart.bar.doc.horizontal"
+        case .gantt: return "calendar"
         }
     }
 }
@@ -815,11 +817,16 @@ func wandBoardProviderLabel(_ provider: String, engine: String? = nil) -> String
 }
 
 func wandBoardEffortLabel(_ effort: String) -> String {
-    switch effort {
+    switch effort.split(separator: ":", maxSplits: 1).last.map(String.init) ?? "" {
     case "off", "": return "关闭"
     case "standard": return "标准"
     case "deep": return "深入"
     case "max": return "最大"
+    case "minimal": return "最小"
+    case "low": return "低"
+    case "medium": return "中"
+    case "high": return "高"
+    case "xhigh": return "极高"
     default: return effort
     }
 }
@@ -1131,21 +1138,55 @@ struct WandBoardGanttRange {
     let columns: [String]
 }
 
-func wandBoardGanttRange(zoom: WandBoardGanttZoom, today: Date = Date()) -> WandBoardGanttRange {
-    let span = zoom.days
-    let startDate = Calendar.current.date(byAdding: .day, value: -span / 4, to: today) ?? today
-    let start = wandBoardIsoDate(startDate)
-    let columns = (0..<span).map { offset in
-        wandBoardIsoDate(Calendar.current.date(byAdding: .day, value: offset, to: startDate) ?? startDate)
+private func wandBoardGanttBounds(task: WandBoardTask, today: Date) -> (Date, Date)? {
+    if let due = task.dueDate, !due.isEmpty {
+        guard let day = wandBoardDay(fromDueDate: due) else { return nil }
+        return (day, day)
     }
-    return WandBoardGanttRange(start: start, days: span, columns: columns)
+    guard let created = wandBoardDate(from: task.createdAt) else { return nil }
+    let end: Date
+    if task.status == "archived" {
+        guard let archived = task.archivedAt.flatMap({ wandBoardDate(from: $0) }) else { return nil }
+        end = archived
+    } else { end = today }
+    let first = Calendar.current.startOfDay(for: created)
+    let last = Calendar.current.startOfDay(for: end)
+    return last >= first ? (first, last) : nil
 }
 
-/// 只有真实截止日期才展示一个里程碑，不从创建时间虚构任务持续时长。
-func wandBoardGanttSpan(task: WandBoardTask, range: WandBoardGanttRange) -> (offset: Int, length: Int) {
-    guard let due = task.dueDate, let dueDay = wandBoardDay(fromDueDate: due), let start = wandBoardDay(fromDueDate: range.start) else { return (0, 0) }
-    let offset = Int((dueDay.timeIntervalSince(start) / 86_400).rounded())
-    return offset >= 0 && offset < range.days ? (offset, 1) : (0, 0)
+func wandBoardGanttRange(zoom: WandBoardGanttZoom, today: Date = Date()) -> WandBoardGanttRange {
+    let calendar = Calendar.current
+    var first = calendar.startOfDay(for: today)
+    if zoom == .week {
+        let offset = (calendar.component(.weekday, from: first) + 5) % 7
+        first = calendar.date(byAdding: .day, value: -offset, to: first) ?? first
+    } else if zoom == .month {
+        first = calendar.date(from: calendar.dateComponents([.year, .month], from: first)) ?? first
+    }
+    let days = zoom == .day ? 1 : zoom == .week ? 7 : (calendar.range(of: .day, in: .month, for: first)?.count ?? 30)
+    let columns = (0..<days).map { offset in
+        wandBoardIsoDate(calendar.date(byAdding: .day, value: offset, to: first) ?? first)
+    }
+    return WandBoardGanttRange(start: wandBoardIsoDate(first), days: days, columns: columns)
+}
+
+func wandBoardTaskAge(_ createdAt: String, now: Date = Date()) -> String {
+    guard let created = wandBoardDate(from: createdAt) else { return "时间未知" }
+    let minutes = max(0, Int(now.timeIntervalSince(created) / 60))
+    if minutes >= 10080 { return "\(minutes / 10080)周" }
+    if minutes >= 1440 { return "\(minutes / 1440)天" }
+    if minutes >= 60 { return "\(minutes / 60)小时" }
+    return "\(minutes)分钟"
+}
+
+func wandBoardGanttSpan(task: WandBoardTask, range: WandBoardGanttRange, today: Date = Date()) -> (offset: Int, length: Int) {
+    guard let (first, last) = wandBoardGanttBounds(task: task, today: today),
+          let start = wandBoardDay(fromDueDate: range.start) else { return (0, 0) }
+    let calendar = Calendar.current
+    let origin = calendar.startOfDay(for: start)
+    let offset = max(0, calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: first)).day ?? 0)
+    let end = min(range.days - 1, calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: last)).day ?? 0)
+    return end >= offset ? (offset, end - offset + 1) : (0, 0)
 }
 
 // MARK: - 筛选与搜索

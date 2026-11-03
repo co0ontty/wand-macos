@@ -64,7 +64,7 @@ struct TaskBoardView: View {
         let matched = tasks.filter {
             wandBoardMatches(task: $0, query: query, workspaceId: workspaceFilter, filters: filters)
         }
-        return executionQueue ? matched : wandBoardGoalProjection(all: tasks, matched: matched)
+        return executionQueue || view == .gantt ? matched : wandBoardGoalProjection(all: tasks, matched: matched)
     }
 
     private var shareURL: URL? {
@@ -485,6 +485,8 @@ struct TaskBoardView: View {
                 )
             case .gantt:
                 WandBoardGanttView(
+                    selectedStatuses: filters.statuses,
+                    onStatuses: { filters.statuses = $0 },
                     grouped: grouped,
                     allTasks: tasks,
                     zoom: ganttZoom,

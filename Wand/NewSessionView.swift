@@ -173,7 +173,9 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
         let kind = sessionType, worktree = worktree, taskName = taskName
         let createsTask = destination == "new"
         var submissionBinding = binding
-        let workspace = workspaces.first { $0.id == context.workspaceId }
+        let workspace = workspaces.first {
+            ($0.cwd as NSString).standardizingPath == (path as NSString).standardizingPath
+        } ?? workspaces.first { $0.id == context.workspaceId }
         errorMessage = nil
         submissionPhase = createsTask ? .creatingTask : .startingSession
         do {
@@ -261,6 +263,16 @@ final class SessionCreationDraft: ObservableObject, Identifiable {
         tasks = options
     }
 
+    func adoptCreatedWorkspace(_ workspace: Workspace) {
+        if !workspaces.contains(where: { $0.id == workspace.id }) {
+            workspaces.insert(workspace, at: 0)
+        }
+        cwd = workspace.cwd
+        if destination == "none" || destination == "new" {
+            binding = nil
+        }
+    }
+
     func refreshOptions(api: WandAPI, invalidated: Bool = false) async {
         guard initialized else { return }
         if optionsRefreshTask != nil {
@@ -314,6 +326,7 @@ struct NewSessionView: View {
     @State private var showRunSettings = false
     @State private var showProviderPicker = false
     @State private var showDirectoryOptions = false
+    @State private var addingWorkspace = false
     @State private var showTaskOptions = false
     @State private var showEmployeePicker = false
     @State private var composerFocused = false
@@ -801,7 +814,16 @@ struct NewSessionView: View {
             .accessibilityLabel("工作目录：\(draft.cwd)")
             .popover(isPresented: $showDirectoryOptions, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("工作目录").font(.system(size: 14, weight: .semibold))
+                    HStack {
+                        Text("选择工作区").font(.system(size: 14, weight: .semibold))
+                        Spacer()
+                        if !isExistingTask {
+                            Button("添加工作区") {
+                                showDirectoryOptions = false
+                                addingWorkspace = true
+                            }.buttonStyle(WandSecondaryButtonStyle()).accessibilityLabel("添加工作区")
+                        }
+                    }
                     if isExistingTask {
                         if draft.loadingTask {
                             // 还没拿到任务详情：不能把入口上下文里的目录当成任务目录展示。
@@ -820,6 +842,12 @@ struct NewSessionView: View {
                     } else { cwdCard }
                     HStack { Spacer(); Button("完成") { showDirectoryOptions = false }.buttonStyle(WandSecondaryButtonStyle()) }
                 }.padding(20).frame(width: 400).background(Theme.workspaceBackground)
+            }
+            .sheet(isPresented: $addingWorkspace) {
+                WorkspaceAddDialog(api: api, initialCwd: draft.cwd) { workspace in
+                    draft.adoptCreatedWorkspace(workspace)
+                    addingWorkspace = false
+                }
             }
     }
 

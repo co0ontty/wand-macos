@@ -2,6 +2,7 @@ import SwiftUI
 import CryptoKit
 
 struct WandTaskCommentDispatch: Decodable, Equatable {
+    var agent: WandBoardTaskAgent? = nil
     var executionTaskId: String? = nil
     var deliveryStatus: String? = nil
     var blocker: String? = nil
@@ -32,7 +33,17 @@ struct WandTaskCommentDispatch: Decodable, Equatable {
 }
 
 
+struct WandTaskCommentOrigin: Decodable, Equatable {
+    let kind: String
+    let triggerName: String?
+    let taskId: String
+    let taskIdentifier: String
+    let commentId: String
+    let entrySessionId: String?
+}
+
 struct WandTaskComment: Decodable, Identifiable, Equatable {
+    var origin: WandTaskCommentOrigin? = nil
     var activityTaskId: String? = nil
     let id: String
     let taskId: String
@@ -43,6 +54,11 @@ struct WandTaskComment: Decodable, Identifiable, Equatable {
     var dispatch: WandTaskCommentDispatch? = nil
     var purpose: String? = nil
     var reviewWritebackPending: Bool? = nil
+    var authorKind: String? = nil
+    var authorId: String? = nil
+    var authorAvatar: String? = nil
+    var authorAgent: WandBoardTaskAgent? = nil
+    var sourceSessionId: String? = nil
 }
 
 struct WandTaskCommentResultBlock: Decodable, Hashable {
@@ -308,8 +324,8 @@ final class TaskCommentsStore: ObservableObject {
             guard taskGeneration == taskRequest, statusGeneration == request, loadedTaskId == taskId, !Task.isCancelled else { return }
             comments = comments.map { comment in
                 guard (comment.taskId == taskId || comment.activityTaskId == taskId || comment.dispatch?.executionTaskId == taskId), let status = statuses[comment.id], status.includesDispatch else { return comment }
-                return WandTaskComment(activityTaskId: comment.activityTaskId, id: comment.id, taskId: comment.taskId, authorName: comment.authorName, body: comment.body,
-                    createdAt: comment.createdAt, sourceCommentId: comment.sourceCommentId, dispatch: status.dispatch, purpose: comment.purpose, reviewWritebackPending: status.reviewWritebackPending ?? comment.reviewWritebackPending)
+                return WandTaskComment(origin: comment.origin, activityTaskId: comment.activityTaskId, id: comment.id, taskId: comment.taskId, authorName: comment.authorName, body: comment.body,
+                    createdAt: comment.createdAt, sourceCommentId: comment.sourceCommentId, dispatch: status.dispatch, purpose: comment.purpose, reviewWritebackPending: status.reviewWritebackPending ?? comment.reviewWritebackPending, authorKind: comment.authorKind, authorId: comment.authorId, authorAvatar: comment.authorAvatar, authorAgent: comment.authorAgent, sourceSessionId: comment.sourceSessionId)
             }
         } catch {
             // Status is a supplemental projection; a failed refresh must not erase loaded comments.
@@ -364,28 +380,56 @@ struct TaskCommentItemRow: View {
     let onOpenExecution: (() -> Void)?
     let onOpenSession: (String) -> Void
 
+    @State private var expanded = false
+    private var own: Bool { comment.authorKind == "user" }
+    private var agent: WandBoardTaskAgent? { comment.authorAgent ?? comment.dispatch?.agent }
+    private var identity: some View {
+        ContactAvatar(id: comment.authorId ?? (own ? "user" : "unknown"), avatar: comment.authorAvatar ?? "", name: comment.authorName, size: 28)
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(comment.authorName).font(.system(size: 12, weight: .medium))
-                if comment.reviewWritebackPending == true { Text("验收结论待回填").font(.caption).foregroundColor(Theme.warning) }
-                Text(comment.createdAt).font(.system(size: 11)).foregroundColor(Theme.textTertiary)
-                Spacer()
-                if let dispatch = comment.dispatch {
-                    Text("已派发给 @\(dispatch.employeeName)").font(.caption).foregroundColor(Theme.textSecondary)
-                    if let sessionId = dispatch.sessionId {
-                        Button("查看执行事项") { onOpenExecution?() }.buttonStyle(.plain)
-                        Button("打开会话") { onOpenSession(sessionId) }.buttonStyle(.plain)
+        HStack(alignment: .top, spacing: 10) {
+            if own { Spacer(minLength: 36) } else { identity }
+            VStack(alignment: own ? .trailing : .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(comment.authorName).font(.system(size: 12, weight: .semibold))
+                    if let agent {
+                        Text("\(comment.dispatch != nil ? "指派：" : "")\(WandProvider.title(for: agent.provider, engine: agent.engine)) · \(agent.model) · 思考：\(wandBoardEffortLabel(agent.thinkingEffort))")
+                            .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                    }
+                    Text(comment.createdAt).font(.system(size: 11)).foregroundColor(Theme.textTertiary)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(comment.body).font(.system(size: 13)).lineSpacing(4).lineLimit(expanded ? nil : 5)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    if comment.body.count > 180 {
+                        Button(expanded ? "收起全文" : "展开全文") { expanded.toggle() }.buttonStyle(.plain).foregroundColor(Theme.accentSolid)
+                    }
+                    if let dispatch = comment.dispatch {
+                        Text("已指派给 \(dispatch.employeeName) · \(dispatch.label)\(dispatch.deliveryStatus == "unsubmitted" ? " · 尚未提交交付" : "")")
+                            .font(.caption).foregroundColor(Theme.textSecondary)
+                    }
+                    if comment.reviewWritebackPending == true { Text("验收结论待回填").font(.caption).foregroundColor(Theme.warning) }
+                }
+                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                .background(own ? Theme.accentSolid.opacity(0.10) : Theme.surfaceSoft)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
+                if let origin = comment.origin {
+                    Text("来源 \(origin.taskIdentifier) · \(origin.triggerName.map { "触发者：\($0)" } ?? "触发者未记录")\(origin.entrySessionId == nil ? " · 入口会话未记录" : "")")
+                        .font(.caption).foregroundColor(Theme.textSecondary)
+                    if let sessionId = origin.entrySessionId {
+                        Button("入口会话") { onOpenSession(sessionId) }.buttonStyle(.plain)
                     }
                 }
-                Button("回复并 @", action: onReply).buttonStyle(.plain)
+                HStack(spacing: 10) {
+                    Button("回复并 @", action: onReply).buttonStyle(.plain)
+                    if comment.dispatch != nil { Button("查看执行事项") { onOpenExecution?() }.buttonStyle(.plain) }
+                    if let sessionId = comment.dispatch?.sessionId ?? comment.sourceSessionId {
+                        Button("打开会话") { onOpenSession(sessionId) }.buttonStyle(.plain)
+                    }
+                }.font(.caption).foregroundColor(Theme.textSecondary)
             }
-            Text(comment.body).font(.system(size: 13)).lineSpacing(4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surfaceSoft)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
+            if own { identity } else { Spacer(minLength: 36) }
+        }.padding(.vertical, 8)
     }
 }
 

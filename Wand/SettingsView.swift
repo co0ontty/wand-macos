@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 桌面固定左侧导航；窄窗口回退目录/详情，访问过的表单保持挂载。
 struct SettingsView: View {
@@ -22,6 +23,8 @@ struct SettingsView: View {
     @State private var betaServerDraft: String
     @State private var betaSourceError: String?
     @State private var savingBetaSource = false
+    @State private var exportingDiagnostics = false
+    @State private var diagnosticsResult: String?
     @FocusState private var focusedPane: SettingsPane?
     @FocusState private var headerFocused: Bool
     @ObservedObject private var updateManager: MacUpdateManager
@@ -431,6 +434,33 @@ struct SettingsView: View {
                 }
             }
 
+            rowDivider
+            settingsSection("问题诊断", description: "导出最近 30 分钟的恢复、停止、删除记录及运行状态。不含聊天正文、终端输出或凭据，不会自动上传。") {
+                Button {
+                    guard !exportingDiagnostics else { return }
+                    exportingDiagnostics = true
+                    diagnosticsResult = nil
+                    Task { @MainActor in
+                        defer { exportingDiagnostics = false }
+                        do {
+                            let data = try await WandAPI(baseURL: serverURL, token: token)
+                                .requestData(method: "GET", path: "/api/diagnostics/export")
+                            let panel = NSSavePanel()
+                            panel.allowedContentTypes = [.json]
+                            panel.nameFieldStringValue = "wand-diagnostics-\(Int(Date().timeIntervalSince1970)).json"
+                            guard await panel.begin() == .OK, let url = panel.url else { return }
+                            try data.write(to: url, options: .atomic)
+                            diagnosticsResult = "诊断文件已保存"
+                        } catch {
+                            diagnosticsResult = "导出失败，请确认服务端已更新且连接正常"
+                        }
+                    }
+                } label: {
+                    Label(exportingDiagnostics ? "正在导出…" : diagnosticsResult ?? "导出诊断日志", systemImage: "square.and.arrow.down")
+                        .frame(width: 300, alignment: .leading)
+                }
+                .disabled(exportingDiagnostics)
+            }
             rowDivider
             updateControlDeck
         }
