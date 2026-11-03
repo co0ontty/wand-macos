@@ -1598,7 +1598,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
             XCTAssertEqual(query.filter { $0.name == "includeArchived" }.map(\.value), ["1"])
             let number = lock.withLock { requests += 1; return requests }
             if number == 1 {
-                XCTAssertNil(query.first { $0.name == "revision" })
+                XCTAssertEqual(query.first { $0.name == "revision" }?.value, "")
                 return try JSONSerialization.data(withJSONObject: ["revision": revision, "groups": JSONSerialization.jsonObject(with: groups)])
             }
             if number == 2 {
@@ -1606,7 +1606,7 @@ final class WorkspaceTaskContractTests: XCTestCase {
                 return try JSONSerialization.data(withJSONObject: ["unchanged": true, "revision": revision, "groups": []])
             }
             if number == 3 { throw URLError(.notConnectedToInternet) }
-            XCTAssertNil(query.first { $0.name == "revision" })
+            XCTAssertEqual(query.first { $0.name == "revision" }?.value, "")
             return groups
         }
         let store = trackedStore(api: api, serverID: "archive-projections")

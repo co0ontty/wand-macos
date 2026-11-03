@@ -86,6 +86,9 @@ enum Theme {
         static let feedback = Animation.easeOut(duration: 0.12)
         static let structureDuration: TimeInterval = 0.18
         static let structure = Animation.easeInOut(duration: structureDuration)
+        // Reply dots keep the Web --motion-reply-cycle / --motion-reply-stagger cadence.
+        static let replyCycleDuration: TimeInterval = 1.4
+        static let replyStaggerDuration: TimeInterval = 0.2
     }
 
     // MARK: - 阴影(对齐 web --shadow-*,暖色调)

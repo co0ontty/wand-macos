@@ -621,6 +621,8 @@ struct TaskGroupsPage: Equatable {
     let groups: [TaskDirectoryGroup]
     let revision: String?
     let unchanged: Bool
+    /// nil：旧服务端没有正式任务数组。空数组表示这次快照确实没有正式任务。
+    var formalTasks: [WandBoardTask]? = nil
 
     /// Reproduce the default GET /api/tasks archive scope from the complete, unbounded response.
     /// Archived ancestors remain only when needed by an active descendant, as on the server.
@@ -675,7 +677,14 @@ struct TaskGroupsPage: Equatable {
         } else {
             groups = []
         }
-        return TaskGroupsPage(groups: groups, revision: revision, unchanged: unchanged)
+        let formalTasks: [WandBoardTask]?
+        if let raw = dict["tasks"] {
+            let encoded = try JSONSerialization.data(withJSONObject: raw)
+            formalTasks = try JSONDecoder().decode([WandBoardTask].self, from: encoded)
+        } else {
+            formalTasks = nil
+        }
+        return TaskGroupsPage(groups: groups, revision: revision, unchanged: unchanged, formalTasks: formalTasks)
     }
 }
 

@@ -3562,7 +3562,7 @@ private struct ReplyStatusDots: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
             HStack(spacing: 3) {
                 ForEach(0..<3, id: \.self) { index in
-                    let phase = (context.date.timeIntervalSinceReferenceDate - Double(index) * 0.2) / 1.4
+                    let phase = (context.date.timeIntervalSinceReferenceDate - Double(index) * Theme.Motion.replyStaggerDuration) / Theme.Motion.replyCycleDuration
                     let wave = (1 - cos(phase * 2 * .pi)) / 2
                     Circle().fill(Theme.wandAccent).frame(width: 3, height: 3)
                         .scaleEffect(reduceMotion ? 1 : 0.8 + wave * 0.5)

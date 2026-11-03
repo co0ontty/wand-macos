@@ -45,6 +45,12 @@ final class WandAPI {
     let feedbackConnection: ClientFeedback.Connection?
     private let session: URLSession
     private let reportServerFailure: (Error, String, URL) -> Void
+    /// 正式任务与目录组共用同一次 GET /api/tasks。旧服务端没有 tasks 时回退数组路由。
+    var taskListFlightKey: String?
+    var taskListFlight: Task<TaskGroupsPage, Error>?
+    var retainedFormalTasks: [WandBoardTask] = []
+    var retainedFormalRevision: String?
+    var formalTasksKnown = false
 
     init(baseURL: URL, token: String?, session: URLSession = SelfSignedSession.shared.session,
          reportServerFailure: ((Error, String, URL) -> Void)? = nil) {
@@ -795,11 +801,21 @@ final class WandAPI {
     }
 
     func listBoardTasks(workspaceId: String? = nil) async throws -> [WandBoardTask] {
-        var path = "/api/wand-tasks"
-        if let workspaceId, !workspaceId.isEmpty {
-            path += "?workspaceId=\(percentEncode(workspaceId))"
+        let page = try await listTaskGroupsPage(revision: formalTasksKnown ? retainedFormalRevision : nil)
+        let tasks: [WandBoardTask]
+        if page.unchanged && formalTasksKnown {
+            tasks = retainedFormalTasks
+        } else if let formal = page.formalTasks {
+            tasks = formal
+        } else {
+            var path = "/api/wand-tasks"
+            if let workspaceId, !workspaceId.isEmpty {
+                path += "?workspaceId=\(percentEncode(workspaceId))"
+            }
+            return try await request([WandBoardTask].self, method: "GET", path: path)
         }
-        return try await request([WandBoardTask].self, method: "GET", path: path)
+        guard let workspaceId, !workspaceId.isEmpty else { return tasks }
+        return tasks.filter { $0.workspaceId == workspaceId }
     }
 
     func createBoardTask(

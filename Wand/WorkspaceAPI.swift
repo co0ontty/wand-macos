@@ -396,12 +396,31 @@ extension WandAPI {
     }
 
     func listTaskGroupsPage(revision: String?) async throws -> TaskGroupsPage {
-        var path = "/api/tasks?includeArchived=1"
+        let key = revision ?? ""
+        if let taskListFlight, taskListFlightKey == key {
+            return try await taskListFlight.value
+        }
+        let flight = Task { try await self.loadTaskGroupsPage(revision: revision) }
+        taskListFlight = flight
+        taskListFlightKey = key
+        defer { if taskListFlightKey == key { taskListFlight = nil; taskListFlightKey = nil } }
+        return try await flight.value
+    }
+
+    private func loadTaskGroupsPage(revision: String?) async throws -> TaskGroupsPage {
+        // 与 iOS/Web/Android 一样始终带 revision。空字符串要版本化信封，省略则只剩旧数组。
+        var path = "/api/tasks?includeArchived=1&revision="
         if let revision, !revision.isEmpty {
-            path += "&revision=\(percentEncodePathComponent(revision))"
+            path += percentEncodePathComponent(revision)
         }
         let data = try await requestData(method: "GET", path: path)
-        return try TaskGroupsPage.decode(from: data)
+        let page = try TaskGroupsPage.decode(from: data)
+        if !page.unchanged, let formal = page.formalTasks {
+            retainedFormalTasks = formal
+            retainedFormalRevision = page.revision
+            formalTasksKnown = true
+        }
+        return page
     }
 
     func workspaceWorktreeOverview(workspaceId: String) async throws -> WorkspaceWorktreeOverview {
