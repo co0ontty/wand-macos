@@ -10,18 +10,24 @@ final class CommunicationsStore: ObservableObject {
     typealias ArchiveFilter = ConversationArchiveFilter
     @Published var lastCapsuleRuntime: ConversationRuntimeFilter = .working { didSet { preferences.set(lastCapsuleRuntime.rawValue, forKey: "wand.desktop.lastCapsuleRuntime") } }
     @Published var lastCapsuleWorkspace = "" { didSet { preferences.set(lastCapsuleWorkspace, forKey: "wand.desktop.lastCapsuleWorkspace") } }
-    @Published var runtimeFilter: ConversationRuntimeFilter = .all { didSet { if runtimeFilter != .all { lastCapsuleRuntime = runtimeFilter } } }
+    @Published var runtimeFilters: Set<ConversationRuntimeFilter> = [] {
+        didSet {
+            if let value = ConversationRuntimeFilter.sidebarChoices.first(where: { runtimeFilters.contains($0) }) { lastCapsuleRuntime = value }
+        }
+    }
+    @Published var lastCapsuleEmployee = "" { didSet { preferences.set(lastCapsuleEmployee, forKey: "wand.desktop.lastCapsuleEmployee") } }
+    @Published var employeeFilter = "all" { didSet { if employeeFilter != "all" { lastCapsuleEmployee = employeeFilter } } }
     @Published var taskStageFilter: ConversationTaskStage = .all
     @Published var workspaceFilter = "all" { didSet { if workspaceFilter != "all" { lastCapsuleWorkspace = workspaceFilter } } }
     @Published var archiveFilter: ArchiveFilter = .all { didSet { preferences.set(archiveFilter.rawValue, forKey: "wand.desktop.conversationArchiveFilter") } }
     @Published var activityOnly = false { didSet { preferences.set(activityOnly, forKey: "wand.desktop.conversationActivityOnly") } }
     var listFilters: ConversationListFilters {
-        get { ConversationListFilters(runtime: runtimeFilter == .all && activityOnly ? .active : runtimeFilter, taskStage: taskStageFilter, workspace: workspaceFilter, archive: archiveFilter, activityOnly: activityOnly) }
+        get { ConversationListFilters(taskStage: taskStageFilter, workspace: workspaceFilter, archive: archiveFilter,
+            activityOnly: activityOnly, runtimes: runtimeFilters, employee: employeeFilter) }
         set {
-            taskStageFilter = newValue.taskStage; workspaceFilter = newValue.workspace
+            taskStageFilter = newValue.taskStage; workspaceFilter = newValue.workspace; employeeFilter = newValue.employee
             archiveFilter = newValue.archive; activityOnly = newValue.activityOnly
-            runtimeFilter = newValue.runtime == .active && !newValue.activityOnly ? .all
-                : newValue.runtime == .all && newValue.activityOnly ? .active : newValue.runtime
+            runtimeFilters = newValue.runtime == .active ? newValue.runtimes : newValue.runtimeValues
         }
     }
     private let preferences: UserDefaults
@@ -75,9 +81,59 @@ final class CommunicationsStore: ObservableObject {
         preferences = defaults
         lastCapsuleRuntime = ConversationRuntimeFilter(rawValue: defaults.string(forKey: "wand.desktop.lastCapsuleRuntime") ?? "") ?? .working
         lastCapsuleWorkspace = defaults.string(forKey: "wand.desktop.lastCapsuleWorkspace") ?? ""
+        lastCapsuleEmployee = defaults.string(forKey: "wand.desktop.lastCapsuleEmployee") ?? ""
         archiveFilter = ArchiveFilter(rawValue: defaults.string(forKey: "wand.desktop.conversationArchiveFilter") ?? "") ?? .all
         activityOnly = defaults.bool(forKey: "wand.desktop.conversationActivityOnly")
         ledger = ConversationRequestLedger(api: api, serverURL: serverURL, defaults: defaults)
+    }
+
+    func toggleRuntime(_ value: ConversationRuntimeFilter) {
+        if value == .all { runtimeFilters = [] }
+        else if runtimeFilters.contains(value) { runtimeFilters.remove(value) }
+        else { runtimeFilters.insert(value) }
+        activityOnly = false
+    }
+    func showArchivedSessions(_ archived: Bool) {
+        archiveFilter = .all
+        activityOnly = false
+        runtimeFilters = archived ? [.archived] : []
+    }
+    func revealSession(_ entry: ConversationSessionEntry) {
+        let next = entry.revealing(listFilters)
+        let rememberedRuntime = lastCapsuleRuntime
+        if !entry.matches(next, query: query) { query = "" }
+        listFilters = next
+        lastCapsuleRuntime = rememberedRuntime
+    }
+    func toggleWorkspace(_ id: String) { workspaceFilter = ConversationFilterSelection.toggling(workspaceFilter, option: id) }
+    func toggleEmployee(_ id: String) { employeeFilter = ConversationFilterSelection.toggling(employeeFilter, option: id) }
+    func employeeOptions(groups: [TaskDirectoryGroup]) -> [ConversationEmployeeFilterOption] {
+        var indexed: [String: ConversationEmployeeFilterOption] = [:]
+        for entry in ConversationSessionEntry.index(groups: groups) {
+            guard let id = entry.session.employeeId, !id.isEmpty, indexed[id] == nil else { continue }
+            let current = contact(id)
+            indexed[id] = ConversationEmployeeFilterOption(id: id, label: current?.name ?? entry.session.employeeName ?? "员工",
+                avatar: current?.avatar ?? entry.session.employeeAvatar ?? "")
+        }
+        for item in items where item.communicationSessionId != nil || item.sessionId != nil {
+            guard let id = item.peerEmployeeId, !id.isEmpty, indexed[id] == nil else { continue }
+            let current = contact(id)
+            indexed[id] = ConversationEmployeeFilterOption(id: id, label: current?.name ?? item.displayTitle, avatar: current?.avatar ?? "")
+        }
+        return [ConversationEmployeeFilterOption(id: "all", label: "全部员工"), ConversationEmployeeFilterOption(id: "none", label: "未分配员工")]
+            + indexed.values.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+    }
+
+    func filterSummary(groups: [TaskDirectoryGroup]) -> String {
+        let filters = listFilters
+        let workspaces = ConversationSessionEntry.workspaceOptions(groups)
+        let workspaceIDs = ConversationFilterSelection.values(workspaceFilter)
+        let workspaceLabels = workspaceIDs.isEmpty ? "全部工作区" : workspaceIDs.map { id in workspaces.first { $0.id == id }?.label ?? "工作区不可用" }.joined(separator: "、")
+        let employees = employeeOptions(groups: groups)
+        let employeeLabels = ConversationFilterSelection.values(employeeFilter).map { id in employees.first { $0.id == id }?.label ?? "员工不可用" }.joined(separator: "、")
+        return [filters.runtimeLabel, taskStageFilter == .all ? "" : "任务阶段：" + taskStageFilter.label, workspaceLabels,
+            employeeLabels.isEmpty ? "" : "员工：" + employeeLabels, archiveFilter == .all ? "" : "会话" + archiveFilter.label,
+            activityOnly ? "仅活动" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     var selectedScope: ConversationScope? { selectedID.map { ConversationScope(conversationID: $0, target: target) } }

@@ -292,6 +292,7 @@ struct WandBoardDashboardView: View {
                                     glyph: {
                                         BrandLogo(provider: entry.1.provider, color: Theme.textPrimary)
                                             .frame(width: 12, height: 12)
+                                            .wandLogoGlow(status: entry.1.logoGlowStatus, archived: entry.0.status == "archived")
                                     },
                                     title: entry.0.title
                                 ) {

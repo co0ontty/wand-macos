@@ -610,7 +610,8 @@ final class ChatStore: ObservableObject {
         Task {
             do {
                 if isStructured {
-                    try await api.sendInput(id: sessionId, input: answerText, respondImmediately: true)
+                    try await api.sendInput(id: sessionId, input: answerText, respondImmediately: true,
+                                            expectedQuestionId: toolUseId)
                     socket.requestResync()
                 } else {
                     try await sendPtyChatInput(answerText)

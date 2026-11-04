@@ -1074,12 +1074,10 @@ struct MainShellView: View {
                     selected: session,
                     activeOnly: sidebarActiveOnly,
                     matching: { group, summary in
-                        if !communicationsStore.runtimeFilter.matches(summary) { return false }
-                        if communicationsStore.workspaceFilter != "all" {
-                            let entryWorkspace = group.userAdded != true || group.isSynthetic || group.isGlobal || group.workspaceId == "wand-global" ? "none" : "id:" + group.workspaceId
-                            if entryWorkspace != communicationsStore.workspaceFilter { return false }
-                        }
-                        return true
+                        let filters = communicationsStore.listFilters
+                        let entryWorkspace = group.userAdded != true || group.isSynthetic || group.isGlobal || group.workspaceId == "wand-global" ? "none" : "id:" + group.workspaceId
+                        return filters.matchesRuntime(summary) && filters.matchesWorkspace(entryWorkspace)
+                            && filters.matchesEmployee(summary.employeeId)
                     }
                 )
                 WorkspaceSessionHeader(store: workspaceStore, sessions: peers, selectedId: selectedSessionId,

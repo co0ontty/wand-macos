@@ -89,6 +89,8 @@ enum Theme {
         // Reply dots keep the Web --motion-reply-cycle / --motion-reply-stagger cadence.
         static let replyCycleDuration: TimeInterval = 1.4
         static let replyStaggerDuration: TimeInterval = 0.2
+        // Half-cycle; the full Logo breath matches Web --motion-spin (2.4s).
+        static let logoBreath = Animation.easeInOut(duration: 1.2).repeatForever(autoreverses: true)
     }
 
     // MARK: - 阴影(对齐 web --shadow-*,暖色调)
@@ -179,9 +181,53 @@ extension View {
         )
     }
 
+    /// A state-colored halo that leaves the logo and row geometry unchanged.
+    func wandLogoGlow(status: String, archived: Bool = false, justCompleted: Bool = false) -> some View {
+        modifier(WandLogoGlowModifier(status: status, archived: archived, justCompleted: justCompleted))
+    }
+
     /// Animate only the named interaction state; streamed content stays immediate.
     func wandMotion<Value: Equatable>(value: Value, layout: Bool = false) -> some View {
         modifier(WandMotionModifier(value: value, layout: layout))
+    }
+}
+
+private struct WandLogoGlowModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var bright = false
+    let status: String
+    let archived: Bool
+    let justCompleted: Bool
+
+    private var color: Color? {
+        guard !archived else { return nil }
+        switch status {
+        case "permission", "permission-blocked", "waiting", "waiting-input", "waiting_input", "needs_input", "reconnecting": return Theme.warning
+        case "failed": return Theme.danger
+        case "thinking": return Theme.info
+        case "running": return Theme.success
+        case "queued": return Theme.textSecondary
+        default: return justCompleted ? Theme.success : nil
+        }
+    }
+
+    private var animating: Bool { color != nil && !reduceMotion && scenePhase == .active }
+
+    func body(content: Content) -> some View {
+        content.background {
+            if let color {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(color.opacity(0.45))
+                    .blur(radius: 3)
+                    .opacity(reduceMotion || bright ? 1 : 0.35)
+                    .animation(animating ? Theme.Motion.logoBreath : nil, value: bright)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .onAppear { bright = animating }
+        .onChange(of: animating) { bright = $0 }
     }
 }
 

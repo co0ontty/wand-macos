@@ -462,6 +462,7 @@ struct WandBoardSessionList: View {
                                 Image(systemName: "terminal")
                                     .font(.system(size: 11))
                                     .foregroundColor(Theme.textMuted)
+                                    .wandLogoGlow(status: session.logoGlowStatus, archived: task.status == "archived")
                                 Text(session.title.isEmpty ? (session.provider.isEmpty ? "CLI 会话" : session.provider) : session.title)
                                     .font(.system(size: 12))
                                     .foregroundColor(Theme.textSecondary)

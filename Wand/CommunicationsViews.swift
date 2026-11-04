@@ -44,11 +44,10 @@ struct CommunicationsSidebar: View {
                     .buttonStyle(DesktopNavigationButtonStyle(active: store.listFilters.count > 0))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).stroke(Theme.border, lineWidth: 1))
                     .focused($filterFocused)
-                    .help("设置会话列表的任务阶段、工作区、归档及活动筛选，不影响当前会话")
+                    .help("更多筛选：任务阶段与查看归档，选择后即时生效，不影响当前会话")
                     .accessibilityLabel("筛选对话，\(store.listFilters.count) 个条件")
                     .popover(isPresented: $filtersOpen, arrowEdge: .top) {
-                        ConversationFilterPanel(filters: store.listFilters, groups: taskGroups,
-                            close: { filtersOpen = false }, apply: { store.listFilters = $0; filtersOpen = false })
+                        ConversationFilterPanel(store: store, close: { filtersOpen = false })
                     }
                     .onChange(of: filtersOpen) { if !$0 { filterFocused = true } }
                 }
@@ -137,12 +136,7 @@ struct CommunicationsSidebar: View {
         }
     }
 
-    private var filterSummary: String {
-        let filters = store.listFilters
-        let workspace = ConversationSessionEntry.workspaceOptions(taskGroups).first { $0.id == filters.workspace }?.label ?? "工作区不可用"
-        return [filters.taskStage.label, workspace, filters.archive == .all ? "" : "对话" + filters.archive.label,
-                filters.activityOnly ? "仅活动" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
-    }
+    private var filterSummary: String { store.filterSummary(groups: taskGroups) }
 
     private func sessions(for employeeId: String?) -> [ConversationSessionEntry] {
         guard let employeeId else { return [] }
@@ -261,108 +255,24 @@ struct CommunicationsSidebar: View {
 }
 
 private struct ConversationFilterPanel: View {
-    @State var filters: ConversationListFilters
-    let groups: [TaskDirectoryGroup]
+    @ObservedObject var store: CommunicationsStore
     let close: () -> Void
-    let apply: (ConversationListFilters) -> Void
-    @State private var workspaceOpen = false
-    @FocusState private var workspaceFocused: Bool
-
-    private var options: [(id: String, label: String)] { ConversationSessionEntry.workspaceOptions(groups) }
-    private var workspaceLabel: String { options.first { $0.id == filters.workspace }?.label ?? "工作区不可用" }
-    private let columnWidth: CGFloat = 292 / 3
-
-    private func closeTopLayer() {
-        if workspaceOpen { workspaceOpen = false } else { close() }
-    }
+    private var archivedOnly: Bool { store.listFilters.runtimeValues == [.archived] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ComposerPopoverHeader(title: "筛选对话", close: closeTopLayer)
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("状态")
-                    Picker("任务状态", selection: $filters.taskStage) {
-                        ForEach(ConversationTaskStage.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }.pickerStyle(.menu).labelsHidden()
-                        .help(filters.taskStage.label).accessibilityValue(filters.taskStage.label)
-                }.frame(width: columnWidth)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("工作区")
-                    Button { workspaceOpen = true } label: {
-                        HStack(spacing: 4) {
-                            Text(workspaceLabel).lineLimit(1).truncationMode(.tail)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.down").font(.system(size: 9))
-                        }.frame(maxWidth: .infinity)
-                    }.buttonStyle(.bordered).focused($workspaceFocused)
-                        .help(workspaceLabel).accessibilityLabel("工作区").accessibilityValue(workspaceLabel)
-                        .popover(isPresented: $workspaceOpen, arrowEdge: .bottom) {
-                            ConversationWorkspaceFilterPicker(options: options, selection: $filters.workspace) { workspaceOpen = false }
-                        }
-                        .onChange(of: workspaceOpen) { if !$0 { workspaceFocused = true } }
-                }.frame(width: columnWidth)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("归档")
-                    Picker("对话归档范围", selection: $filters.archive) {
-                        ForEach(ConversationArchiveFilter.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }.pickerStyle(.menu).labelsHidden()
-                        .help("对话" + filters.archive.label).accessibilityValue(filters.archive.label)
-                }.frame(width: columnWidth)
-            }.font(.system(size: 12)).lineLimit(1)
-            Toggle("只看活动会话", isOn: $filters.activityOnly).toggleStyle(.checkbox).font(.system(size: 11))
-            Divider()
-            HStack {
-                Button("重置") { filters = ConversationListFilters() }
-                Spacer()
-                Button("取消", action: closeTopLayer)
-                Button("应用筛选") { apply(filters) }.keyboardShortcut(.defaultAction)
+            ComposerPopoverHeader(title: "更多筛选", close: close)
+            Picker("任务阶段", selection: Binding(get: { store.taskStageFilter }, set: { store.taskStageFilter = $0; close() })) {
+                ForEach(ConversationTaskStage.allCases, id: \.self) { Text($0.label).tag($0) }
+            }.pickerStyle(.menu).help("选择后即时筛选列表，保留工作区与员工条件")
+            Button(archivedOnly ? "返回未归档会话" : "只看已归档会话") {
+                store.showArchivedSessions(!archivedOnly); close()
+            }.help("保留工作区与员工，切换到所选范围的全部运行状态")
+            if store.taskStageFilter != .all {
+                Button("清除任务阶段") { store.taskStageFilter = .all; close() }
             }
-            // Return in the child search field must not activate the parent's default action.
-            .disabled(workspaceOpen)
-        }.padding(16).frame(width: 340)
-    }
-}
-
-private struct ConversationWorkspaceFilterPicker: View {
-    var autofocus = true
-    let options: [(id: String, label: String)]
-    @Binding var selection: String
-    let close: () -> Void
-    @State private var query = ""
-    @FocusState private var searchFocused: Bool
-
-    private var matches: [(id: String, label: String)] {
-        options.filter { query.isEmpty || $0.label.localizedStandardContains(query) }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ComposerPopoverHeader(title: "选择工作区", close: close)
-            TextField("搜索工作区…", text: $query).textFieldStyle(.roundedBorder)
-                .focused($searchFocused).accessibilityLabel("搜索工作区")
-            if !options.contains(where: { $0.id == selection }) {
-                Text("已选工作区不可用，可重选或清除。").font(.system(size: 11)).foregroundColor(Theme.warning)
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(matches, id: \.id) { option in
-                        Button { selection = option.id; close() } label: {
-                            HStack(spacing: 6) {
-                                Text(option.label).lineLimit(1).truncationMode(.tail)
-                                Spacer(minLength: 0)
-                                if selection == option.id { Image(systemName: "checkmark") }
-                            }.padding(6).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(DesktopNavigationButtonStyle(active: selection == option.id))
-                            .help(option.label).accessibilityLabel(option.label)
-                            .accessibilityAddTraits(selection == option.id ? .isSelected : [])
-                    }
-                    if matches.isEmpty { Text("没有匹配的工作区").foregroundColor(Theme.textSecondary).padding(6) }
-                }
-            }.frame(maxHeight: 220)
-            AddWorkspaceButton { workspace in selection = "id:" + workspace.id; close() }
-        }.font(.system(size: 12)).padding(12).frame(width: 280)
-            .onAppear { searchFocused = autofocus }
+        }.font(.system(size: 12)).padding(16).frame(width: 260)
+            .onExitCommand(perform: close)
     }
 }
 
@@ -1242,76 +1152,32 @@ struct CapsuleCircleButtonStyle: ButtonStyle {
     }
 }
 
-/// The single desktop rail owns the same task/workspace facets as the flat list.
+/// Three independent facets share the flat list's state owner. Popovers leave the rail anchored.
 struct DesktopSidebarCapsules: View {
     @ObservedObject var store: CommunicationsStore
     let groups: [TaskDirectoryGroup]
     @Environment(\.workspaceAPI) private var workspaceAPI
-    private enum PickerKind { case runtime, workspace }
-    @State private var expanded: PickerKind?
-    @State private var searchOpen = false
     @State private var addingWorkspace = false
-    private var options: [(id: String, label: String)] { ConversationSessionEntry.workspaceOptions(groups) }
-    private let choices: [ConversationRuntimeFilter] = [.confirmation, .working, .all, .failed]
-    private func canonical(_ value: ConversationRuntimeFilter) -> ConversationRuntimeFilter {
-        switch value {
-        case .active, .running, .queued: return .working
-        case .attention, .approval, .waiting: return .confirmation
-        case .idle, .finished: return .all
-        default: return value
+    private enum PickerKind: String { case runtime = "运行状态", workspace = "工作区", employee = "人物" }
+    @State private var expanded: PickerKind?
+    private var workspaces: [(id: String, label: String)] { ConversationSessionEntry.workspaceOptions(groups) }
+    private var employees: [ConversationEmployeeFilterOption] { store.employeeOptions(groups: groups) }
+    private var runtimeOptions: [DesktopCapsuleFilterOption] {
+        ([ConversationRuntimeFilter.all] + ConversationRuntimeFilter.sidebarChoices).map {
+            DesktopCapsuleFilterOption(id: $0.rawValue, label: $0.label, symbol: runtimeSymbol($0))
         }
     }
-    private var selectedRuntime: ConversationRuntimeFilter { canonical(store.runtimeFilter) }
-    private var favoriteRuntime: ConversationRuntimeFilter {
-        let value = selectedRuntime == .all ? canonical(store.lastCapsuleRuntime) : selectedRuntime
-        return value == .all ? .working : value
+    private var workspaceOptions: [DesktopCapsuleFilterOption] {
+        workspaces.map { DesktopCapsuleFilterOption(id: $0.id, label: $0.label, symbol: $0.id == "all" ? "folder.badge.plus" : "folder") }
     }
-    private var favoriteWorkspace: (id: String, label: String) {
-        let id = store.workspaceFilter == "all" ? store.lastCapsuleWorkspace : store.workspaceFilter
-        return options.first { $0.id == id && $0.id != "all" }
-            ?? options.first { $0.id != "all" && $0.id != "none" }
-            ?? ("none", "未分配工作区")
+    private var employeeOptions: [DesktopCapsuleFilterOption] {
+        employees.map { DesktopCapsuleFilterOption(id: $0.id, label: $0.label, symbol: $0.id == "all" ? "person.2" : "person", avatar: $0.id == "all" || $0.id == "none" ? nil : $0.avatar) }
     }
     var body: some View {
         VStack(spacing: 8) {
-            Text("运行状态").font(.system(size: 10)).foregroundColor(Theme.textSecondary)
-            VStack(spacing: 4) {
-                runtimeButton(.all)
-                runtimeButton(favoriteRuntime)
-                if expanded == .runtime {
-                    ForEach(choices.filter { $0 != .all && $0 != favoriteRuntime }, id: \.self) { runtimeButton($0) }
-                }
-            }.modifier(CapsuleSurface())
-                .onHover { expanded = $0 ? .runtime : nil }
-                .onMoveCommand { if $0 == .down { expanded = .runtime } }
-                .onExitCommand { expanded = nil }
-            Text("工作区").font(.system(size: 10)).foregroundColor(Theme.textSecondary)
-            VStack(spacing: 4) {
-                if expanded == .workspace || searchOpen {
-                    Button { addingWorkspace = true } label: { Image(systemName: "plus").frame(width: 40, height: 40) }
-                        .buttonStyle(CapsuleCircleButtonStyle(active: false))
-                        .help("添加工作区：填写目录和别名")
-                        .accessibilityLabel("添加工作区")
-                }
-                workspaceButton(("all", "全部工作区"))
-                workspaceButton(favoriteWorkspace)
-                if expanded == .workspace || searchOpen {
-                    let rest = options.filter { $0.id != "all" && $0.id != favoriteWorkspace.id }
-                    ScrollView {
-                        VStack(spacing: 4) {
-                            ForEach(rest, id: \.id) { workspaceButton($0) }
-                            Button { searchOpen = true } label: { Image(systemName: "magnifyingglass").frame(width: 40, height: 40) }
-                                .buttonStyle(CapsuleCircleButtonStyle(active: searchOpen)).help("搜索工作区：按名称查找更多工作区").accessibilityLabel("搜索工作区")
-                                .popover(isPresented: $searchOpen, arrowEdge: .trailing) {
-                                    ConversationWorkspaceFilterPicker(options: options, selection: $store.workspaceFilter) { searchOpen = false; expanded = nil }
-                                }
-                        }
-                    }.frame(width: 40, height: min(CGFloat(rest.count + 1) * 44, 220))
-                }
-            }.modifier(CapsuleSurface())
-                .onHover { expanded = $0 ? .workspace : nil }
-                .onMoveCommand { if $0 == .down { expanded = .workspace } }
-                .onExitCommand { if !searchOpen { expanded = nil } }
+            capsule(.runtime, options: runtimeOptions)
+            capsule(.workspace, options: workspaceOptions)
+            capsule(.employee, options: employeeOptions)
         }.padding(.top, 12).padding(.bottom, 8)
         .sheet(isPresented: $addingWorkspace) {
             if let workspaceAPI {
@@ -1323,53 +1189,147 @@ struct DesktopSidebarCapsules: View {
             }
         }
     }
-    private struct CapsuleSurface: ViewModifier {
-        func body(content: Content) -> some View {
-            content.padding(4).background(Capsule().fill(Theme.surfaceElevated))
-                .overlay(Capsule().stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5))
+    private func selected(_ kind: PickerKind) -> [String] {
+        switch kind {
+        case .runtime: return ConversationRuntimeFilter.sidebarChoices.filter { store.runtimeFilters.contains($0) }.map(\.rawValue)
+        case .workspace: return ConversationFilterSelection.values(store.workspaceFilter)
+        case .employee: return ConversationFilterSelection.values(store.employeeFilter)
         }
     }
-    private func runtimeButton(_ value: ConversationRuntimeFilter) -> some View {
-        let symbol = value == .confirmation ? "exclamationmark.bubble" : value == .working ? "waveform.path.ecg" : value == .failed ? "xmark.circle" : "square.3.layers.3d"
-        let hint = value == .confirmation ? "需要我确认：查看等待审批或补充输入的会话"
-            : value == .working ? "运行中 / 排队中：查看正在执行或等待执行的会话"
-            : value == .failed ? "运行失败：查看执行失败的会话，统一归入我需要关注" : "全部运行状态：保留工作区和其他筛选条件"
-        return Button { store.runtimeFilter = value; store.activityOnly = false; expanded = nil } label: {
-            Image(systemName: symbol).frame(width: 40, height: 40)
-        }.buttonStyle(CapsuleCircleButtonStyle(active: selectedRuntime == value))
-            .help(hint).accessibilityLabel("筛选运行状态：" + value.label)
-            .accessibilityAddTraits(selectedRuntime == value ? .isSelected : [])
-            .accessibilityAction(named: Text("展开其他运行状态")) { expanded = .runtime }
+    private func isSelected(_ kind: PickerKind, _ id: String) -> Bool {
+        let values = selected(kind)
+        return id == "all" ? values.isEmpty : values.contains(id)
     }
-    private func workspaceInitials(_ label: String) -> String {
-        let words = label.components(separatedBy: CharacterSet(charactersIn: " _-/")).filter { !$0.isEmpty }
-        return (words.count > 1 ? words.prefix(2).map { String($0.prefix(1)) }.joined() : String(label.prefix(2))).uppercased()
+    private func toggle(_ kind: PickerKind, _ id: String) {
+        switch kind {
+        case .runtime: if let value = ConversationRuntimeFilter(rawValue: id) { store.toggleRuntime(value) }
+        case .workspace: store.toggleWorkspace(id)
+        case .employee: store.toggleEmployee(id)
+        }
     }
-    private func workspaceButton(_ option: (id: String, label: String)) -> some View {
-        Button { store.workspaceFilter = option.id; expanded = nil } label: {
-            Group {
-                if option.id == "all" {
-                    ZStack {
-                        Image(systemName: "folder").offset(x: -3, y: 3)
-                        Image(systemName: "folder.fill").foregroundColor(Theme.surfaceElevated).offset(x: 3, y: -3)
-                        Image(systemName: "folder").offset(x: 3, y: -3)
-                    }.font(.system(size: 17)).frame(width: 24, height: 24)
-                }
-                else if option.id == "none" { Image(systemName: "folder").font(.system(size: 20)) }
-                else {
-                    Image(systemName: "folder").font(.system(size: 20)).frame(width: 24, height: 24)
-                        .overlay(alignment: .bottomTrailing) {
-                            Text(workspaceInitials(option.label)).font(.system(size: 9, weight: .semibold))
-                                .padding(.horizontal, 2).background(Theme.surfaceElevated)
-                                .clipShape(RoundedRectangle(cornerRadius: 3)).offset(x: 4, y: 3)
+    private func favorite(_ kind: PickerKind, options: [DesktopCapsuleFilterOption]) -> DesktopCapsuleFilterOption? {
+        let remembered: [String]
+        switch kind {
+        case .runtime: remembered = ConversationRuntimeFilter.sidebarChoices.filter { store.lastCapsuleRuntime.selections.contains($0) }.map(\.rawValue)
+        case .workspace: remembered = ConversationFilterSelection.values(store.lastCapsuleWorkspace)
+        case .employee: remembered = ConversationFilterSelection.values(store.lastCapsuleEmployee)
+        }
+        let preferred = selected(kind).first ?? remembered.first
+        return options.first { $0.id == preferred && $0.id != "all" }
+            ?? options.first { $0.id != "all" && $0.id != "none" }
+            ?? options.first { $0.id == "none" }
+    }
+    private func capsule(_ kind: PickerKind, options: [DesktopCapsuleFilterOption]) -> some View {
+        VStack(spacing: 4) {
+            Text(kind.rawValue).font(.system(size: 10)).foregroundColor(Theme.textSecondary)
+            VStack(spacing: 4) {
+                if let all = options.first { optionButton(all, kind: kind) }
+                if let preferred = favorite(kind, options: options) {
+                    optionButton(preferred, kind: kind)
+                        .overlay(alignment: .topTrailing) {
+                            if selected(kind).count > 1 {
+                                Text("\(selected(kind).count)").font(.system(size: 9, weight: .semibold))
+                                    .padding(3).background(Theme.surfaceElevated, in: Circle()).allowsHitTesting(false)
+                            }
                         }
                 }
-            }.frame(width: 40, height: 40)
-        }.buttonStyle(CapsuleCircleButtonStyle(active: store.workspaceFilter == option.id))
-            .help(option.id == "all" ? "全部工作区：显示所有工作区的会话，保留运行状态筛选" : (option.id == "none" ? "未分配工作区：查看未关联到工作区的独立会话" : "工作区：\(option.label)"))
-            .accessibilityLabel("筛选工作区：" + option.label)
-            .accessibilityAddTraits(store.workspaceFilter == option.id ? .isSelected : [])
-            .accessibilityAction(named: Text("展开其他工作区")) { expanded = .workspace }
+                if kind == .workspace {
+                    Button { addingWorkspace = true } label: { Image(systemName: "plus").frame(width: 40, height: 40) }
+                        .buttonStyle(CapsuleCircleButtonStyle(active: false))
+                        .help("添加工作区：填写目录和别名").accessibilityLabel("添加工作区")
+                }
+                Button { expanded = expanded == kind ? nil : kind } label: {
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                        .rotationEffect(.degrees(expanded == kind ? 90 : 0)).frame(width: 40, height: 24)
+                }.buttonStyle(CapsuleCircleButtonStyle(active: expanded == kind))
+                    .help("展开\(kind.rawValue)筛选，可多选")
+                    .accessibilityLabel("展开\(kind.rawValue)筛选，可多选")
+                    .popover(isPresented: Binding(get: { expanded == kind }, set: { if !$0 { expanded = nil } }), arrowEdge: .trailing) {
+                        DesktopCapsuleFilterPicker(title: "筛选" + kind.rawValue, options: options,
+                            selected: { isSelected(kind, $0) }, toggle: { toggle(kind, $0) }, close: { expanded = nil })
+                    }
+            }.padding(4).background(Capsule().fill(Theme.surfaceElevated))
+                .overlay(Capsule().stroke(Color(nsColor: Theme.borderSubtle), lineWidth: 0.5))
+                .onMoveCommand { if $0 == .down { expanded = kind } }
+                .onExitCommand { expanded = nil }
+        }.wandMotion(value: expanded)
+    }
+    private func optionButton(_ option: DesktopCapsuleFilterOption, kind: PickerKind) -> some View {
+        Button { toggle(kind, option.id) } label: { option.portrait(size: 28).frame(width: 40, height: 40) }
+            .buttonStyle(CapsuleCircleButtonStyle(active: isSelected(kind, option.id)))
+            .help("筛选\(kind.rawValue)：\(option.label)；可在展开面板中多选")
+            .accessibilityLabel("筛选\(kind == .employee ? "员工" : kind.rawValue)：" + option.label)
+            .accessibilityAddTraits(isSelected(kind, option.id) ? .isSelected : [])
+            .accessibilityAction(named: Text("展开更多选项")) { expanded = kind }
+    }
+    private func runtimeSymbol(_ value: ConversationRuntimeFilter) -> String {
+        switch value {
+        case .confirmation: return "exclamationmark.bubble"
+        case .running: return "waveform.path.ecg"
+        case .queued: return "clock"
+        case .idle: return "circle"
+        case .finished: return "stop.circle"
+        case .failed: return "xmark.circle"
+        case .archived: return "archivebox"
+        default: return "square.3.layers.3d"
+        }
+    }
+}
+
+private struct DesktopCapsuleFilterOption: Identifiable {
+    let id: String
+    let label: String
+    let symbol: String
+    var avatar: String? = nil
+    @ViewBuilder func portrait(size: CGFloat) -> some View {
+        if let avatar { ContactAvatar(id: id, avatar: avatar, name: label, size: size) }
+        else if id.hasPrefix("id:") {
+            Image(systemName: symbol).font(.system(size: size * 0.65))
+                .overlay(alignment: .bottomTrailing) {
+                    Text(String(label.prefix(2)).uppercased()).font(.system(size: 8, weight: .semibold))
+                        .padding(.horizontal, 2).background(Theme.surfaceElevated).offset(x: 4, y: 3)
+                }
+        } else { Image(systemName: symbol).font(.system(size: size * 0.65)) }
+    }
+}
+
+private struct DesktopCapsuleFilterPicker: View {
+    let title: String
+    let options: [DesktopCapsuleFilterOption]
+    let selected: (String) -> Bool
+    let toggle: (String) -> Void
+    let close: () -> Void
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ComposerPopoverHeader(title: title, close: close)
+            TextField("搜索…", text: $query).textFieldStyle(.roundedBorder).focused($searchFocused)
+                .accessibilityLabel(title + "搜索")
+            Text("同类可多选；选择全部可清除此类条件。")
+                .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(options.filter { query.isEmpty || $0.label.localizedStandardContains(query) }) { option in
+                        Button { toggle(option.id) } label: {
+                            HStack(spacing: 8) {
+                                option.portrait(size: 24).frame(width: 28, height: 28)
+                                Text(option.label).lineLimit(1)
+                                Spacer(minLength: 0)
+                                Image(systemName: "checkmark").opacity(selected(option.id) ? 1 : 0)
+                            }.padding(6).contentShape(Rectangle())
+                        }.buttonStyle(DesktopNavigationButtonStyle(active: selected(option.id)))
+                            .accessibilityLabel(option.label).accessibilityValue(selected(option.id) ? "已选择" : "未选择")
+                            .accessibilityAddTraits(selected(option.id) ? .isSelected : [])
+                    }
+                    if !options.contains(where: { query.isEmpty || $0.label.localizedStandardContains(query) }) {
+                        Text("没有匹配的选项").foregroundColor(Theme.textSecondary).padding(8)
+                    }
+                }
+            }.frame(maxHeight: 260)
+            Button("完成", action: close).frame(maxWidth: .infinity, alignment: .trailing)
+        }.font(.system(size: 12)).padding(12).frame(width: 280)
+            .onAppear { searchFocused = true }.onExitCommand(perform: close)
     }
 }
 
@@ -1398,42 +1358,41 @@ struct DesktopUnifiedSessionList: View {
         let ids = Set(entries.map(\.id))
         return communications.items.filter { item in
             let id = item.communicationSessionId ?? item.sessionId
-            return id != nil && !ids.contains(id!) && communications.listFilters.runtime == .all && !communications.listFilters.hasFacets && !communications.activityOnly
+            return id != nil && !ids.contains(id!) && communications.listFilters.runtimeValues.isEmpty
+                && communications.taskStageFilter == .all && communications.listFilters.matchesWorkspace("none")
+                && communications.listFilters.matchesEmployee(item.peerEmployeeId) && !item.isArchived && !communications.activityOnly
                 && communications.archiveFilter.matches(item.isArchived)
                 && TaskListPresentation.searchMatches(communications.query, values: [item.displayTitle, item.preview])
         }
     }
     private var queuedTasks: [(group: TaskDirectoryGroup, task: WorkspaceTaskSummary, count: Int)] {
         let filters = communications.listFilters
-        guard [.all, .queued, .active, .working].contains(filters.runtime), filters.archive != .archived else { return [] }
+        guard (filters.runtimeValues.isEmpty || filters.runtimeValues.contains(.queued)), filters.archive != .archived, filters.matchesEmployee(nil) else { return [] }
         return store.conversationTaskGroups.flatMap { group in
             group.tasks.compactMap { task in
                 let count = task.queuedDispatchCount ?? (task.hasQueuedExecution ? task.queuedExecutionCount ?? 0 : 0)
                 let workspace = group.userAdded == true && !group.isSynthetic && !group.isGlobal ? "id:" + group.workspaceId : "none"
                 guard count > 0, task.archived != true, task.boardTaskId != nil,
-                      filters.workspace == "all" || filters.workspace == workspace,
+                      filters.matchesWorkspace(workspace),
                       filters.taskStage == .all || filters.taskStage.rawValue == task.boardTaskStatus,
                       TaskListPresentation.searchMatches(communications.query, values: [task.name, group.workspaceName]) else { return nil }
                 return (group, task, count)
             }
         }
     }
-    private var filterSummary: String {
-        let workspace = ConversationSessionEntry.workspaceOptions(store.conversationTaskGroups)
-            .first { $0.id == communications.workspaceFilter }?.label ?? "工作区不可用"
-        let stage = communications.taskStageFilter == .all ? "" : " · 任务阶段：\(communications.taskStageFilter.label)"
-        return "\(communications.listFilters.runtime.label)\(stage) · \(workspace)"
-    }
+    private var filterSummary: String { communications.filterSummary(groups: store.conversationTaskGroups) }
     var body: some View {
         VStack(spacing: 8) {
             searchBar
-            Text(filterSummary)
+            Text(filterSummary).lineLimit(2).help(filterSummary)
                 .font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
             Text("\(rows.count + legacyRows.count) 个会话 · \(queuedTasks.reduce(0) { $0 + $1.count }) 条任务派发排队中").font(.system(size: 11)).foregroundColor(Theme.textSecondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
             if let selectedID, entries.contains(where: { $0.id == selectedID }), !rows.contains(where: { $0.id == selectedID }) {
                 VStack(alignment: .leading) {
                     Text("当前会话不在筛选结果中").font(.system(size: 11))
-                    Button("定位当前会话") { communications.listFilters = ConversationListFilters(); communications.query = ""; locateID = selectedID }
+                    Button("定位当前会话") {
+                        if let entry = entries.first(where: { $0.id == selectedID }) { communications.revealSession(entry); locateID = selectedID }
+                    }.help("保留匹配当前会话的筛选与搜索，仅解除排除它的条件")
                 }.padding(.horizontal, 12)
             }
             if let error = error ?? store.taskGroupsError { Text(error).font(.system(size: 11)).foregroundColor(Theme.danger).padding(.horizontal, 12) }
@@ -1454,10 +1413,9 @@ struct DesktopUnifiedSessionList: View {
             TextField("搜索会话", text: $communications.query).textFieldStyle(.roundedBorder).accessibilityLabel("搜索会话")
             if !communications.query.isEmpty { Button { communications.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
             Button { filtersOpen = true } label: { Image(systemName: "line.3.horizontal.decrease").frame(width: 28, height: 28) }
-                .buttonStyle(WandIconButtonStyle()).help("设置会话列表的任务阶段、工作区、归档及活动筛选，不影响当前会话").accessibilityLabel("筛选会话")
+                .buttonStyle(WandIconButtonStyle()).help("更多筛选：任务阶段与查看归档，选择后即时生效，不影响当前会话").accessibilityLabel("更多会话筛选")
                 .popover(isPresented: $filtersOpen) {
-                    ConversationFilterPanel(filters: communications.listFilters, groups: store.conversationTaskGroups,
-                        close: { filtersOpen = false }, apply: { communications.listFilters = $0; filtersOpen = false })
+                    ConversationFilterPanel(store: communications, close: { filtersOpen = false })
                 }
         }.padding(.horizontal, 12)
     }

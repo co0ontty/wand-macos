@@ -440,11 +440,13 @@ final class WandAPI {
         input: String,
         view: String? = nil,
         shortcutKey: String? = nil,
-        respondImmediately: Bool = false
+        respondImmediately: Bool = false,
+        expectedQuestionId: String? = nil
     ) async throws -> SessionSnapshot {
         var body: [String: Any] = ["input": input]
         if let view { body["view"] = view }
         if let shortcutKey { body["shortcutKey"] = shortcutKey }
+        if let expectedQuestionId { body["expectedQuestionId"] = expectedQuestionId }
         if respondImmediately {
             body["respondImmediately"] = true
             body["idempotencyKey"] = UUID().uuidString

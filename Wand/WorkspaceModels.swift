@@ -1094,10 +1094,21 @@ struct WorkspaceTaskDetail: Codable, Equatable, Identifiable {
 }
 
 enum ConversationRuntimeFilter: String, CaseIterable {
-    case all, active, running, attention, approval, waiting, queued, idle, failed, finished, confirmation, working
+    case all, active, running, attention, approval, waiting, queued, idle, failed, finished, confirmation, working, archived
+    static let sidebarChoices: [Self] = [.confirmation, .running, .queued, .idle, .finished, .failed, .archived]
+    /// Read the earlier coarse preferences without changing the session's real state.
+    var selections: Set<Self> {
+        switch self {
+        case .all: return []
+        case .working, .active: return [.running, .queued]
+        case .attention, .approval, .waiting: return [.confirmation]
+        default: return [self]
+        }
+    }
     var label: String {
         switch self {
         case .all: return "全部"
+        case .archived: return "已归档"
         case .confirmation: return "需要我确认"
         case .working: return "运行中 / 排队中"
         case .active: return "活动"
@@ -1123,28 +1134,31 @@ enum ConversationRuntimeFilter: String, CaseIterable {
         !running(session) && !attention(session) && (session.executionStatus == "queued" || session.status == "queued")
     }
     func matches(_ session: WorkspaceSessionSummary) -> Bool {
-        if self == .all { return true }
+        if self == .all { return session.archived != true }
+        if self == .archived { return session.archived == true }
         if self == .failed { return session.status == "failed" }
         if self == .finished { return ["exited", "stopped"].contains(session.status ?? "") }
         guard session.archived != true else { return false }
         switch self {
-        case .all: return true
+        case .all, .archived: return true
         case .confirmation: return ["permission-blocked", "permission", "waiting-input", "waiting_input"].contains(session.status ?? "")
-        case .working: return Self.running(session) || Self.queued(session)
+        case .working: return Self.running(session) || Self.queued(session) || session.isJustCompleted
         case .active: return TaskListPresentation.isActive(session, selectedSessionId: nil)
-        case .running: return Self.running(session)
+        case .running: return !Self.queued(session) && !Self.attention(session) && (Self.running(session) || session.isJustCompleted)
         case .attention: return Self.attention(session)
         case .approval: return ["permission-blocked", "permission"].contains(session.status ?? "")
         case .waiting: return ["waiting-input", "waiting_input"].contains(session.status ?? "")
         case .queued: return Self.queued(session)
         case .failed: return session.status == "failed"
         case .finished: return ["exited", "stopped"].contains(session.status ?? "")
-        case .idle: return !Self.running(session) && !Self.attention(session) && !Self.queued(session) && ["running", "idle"].contains(session.status ?? "")
+        case .idle: return !Self.running(session) && !Self.attention(session) && !Self.queued(session) && !session.isJustCompleted && ["running", "idle"].contains(session.status ?? "")
         }
     }
     static func statusLabel(_ session: WorkspaceSessionSummary) -> String {
+        if session.archived == true { return "已归档" }
+        if session.isJustCompleted { return "刚完成" }
         for value in [Self.approval, .waiting, .failed, .running, .queued, .finished, .idle] where value.matches(session) { return value.label }
-        return session.archived == true ? "已归档" : "状态未知"
+        return "状态未知"
     }
 }
 
@@ -1175,6 +1189,34 @@ enum ConversationArchiveFilter: String, CaseIterable {
     }
 }
 
+/// A single value remains compatible with old preferences; arrays preserve opaque IDs.
+enum ConversationFilterSelection {
+    static func values(_ value: String) -> [String] {
+        let values = value.hasPrefix("[")
+            ? (try? JSONDecoder().decode([String].self, from: Data(value.utf8))) ?? []
+            : value == "all" || value.isEmpty ? [] : [value]
+        var seen = Set<String>()
+        return values.filter { !$0.isEmpty && $0 != "all" && seen.insert($0).inserted }
+    }
+    static func toggling(_ value: String, option: String) -> String {
+        guard option != "all" else { return "all" }
+        let current = values(value)
+        let next = current.contains(option) ? current.filter { $0 != option } : current + [option]
+        guard next.count > 1 else { return next.first ?? "all" }
+        return String(data: (try? JSONEncoder().encode(next)) ?? Data(), encoding: .utf8) ?? "all"
+    }
+    static func matches(_ value: String, option: String?) -> Bool {
+        let selected = values(value)
+        return selected.isEmpty || option.map { selected.contains($0) } == true
+    }
+}
+
+struct ConversationEmployeeFilterOption: Identifiable {
+    let id: String
+    let label: String
+    var avatar = ""
+}
+
 struct ConversationListFilters: Equatable {
     var runtime: ConversationRuntimeFilter = .all
     var taskStage: ConversationTaskStage = .all
@@ -1182,8 +1224,26 @@ struct ConversationListFilters: Equatable {
     var workspace = "all"
     var archive: ConversationArchiveFilter = .all
     var activityOnly = false
-    var hasFacets: Bool { taskStage != .all || workspace != "all" }
-    var count: Int { (taskStage == .all ? 0 : 1) + (workspace == "all" ? 0 : 1) + (archive == .all ? 0 : 1) + (activityOnly || runtime != .all ? 1 : 0) }
+    var runtimes: Set<ConversationRuntimeFilter> = []
+    var employee = "all"
+    var runtimeValues: Set<ConversationRuntimeFilter> { runtimes.isEmpty ? runtime.selections : runtimes }
+    var runtimeLabel: String {
+        let labels = ConversationRuntimeFilter.sidebarChoices.filter { runtimeValues.contains($0) }.map(\.label)
+        return labels.isEmpty ? "全部" : labels.joined(separator: "、")
+    }
+    var hasFacets: Bool { taskStage != .all || workspace != "all" || employee != "all" }
+    var count: Int { (taskStage == .all ? 0 : 1) + (workspace == "all" ? 0 : 1) + (employee == "all" ? 0 : 1) + (archive == .all ? 0 : 1) + (activityOnly || !runtimeValues.isEmpty ? 1 : 0) }
+    func matchesRuntime(_ session: WorkspaceSessionSummary, archived: Bool? = nil) -> Bool {
+        let isArchived = archived ?? (session.archived == true)
+        if runtimeValues.isEmpty { return archive == .archived ? isArchived : !isArchived }
+        return runtimeValues.contains { value in
+            if value == .archived { return isArchived }
+            if isArchived && value != .failed && value != .finished { return false }
+            return value.matches(session)
+        }
+    }
+    func matchesWorkspace(_ value: String?) -> Bool { ConversationFilterSelection.matches(workspace, option: value) }
+    func matchesEmployee(_ value: String?) -> Bool { ConversationFilterSelection.matches(employee, option: value?.isEmpty == false ? value : "none") }
 }
 
 struct ConversationSessionEntry: Identifiable {
@@ -1213,9 +1273,23 @@ struct ConversationSessionEntry: Identifiable {
     var caption: String { (taskStage?.label ?? "任务状态未知") + " · " + workspaceLabel }
     var archived: Bool { session.archived == true || task?.archived == true }
 
+    func revealing(_ filters: ConversationListFilters) -> ConversationListFilters {
+        var result = filters
+        if !filters.matchesRuntime(session, archived: archived) {
+            result.runtime = .all
+            result.runtimes = archived ? [.archived] : []
+        }
+        if filters.taskStage != .all && taskStage != filters.taskStage { result.taskStage = .all }
+        if !filters.matchesWorkspace(workspace) { result.workspace = "all" }
+        if !filters.matchesEmployee(session.employeeId) { result.employee = "all" }
+        if !filters.archive.matches(archived) { result.archive = .all }
+        if filters.activityOnly && (archived || !TaskListPresentation.isActive(session, selectedSessionId: nil)) { result.activityOnly = false }
+        return result
+    }
+
     func matches(_ filters: ConversationListFilters, query: String, parentTitle: String? = nil, conversationArchived: Bool = false) -> Bool {
-        (!archived || [ConversationRuntimeFilter.all, .failed, .finished].contains(filters.runtime)) && filters.runtime.matches(session) && (filters.taskStage == .all || taskStage == filters.taskStage)
-            && (filters.workspace == "all" || workspace == filters.workspace)
+        filters.matchesRuntime(session, archived: archived) && (filters.taskStage == .all || taskStage == filters.taskStage)
+            && filters.matchesWorkspace(workspace) && filters.matchesEmployee(session.employeeId)
             && filters.archive.matches(archived || conversationArchived)
             && (!filters.activityOnly || (!archived && !conversationArchived && TaskListPresentation.isActive(session, selectedSessionId: nil)))
             && TaskListPresentation.searchMatches(query, values: [parentTitle, session.employeeName, session.title,
@@ -1240,7 +1314,8 @@ struct ConversationSessionEntry: Identifiable {
         let owned = entries.filter { $0.session.employeeId == employeeId }
         if owned.contains(where: { $0.matches(filters, query: query, parentTitle: item.displayTitle, conversationArchived: item.isArchived) }) { return true }
         // An empty DM has no evidence for either facet, even if the task request failed.
-        return owned.isEmpty && !filters.hasFacets && !filters.activityOnly && filters.archive.matches(item.isArchived)
+        return owned.isEmpty && filters.taskStage == .all && filters.workspace == "all" && filters.matchesEmployee(employeeId)
+            && filters.runtimeValues.isEmpty && !filters.activityOnly && !item.isArchived && filters.archive.matches(item.isArchived)
             && TaskListPresentation.searchMatches(query, values: [item.displayTitle, item.preview])
     }
 

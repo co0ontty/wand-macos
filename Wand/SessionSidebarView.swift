@@ -963,6 +963,8 @@ struct SessionTile: View {
                 }
             }
             .frame(width: session.employeeId == nil ? 18 : 32, height: session.employeeId == nil ? 18 : 32)
+            .wandLogoGlow(status: isSelecting ? "none" : session.activityStatus,
+                          archived: session.archived == true || isSelecting, justCompleted: isJustCompleted)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)

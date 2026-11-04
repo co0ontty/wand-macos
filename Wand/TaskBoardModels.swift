@@ -342,6 +342,15 @@ struct WandBoardTaskSession: Codable, Equatable, Identifiable {
     var isRunning: Bool {
         activityLabel == "运行中"
     }
+    /// Logo feedback shares the existing activity projection and preserves thinking/attention colors.
+    var logoGlowStatus: String {
+        if archived == true { return "none" }
+        if permissionBlocked == true { return "permission" }
+        if ["permission-blocked", "waiting-input", "waiting_input", "needs_input", "reconnecting", "failed"].contains(status) { return status }
+        if isRunning { return status == "thinking" ? "thinking" : "running" }
+        if executionStatus == "queued" || status == "queued" { return "queued" }
+        return "none"
+    }
     var displayPurpose: String {
         let value = purpose?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return value.isEmpty ? title : value
