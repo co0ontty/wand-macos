@@ -1801,50 +1801,54 @@ final class SidebarLiveTests: XCTestCase {
         TaskListPresentation.discoverDirectories(groups, known: &known, expanded: &expanded)
         let projected = TaskListPresentation.sidebarDirectoryGroups(groups, workspaces: [], query: "", activeOnly: false,
             selectedSessionId: nil, selectedTaskId: nil)
-        XCTAssertEqual(Set(projected.flatMap(\.tasks).map(\.id)), Set(tasks.map(\.id)))
+        // Directory projection only lists tasks that own sessions or an active
+        // execution (plus their ancestors); session-less idle tasks are not rows.
+        let projectedIDs = Set(projected.flatMap(\.tasks).map(\.id))
+        XCTAssertTrue(projectedIDs.isSubset(of: Set(groups.flatMap(\.tasks).map(\.id))))
+        XCTAssertTrue(tasks.filter { $0.hasActiveExecution || !$0.sessions.isEmpty }.allSatisfy { projectedIDs.contains($0.id) },
+            "Every task with sessions or an active execution must be projected")
         XCTAssertTrue(projected.filter { !$0.tasks.isEmpty }.allSatisfy { expanded.contains($0.id) })
         let recent = TaskListPresentation.recentGroups(groups, query: "", activeOnly: false, selectedSessionId: nil)
         let expectedSessions = tasks.flatMap(\.sessions) + groups.flatMap(\.standaloneSessions)
         XCTAssertEqual(Set(recent.flatMap(\.entries).map(\.id)), Set(expectedSessions.filter { $0.archived != true && $0.teamChat == nil }.map(\.id)))
-        storage.set(false, forKey: "wand.desktop.sidebarRecent")
         storage.set(false, forKey: "wand.desktop.sidebarActiveOnly")
         let host = NSHostingView(rootView: MainShellView(serverURL: origin, token: token).defaultAppStorage(storage))
         host.frame = NSRect(x: 0, y: 0, width: 1280, height: 850)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.contentView = host; window.orderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil }
-        host.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 1_500_000_000); host.layoutSubtreeIfNeeded()
+        // The main shell renders DesktopUnifiedSessionList (session rows), not the
+        // retired WorkspaceListView task rows; poll until the store finishes loading.
+        // LazyVStack only materializes visible rows, so accept any rendered row.
+        var foundRow: NSView?
+        for _ in 0..<80 {
+            host.layoutSubtreeIfNeeded()
+            if let found = sidebarPresenceView(host, idPrefix: "desktop-session-row-") { foundRow = found; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let sessionRow = try XCTUnwrap(foundRow, "An actual loaded session must be rendered in the unified list")
+        let rowID = try XCTUnwrap(sessionRow.identifier?.rawValue, "Rendered session row must carry its session id")
         try captureSidebar(host, name: "installed-directory")
-        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"),
-            "An actual loaded task must be rendered before any expand click")
-        let searchButton = try XCTUnwrap(sidebarPresenceView(host, id: "sidebar-search-button"))
-        let buttonFrame = searchButton.convert(searchButton.bounds, to: host)
-        try clickSidebarMarker(host, window: window, id: "sidebar-search-button")
+        let searchField = try XCTUnwrap(sidebarPresenceView(host, id: "desktop-session-search"))
+        let searchFrame = searchField.convert(searchField.bounds, to: host)
+        try clickSidebarMarker(host, window: window, id: "desktop-session-search")
         try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
         let field = try XCTUnwrap(sidebarDescendants(host).compactMap { $0 as? NSTextField }
-            .first { $0.placeholderString == "搜索工作区、任务或会话" })
+            .first { $0.placeholderString == "搜索会话" })
         let editor = try XCTUnwrap(field.currentEditor() as? NSTextView, "Search focuses the native input immediately")
         editor.insertText("no-match-sidebar-acceptance", replacementRange: NSRange(location: 0, length: 0))
         try await Task.sleep(nanoseconds: 250_000_000); host.layoutSubtreeIfNeeded()
-        XCTAssertNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"))
-        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
-        window.sendEvent(escape)
-        try await Task.sleep(nanoseconds: 350_000_000); host.layoutSubtreeIfNeeded()
-        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"), "Escape clears the search and restores tasks")
-        XCTAssertEqual(searchButton.convert(searchButton.bounds, to: host), buttonFrame, "Search never moves its trigger")
-        storage.set(true, forKey: "wand.desktop.sidebarRecent")
-        try await Task.sleep(nanoseconds: 400_000_000); host.layoutSubtreeIfNeeded()
-        try captureSidebar(host, name: "installed-recent")
-        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-recent-\(try XCTUnwrap(recent.first?.entries.first).id)"))
+        XCTAssertNil(sidebarPresenceView(host, id: rowID))
+        try clickSidebarMarker(host, window: window, id: "desktop-session-search-clear")
+        try await Task.sleep(nanoseconds: 300_000_000); host.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(sidebarPresenceView(host, id: rowID), "Clearing the search restores sessions")
+        XCTAssertEqual(searchField.convert(searchField.bounds, to: host), searchFrame, "Search never moves its trigger")
         storage.set(true, forKey: "wand.desktop.sidebarActiveOnly")
         try await Task.sleep(nanoseconds: 400_000_000); host.layoutSubtreeIfNeeded()
         try captureSidebar(host, name: "installed-active")
         storage.set(false, forKey: "wand.desktop.sidebarActiveOnly")
-        storage.set(false, forKey: "wand.desktop.sidebarRecent")
         try await Task.sleep(nanoseconds: 400_000_000); host.layoutSubtreeIfNeeded()
-        XCTAssertNotNil(sidebarPresenceView(host, id: "sidebar-task-\(tasks[0].id)"), "Switching views never loses the task projection")
+        XCTAssertNotNil(sidebarPresenceView(host, id: rowID), "Switching views never loses the session projection")
     }
 
 }
@@ -1863,6 +1867,12 @@ private func captureSidebar(_ host: NSView, name: String) throws {
 private func sidebarPresenceView(_ root: NSView, id: String) -> NSView? {
     if root.identifier?.rawValue == id && root.bounds.width > 0 && root.bounds.height > 0 { return root }
     return root.subviews.compactMap { sidebarPresenceView($0, id: id) }.first
+}
+
+@MainActor
+private func sidebarPresenceView(_ root: NSView, idPrefix: String) -> NSView? {
+    if let raw = root.identifier?.rawValue, raw.hasPrefix(idPrefix), root.bounds.width > 0 && root.bounds.height > 0 { return root }
+    return root.subviews.compactMap { sidebarPresenceView($0, idPrefix: idPrefix) }.first
 }
 
 @MainActor

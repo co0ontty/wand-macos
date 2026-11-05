@@ -88,6 +88,18 @@ if [[ -n "${WAND_BUILD_DIR:-}" && ( "$BUILD_DIR" != /* || -e "$BUILD_DIR" ) ]] \
 fi
 ICONSET_DIR="$PROJECT_ROOT/Wand/Assets.xcassets/AppIcon.appiconset"
 
+# 同一 BUILD_DIR 互斥：两个构建共用默认目录时，后者的 rm -rf 会删掉前者
+# 正在 cp -R 的产物，表现为 fcopyfile I/O error / build.db disk I/O error。
+# 用 BUILD_DIR 的同级原子目录锁串行化同目录构建，冲突时快速失败并说明，
+# 不等锁、不静默删除他人产物。锁目录在 BUILD_DIR 之外，rm -rf 不会清掉它。
+BUILD_LOCK_DIR="${BUILD_DIR}.lockd"
+if ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; then
+  echo "❌ 同一构建目录已有构建在进行（锁：${BUILD_LOCK_DIR}），请等待其完成或改用独立的 WAND_BUILD_DIR / WAND_DIST_DIR。" >&2
+  echo "   若确认无构建在运行，可手动删除该锁目录后重试。" >&2
+  exit 1
+fi
+trap 'rmdir "$BUILD_LOCK_DIR" 2>/dev/null || true' EXIT
+
 rm -rf "$BUILD_DIR" "$DIST_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR"
 
@@ -140,7 +152,7 @@ ZIP_OUT="$DIST_DIR/wand-v${ASSET_VERSION}.zip"
 
 echo "==> hdiutil 制作 DMG"
 STAGING=$(mktemp -d)
-trap 'rm -rf "$STAGING"' EXIT
+trap 'rm -rf "$STAGING"; rmdir "$BUILD_LOCK_DIR" 2>/dev/null || true' EXIT
 cp -R "$APP_DST" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 cp "$PROJECT_ROOT/首次打开说明.txt" "$STAGING/首次打开说明.txt"

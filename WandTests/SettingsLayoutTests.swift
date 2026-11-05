@@ -505,7 +505,6 @@ final class SettingsLayoutTests: XCTestCase {
         let origin = try XCTUnwrap(URL(string: try XCTUnwrap(storage.string(forKey: "wand.serverURL"))))
         let token = try XCTUnwrap(storage.string(forKey: "wand.token"))
         storage.set(true, forKey: "wand.desktop.sidebarVisible")
-        storage.set(false, forKey: "wand.desktop.sidebarRecent")
         storage.set(false, forKey: "wand.desktop.sidebarActiveOnly")
         let updater = manager(storage)
         let api = WandAPI(baseURL: origin, token: token)
@@ -526,7 +525,7 @@ final class SettingsLayoutTests: XCTestCase {
         input.insertText("仅本机设置页面验收草稿，不发送", replacementRange: NSRange(location: 0, length: 0))
         await settle(host)
         let originalText = input.string
-        let list = try marker("sidebar-search-slot", in: host)
+        let list = try marker("desktop-sidebar-body", in: host)
         let rail = try marker("desktop-navigation-settings", in: host)
         let railFrame = rail.convert(rail.bounds, to: host)
         try clickMarker("desktop-navigation-settings", host: host, window: window)
@@ -546,13 +545,19 @@ final class SettingsLayoutTests: XCTestCase {
         await settle(host)
         let picker = try XCTUnwrap(descendants(host).compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 3 })
         XCTAssertTrue(picker.isEnabled)
-        try clickMarker("settings-close-page", host: host, window: window)
+        // Wide settings (>=720pt) keeps the directory beside the pane and has no
+        // settings-close-page; its back chevron returns to the work page instead.
+        if descendants(host).contains(where: { $0.identifier?.rawValue == "settings-close-page" }) {
+            try clickMarker("settings-close-page", host: host, window: window)
+        } else {
+            try clickMarker("settings-back", host: host, window: window)
+        }
         await settle(host)
         XCTAssertFalse(picker.isEnabled)
         XCTAssertTrue(input.isEditable)
         XCTAssertEqual(input.string, originalText)
         XCTAssertTrue(descendants(host).contains { $0 === list })
-        XCTAssertEqual(try marker("desktop-sidebar-header", in: host).bounds.width, 316, accuracy: 1)
+        XCTAssertEqual(try marker("desktop-sidebar-header", in: host).bounds.width, 336, accuracy: 1)
         try clickMarker("desktop-navigation-settings", host: host, window: window)
         await settle(host)
         XCTAssertTrue(descendants(host).contains { $0 === picker })
@@ -589,7 +594,9 @@ final class SettingsLayoutTests: XCTestCase {
     }
 
     private func marker(_ id: String, in host: NSView) throws -> NSView {
-        try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id })
+        let present = descendants(host).compactMap { $0.identifier?.rawValue }
+        return try XCTUnwrap(descendants(host).first { $0.identifier?.rawValue == id },
+            "Missing marker '\(id)'; present markers: \(present.sorted())")
     }
 
     private func clickMarker(_ id: String, host: NSView, window: NSWindow) throws {

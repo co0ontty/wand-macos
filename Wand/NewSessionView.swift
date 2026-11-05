@@ -455,7 +455,7 @@ struct NewSessionView: View {
             return Set(allCases)
         }
 
-        func hint(for tool: Provider) -> String {
+        func hint(for tool: Provider, sessionType: SessionType) -> String {
             if tool == .codex {
                 return "Codex 自动批准工具调用，并关闭 Codex 的沙盒限制。"
             }
@@ -470,7 +470,11 @@ struct NewSessionView: View {
                     : "OpenCode 使用自身权限确认；支持 TUI 与 JSON 结构化会话。"
             }
             if tool == .qoder {
-                return "Qoder 在所有模式下都跳过工具权限确认。"
+                // 对齐 qoderAcpMode：结构化默认走 default 审批桥；非结构化（PTY 以
+                // bypass_permissions 启动）与全权限/托管/自动编辑走 yolo 自动批准。
+                return sessionType != .structured || self == .fullAccess || self == .managed || self == .autoEdit
+                    ? "Qoder 自动批准工具权限请求。"
+                    : "Qoder 保留工具权限确认，需要批准时会在对话中询问。"
             }
             if tool == .pi {
                 return "Pi CLI 使用自身工具与扩展配置。"
@@ -522,7 +526,7 @@ struct NewSessionView: View {
         if draft.provider == .pi && draft.engine == "sdk" && draft.sessionType == .structured {
             return "Wand Agent 在 Wand 内执行，使用当前会话配置的工具与扩展。"
         }
-        return draft.mode.hint(for: draft.provider)
+        return draft.mode.hint(for: draft.provider, sessionType: draft.sessionType)
     }
 
     private var sessionKindHint: String {
@@ -648,7 +652,7 @@ struct NewSessionView: View {
             }
         } content: { width in
             creationFeedback
-                .frame(maxWidth: 760)
+                .chatContentWidth()
                 .padding(.bottom, draft.errorMessage == nil ? 0 : 12)
             VStack(spacing: 0) {
                 submissionReadiness
@@ -681,7 +685,7 @@ struct NewSessionView: View {
                 .padding(.top, 6).padding(.horizontal, 2)
                 .disabled(draft.creating || draft.creationUnconfirmed)
             }
-            .frame(maxWidth: 760)
+            .chatContentWidth()
             if let error = draft.taskError {
                 VStack(alignment: .leading, spacing: 8) {
                     errorBanner(error)
@@ -1579,7 +1583,9 @@ struct NewWorkPage<Heading: View, Content: View>: View {
                     Spacer(minLength: 32)
                     heading(geometry.size.width)
                     Spacer(minLength: 32)
-                    content(geometry.size.width).frame(maxWidth: 760)
+                    // 新建会话输入区跟随已有会话的宽度偏好（铺满/居中）；
+                    // 任务创建页在自身内容上显式封顶，保留独立阅读布局。
+                    content(geometry.size.width).chatContentWidth()
                 }
                 .frame(minHeight: max(0, geometry.size.height - 64), alignment: .top)
                 .padding(.horizontal, geometry.size.width < 600 ? 16 : 28).padding(.vertical, 32)

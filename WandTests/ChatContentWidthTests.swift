@@ -126,6 +126,38 @@ final class ChatContentWidthTests: XCTestCase {
         XCTAssertNil(second.string(forKey: ChatContentWidth.storageKey))
     }
 
+    func testNewWorkPageContentFollowsPreferenceAndCappedPageKeepsIndependentWidth() async throws {
+        let storage = defaults()
+        // 新建会话：NewWorkPage 内容跟随偏好，铺满时占满、居中时为 940。
+        storage.set("full", forKey: ChatContentWidth.storageKey)
+        let host = NSHostingView(rootView: NewWorkPage { _ in Text("标题") } content: { _ in
+            Color.clear.frame(maxWidth: .infinity, minHeight: 80).background(WidthProbe(id: "new-work"))
+        }.defaultAppStorage(storage))
+        host.frame = NSRect(x: 0, y: 0, width: 1200, height: 650)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        await settle(host)
+        // NewWorkPage 自带两侧 28pt 内边距，铺满时内容宽为 1200-56。
+        XCTAssertEqual(try width("new-work", in: host), 1144, accuracy: 1)
+        storage.set("column", forKey: ChatContentWidth.storageKey)
+        await settle(host)
+        XCTAssertEqual(try width("new-work", in: host), 940, accuracy: 1)
+        window.contentView = nil
+        // 任务创建页：内容自身封顶 760，偏好切换不改变其宽度。
+        let cappedHost = NSHostingView(rootView: NewWorkPage { _ in Text("标题") } content: { _ in
+            Color.clear.frame(maxWidth: .infinity, minHeight: 80).frame(maxWidth: 760).background(WidthProbe(id: "capped-work"))
+        }.defaultAppStorage(storage))
+        cappedHost.frame = NSRect(x: 0, y: 0, width: 1200, height: 650)
+        let cappedWindow = NSWindow(contentRect: cappedHost.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        cappedWindow.contentView = cappedHost
+        await settle(cappedHost)
+        XCTAssertEqual(try width("capped-work", in: cappedHost), 760, accuracy: 1)
+        storage.set("full", forKey: ChatContentWidth.storageKey)
+        await settle(cappedHost)
+        XCTAssertEqual(try width("capped-work", in: cappedHost), 760, accuracy: 1)
+        cappedWindow.contentView = nil
+    }
+
     func testNativeStructuredWidthScreenshotMatrix() async throws {
         guard let path = ProcessInfo.processInfo.environment["WAND_CHAT_WIDTH_VISUAL_DIR"] else {
             throw XCTSkip("opt-in native width screenshot matrix")

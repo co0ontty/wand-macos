@@ -276,23 +276,6 @@ private struct ConversationFilterPanel: View {
     }
 }
 
-/// Text-only activity toggle shared by the workspace and conversation filters.
-struct SidebarActivityFilter: View {
-    let active: Bool
-    var label = "只看活动会话"
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            Text("活动").font(.system(size: 11, weight: .medium)).frame(width: 48, height: 28)
-                .foregroundColor(active ? Theme.wandAccent : Theme.textSecondary)
-                .background(Capsule().fill(active ? Theme.wandAccent.opacity(0.12) : .clear))
-                .overlay(Capsule().stroke(active ? Theme.wandAccent.opacity(0.45) : Theme.border, lineWidth: 1))
-        }.buttonStyle(.plain).wandMotion(value: active)
-            .help("在跑、待处理及尚未查看的刚完成内容")
-            .accessibilityLabel(label).accessibilityValue(active ? "已开启" : "已关闭")
-    }
-}
-
 struct CommunicationsContent: View {
     @Environment(\.desktopPageActive) private var pageActive
     @ObservedObject var store: CommunicationsStore
@@ -1411,7 +1394,9 @@ struct DesktopUnifiedSessionList: View {
     private var searchBar: some View {
         HStack {
             TextField("搜索会话", text: $communications.query).textFieldStyle(.roundedBorder).accessibilityLabel("搜索会话")
-            if !communications.query.isEmpty { Button { communications.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
+                .sidebarPresence("desktop-session-search")
+            if !communications.query.isEmpty { Button { communications.query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空搜索")
+                .sidebarPresence("desktop-session-search-clear") }
             Button { filtersOpen = true } label: { Image(systemName: "line.3.horizontal.decrease").frame(width: 28, height: 28) }
                 .buttonStyle(WandIconButtonStyle()).help("更多筛选：任务阶段与查看归档，选择后即时生效，不影响当前会话").accessibilityLabel("更多会话筛选")
                 .popover(isPresented: $filtersOpen) {
@@ -1487,6 +1472,7 @@ struct DesktopUnifiedSessionList: View {
                 if TaskListPresentation.isActive(session, selectedSessionId: nil) { Image(systemName: "circle.fill").font(.system(size: 6)).foregroundColor(Theme.success).accessibilityLabel("活动会话") }
             }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).padding(.horizontal, 8)
         }.buttonStyle(DesktopNavigationButtonStyle(active: selectedID == session.id))
+            .sidebarPresence("desktop-session-row-\(entry.id)")
             .help((session.title ?? session.providerLabel) + " · " + entry.caption)
             .contextMenu {
                 Button("打开会话") { onOpen(session.id) }
