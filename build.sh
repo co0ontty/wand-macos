@@ -93,9 +93,19 @@ ICONSET_DIR="$PROJECT_ROOT/Wand/Assets.xcassets/AppIcon.appiconset"
 # 用 BUILD_DIR 的同级原子目录锁串行化同目录构建，冲突时快速失败并说明，
 # 不等锁、不静默删除他人产物。锁目录在 BUILD_DIR 之外，rm -rf 不会清掉它。
 BUILD_LOCK_DIR="${BUILD_DIR}.lockd"
-if ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; then
-  echo "❌ 同一构建目录已有构建在进行（锁：${BUILD_LOCK_DIR}），请等待其完成或改用独立的 WAND_BUILD_DIR / WAND_DIST_DIR。" >&2
-  echo "   若确认无构建在运行，可手动删除该锁目录后重试。" >&2
+# 锁目录的父目录可能尚不存在（WAND_BUILD_DIR/WAND_DIST_DIR 允许指向全新嵌套
+# 路径）：先安全创建父目录，失败报真实原因，不要误报锁冲突。
+if ! lock_parent_err="$(mkdir -p "$(dirname "$BUILD_LOCK_DIR")" 2>&1)"; then
+  echo "❌ 无法创建构建锁目录父路径 $(dirname "$BUILD_LOCK_DIR")（${lock_parent_err}），请检查路径或外接盘状态。" >&2
+  exit 1
+fi
+if ! lock_err="$(mkdir "$BUILD_LOCK_DIR" 2>&1)"; then
+  if [[ -e "$BUILD_LOCK_DIR" ]]; then
+    echo "❌ 同一构建目录已有构建在进行（锁：${BUILD_LOCK_DIR}），请等待其完成或改用独立的 WAND_BUILD_DIR / WAND_DIST_DIR。" >&2
+    echo "   若确认无构建在运行，可手动删除该锁目录后重试。" >&2
+  else
+    echo "❌ 无法创建构建锁目录 $BUILD_LOCK_DIR（${lock_err}），请检查路径或外接盘状态。" >&2
+  fi
   exit 1
 fi
 trap 'rmdir "$BUILD_LOCK_DIR" 2>/dev/null || true' EXIT

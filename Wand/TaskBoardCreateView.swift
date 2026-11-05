@@ -262,8 +262,10 @@ struct WandBoardCreateView: View {
                 .disabled(owner.loading || owner.creating || owner.createdTask != nil || owner.unconfirmed)
                 if owner.loading { ProgressView("正在读取工作配置…").controlSize(.small) }
             }
-            // 任务创建页保留独立阅读布局，不跟随会话内容宽度偏好。
+            // 任务创建页保留独立阅读布局，不跟随会话内容宽度偏好；
+            // 外层再包一层居中，避免被 NewWorkPage 的 chatContentWidth leading 框推到左侧。
             .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
         .task { await owner.load(api: api) }
         .onChange(of: owner.draft.status) { status in

@@ -143,18 +143,22 @@ final class ChatContentWidthTests: XCTestCase {
         await settle(host)
         XCTAssertEqual(try width("new-work", in: host), 940, accuracy: 1)
         window.contentView = nil
-        // 任务创建页：内容自身封顶 760，偏好切换不改变其宽度。
+        // 任务创建页：内容自身封顶 760 并在主内容区居中，偏好切换不改变其宽度与位置。
         let cappedHost = NSHostingView(rootView: NewWorkPage { _ in Text("标题") } content: { _ in
             Color.clear.frame(maxWidth: .infinity, minHeight: 80).frame(maxWidth: 760).background(WidthProbe(id: "capped-work"))
+                .frame(maxWidth: .infinity, alignment: .center)
         }.defaultAppStorage(storage))
         cappedHost.frame = NSRect(x: 0, y: 0, width: 1200, height: 650)
         let cappedWindow = NSWindow(contentRect: cappedHost.frame, styleMask: [.titled], backing: .buffered, defer: false)
         cappedWindow.contentView = cappedHost
         await settle(cappedHost)
         XCTAssertEqual(try width("capped-work", in: cappedHost), 760, accuracy: 1)
+        // 居中：28pt 内边距 + (1144-760)/2，铺满/居中两种偏好下位置一致。
+        XCTAssertEqual(try frame("capped-work", in: cappedHost).minX, 220, accuracy: 1)
         storage.set("full", forKey: ChatContentWidth.storageKey)
         await settle(cappedHost)
         XCTAssertEqual(try width("capped-work", in: cappedHost), 760, accuracy: 1)
+        XCTAssertEqual(try frame("capped-work", in: cappedHost).minX, 220, accuracy: 1)
         cappedWindow.contentView = nil
     }
 
